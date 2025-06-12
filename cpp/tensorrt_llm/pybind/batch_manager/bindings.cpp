@@ -30,14 +30,12 @@
 #include "tensorrt_llm/runtime/torchView.h"
 
 #include <ATen/ATen.h>
-#include <pybind11/chrono.h>
-#include <pybind11/functional.h>
-#include <pybind11/operators.h>
-#include <pybind11/stl.h>
-#include <pybind11/stl_bind.h>
+
+#include <nanobind/nanobind.h>
+#include <nanobind/operators.h>
 #include <torch/extension.h>
 
-namespace py = pybind11;
+namespace py = nanobind;
 namespace tb = tensorrt_llm::batch_manager;
 namespace tle = tensorrt_llm::executor;
 namespace tr = tensorrt_llm::runtime;
@@ -47,7 +45,7 @@ using namespace tensorrt_llm::runtime;
 namespace tensorrt_llm::pybind::batch_manager
 {
 
-void initBindings(pybind11::module_& m)
+void initBindings(py::module_& m)
 {
     using GenLlmReq = tb::GenericLlmRequest<runtime::ITensor::SharedPtr>;
 

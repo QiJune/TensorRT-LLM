@@ -22,16 +22,12 @@
 #include "tensorrt_llm/executor/executor.h"
 #include "tensorrt_llm/executor/types.h"
 
-#include <pybind11/cast.h>
-#include <pybind11/chrono.h>
-#include <pybind11/functional.h>
-#include <pybind11/operators.h>
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <nanobind/nanobind.h>
+#include <nanobind/operators.h>
 
 #include <optional>
 
-namespace py = pybind11;
+namespace py = nanobind;
 namespace tle = tensorrt_llm::executor;
 using SizeType32 = tle::SizeType32;
 
@@ -39,14 +35,14 @@ namespace tensorrt_llm::pybind::executor
 {
 
 template <typename T>
-void instantiateEventDiff(pybind11::module& m, std::string const& name)
+void instantiateEventDiff(py::module& m, std::string const& name)
 {
     py::class_<tle::KVCacheEventDiff<T>>(m, ("KVCacheEventDiff" + name).c_str())
         .def_readonly("old_value", &tle::KVCacheEventDiff<T>::oldValue)
         .def_readonly("new_value", &tle::KVCacheEventDiff<T>::newValue);
 }
 
-void initBindings(pybind11::module_& m)
+void initBindings(py::module_& m)
 {
     m.attr("__version__") = tle::version();
     py::enum_<tle::ModelType>(m, "ModelType")
