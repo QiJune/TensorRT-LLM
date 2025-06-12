@@ -18,9 +18,9 @@
 #pragma once
 
 #include "tensorrt_llm/pybind/common/customCasters.h"
-#include <nanobind/nanobind.h>
+#include <pybind11/pybind11.h>
 
-namespace py = nanobind;
+namespace py = pybind11;
 
 namespace tensorrt_llm::pybind::runtime
 {
