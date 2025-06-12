@@ -40,8 +40,11 @@
 #include "tensorrt_llm/runtime/torchView.h"
 #include <ATen/ATen.h>
 #include <c10/cuda/CUDAStream.h>
-#include <pybind11/stl.h>
-#include <pybind11/stl_bind.h>
+
+#include <nanobind/nanobind.h>
+#include <nanobind/nb_cast.h>
+#include <nanobind/operators.h>
+
 #include <torch/extension.h>
 
 namespace tr = tensorrt_llm::runtime;
@@ -54,73 +57,73 @@ public:
 
     [[nodiscard]] void* data() override
     {
-        PYBIND11_OVERRIDE_PURE(void*, /* Return type */
+        NB_OVERRIDE_PURE(void*, /* Return type */
+            ITensor,            /* Parent class */
+            data                /* Name of function in C++ (must match Python name) */
+                                /* Argument(s) */
+        );
+    }
+
+    [[nodiscard]] void const* data() const override
+    {
+        NB_OVERRIDE_PURE(void const*, /* Return type */
             ITensor,                  /* Parent class */
             data                      /* Name of function in C++ (must match Python name) */
                                       /* Argument(s) */
         );
     }
 
-    [[nodiscard]] void const* data() const override
-    {
-        PYBIND11_OVERRIDE_PURE(void const*, /* Return type */
-            ITensor,                        /* Parent class */
-            data                            /* Name of function in C++ (must match Python name) */
-                                            /* Argument(s) */
-        );
-    }
-
     [[nodiscard]] std::size_t getSize() const override
     {
-        PYBIND11_OVERRIDE_PURE(std::size_t, /* Return type */
-            ITensor,                        /* Parent class */
-            getSize                         /* Name of function in C++ (must match Python name) */
-                                            /* Argument(s) */
+        NB_OVERRIDE_PURE(std::size_t, /* Return type */
+            ITensor,                  /* Parent class */
+            getSize                   /* Name of function in C++ (must match Python name) */
+                                      /* Argument(s) */
         );
     }
 
     [[nodiscard]] std::size_t getCapacity() const override
     {
-        PYBIND11_OVERRIDE_PURE(std::size_t, /* Return type */
-            ITensor,                        /* Parent class */
-            getCapacity                     /* Name of function in C++ (must match Python name) */
-                                            /* Argument(s) */
+        NB_OVERRIDE_PURE(std::size_t, /* Return type */
+            ITensor,                  /* Parent class */
+            getCapacity               /* Name of function in C++ (must match Python name) */
+                                      /* Argument(s) */
         );
     }
 
     [[nodiscard]] DataType getDataType() const override
     {
-        PYBIND11_OVERRIDE_PURE(DataType, /* Return type */
-            ITensor,                     /* Parent class */
-            getDataType                  /* Name of function in C++ (must match Python name) */
-                                         /* Argument(s) */
+        NB_OVERRIDE_PURE(DataType, /* Return type */
+            ITensor,               /* Parent class */
+            getDataType            /* Name of function in C++ (must match Python name) */
+                                   /* Argument(s) */
         );
     }
 
     [[nodiscard]] tr::MemoryType getMemoryType() const override
     {
-        PYBIND11_OVERRIDE_PURE(tr::MemoryType, /* Return type */
-            ITensor,                           /* Parent class */
-            getMemoryType                      /* Name of function in C++ (must match Python name) */
-                                               /* Argument(s) */
+        NB_OVERRIDE_PURE(tr::MemoryType, /* Return type */
+            ITensor,                     /* Parent class */
+            getMemoryType                /* Name of function in C++ (must match Python name) */
+                                         /* Argument(s) */
         );
     }
 
     [[nodiscard]] char const* getMemoryTypeName() const override
     {
-        PYBIND11_OVERRIDE_PURE(char const*, /* Return type */
-            ITensor,                        /* Parent class */
-            getMemoryTypeName               /* Name of function in C++ (must match Python name) */
-                                            /* Argument(s) */
+        NB_OVERRIDE_PURE(char const*, /* Return type */
+            ITensor,                  /* Parent class */
+            getMemoryTypeName         /* Name of function in C++ (must match Python name) */
+                                      /* Argument(s) */
         );
     }
 
     virtual void resize(std::size_t newSize) override
     {
-        PYBIND11_OVERRIDE_PURE(void, /* Return type */
-            ITensor,                 /* Parent class */
-            resize                   /* Name of function in C++ (must match Python name) */
-                                     /* Argument(s) */
+        NB_OVERRIDE_PURE(void, /* Return type */
+            ITensor,           /* Parent class */
+            resize             /* Name of function in C++ (must match Python name) */
+                               /* Argument(s) */
         );
     }
 
@@ -135,19 +138,19 @@ public:
 
     [[nodiscard]] Shape const& getShape() const override
     {
-        PYBIND11_OVERRIDE_PURE(Shape const&, /* Return type */
-            ITensor,                         /* Parent class */
-            getShape                         /* Name of function in C++ (must match Python name) */
-                                             /* Argument(s) */
+        NB_OVERRIDE_PURE(Shape const&, /* Return type */
+            ITensor,                   /* Parent class */
+            getShape                   /* Name of function in C++ (must match Python name) */
+                                       /* Argument(s) */
         );
     }
 
     void reshape(Shape const& dims) override
     {
-        PYBIND11_OVERRIDE_PURE(void, /* Return type */
-            ITensor,                 /* Parent class */
-            reshape,                 /* Name of function in C++ (must match Python name) */
-            dims                     /* Argument(s) */
+        NB_OVERRIDE_PURE(void, /* Return type */
+            ITensor,           /* Parent class */
+            reshape,           /* Name of function in C++ (must match Python name) */
+            dims               /* Argument(s) */
         );
     }
 };
@@ -162,35 +165,35 @@ public:
         std::optional<tr::DecodingOutput> const& output = std::nullopt,
         std::optional<std::vector<tr::decoder_batch::Request> const> const& requests = std::nullopt) override
     {
-        PYBIND11_OVERRIDE_PURE(void, IGptDecoder, setup, samplingConfig, batchSize, batchSlots, output, requests);
+        NB_OVERRIDE_PURE(void, IGptDecoder, setup, samplingConfig, batchSize, batchSlots, output, requests);
     }
 
     void forwardAsync(tr::DecodingOutput& output, tr::DecodingInput const& input) override
     {
-        PYBIND11_OVERRIDE_PURE(void, IGptDecoder, forwardAsync, output, input);
+        NB_OVERRIDE_PURE(void, IGptDecoder, forwardAsync, output, input);
     }
 
     void forwardSync(tr::DecodingOutput& output, tr::DecodingInput const& input) override
     {
-        PYBIND11_OVERRIDE_PURE(void, IGptDecoder, forwardSync, output, input);
+        NB_OVERRIDE_PURE(void, IGptDecoder, forwardSync, output, input);
     }
 
     tr::SamplingConfig const& getSamplingConfig() override
     {
-        PYBIND11_OVERRIDE_PURE(tr::SamplingConfig const&, IGptDecoder, getSamplingConfig);
+        NB_OVERRIDE_PURE(tr::SamplingConfig const&, IGptDecoder, getSamplingConfig);
     }
 
     void disableLookahead(std::optional<tr::SamplingConfig> const& samplingConfig, tr::SizeType32 batchSize,
         tr::DecodingInput::TensorConstPtr batchSlots) override
     {
-        PYBIND11_OVERRIDE_PURE(void, IGptDecoder, disableLookahead, samplingConfig, batchSize, batchSlots);
+        NB_OVERRIDE_PURE(void, IGptDecoder, disableLookahead, samplingConfig, batchSize, batchSlots);
     }
 };
 
 namespace tensorrt_llm::pybind::runtime
 {
 
-void initBindings(pybind11::module_& m)
+void initBindings(py::module_& m)
 {
     py::classh<tr::ITensor, PyITensor>(m, "ITensor").def(py::init());
     py::class_<tr::LoraCache::TaskLayerModuleConfig>(m, "TaskLayerModuleConfig")

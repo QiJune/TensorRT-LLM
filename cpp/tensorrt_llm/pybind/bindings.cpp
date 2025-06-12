@@ -15,11 +15,9 @@
  * limitations under the License.
  */
 
-#include <pybind11/cast.h>
-#include <pybind11/functional.h>
-#include <pybind11/operators.h>
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#include <nanobind/nanobind.h>
+#include <nanobind/nb_cast.h>
+#include <nanobind/operators.h>
 #include <torch/extension.h>
 #include <vector>
 
@@ -45,7 +43,7 @@
 #include "tensorrt_llm/runtime/samplingConfig.h"
 #include "tensorrt_llm/runtime/utils/mpiUtils.h"
 
-namespace py = pybind11;
+namespace py = nanobind;
 namespace tb = tensorrt_llm::batch_manager;
 namespace tbk = tensorrt_llm::batch_manager::kv_cache_manager;
 namespace tpb = tensorrt_llm::pybind::batch_manager;
@@ -69,7 +67,7 @@ tr::SamplingConfig makeSamplingConfig(std::vector<tr::SamplingConfig> const& con
 }
 } // namespace
 
-PYBIND11_MODULE(TRTLLM_PYBIND_MODULE, m)
+NB_MODULE(TRTLLM_PYBIND_MODULE, m)
 {
     m.doc() = "TensorRT-LLM Python bindings for C++ runtime";
 

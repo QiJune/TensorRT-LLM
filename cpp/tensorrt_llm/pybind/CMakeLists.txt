@@ -23,7 +23,7 @@ set(SRCS
 
 include_directories(${PROJECT_SOURCE_DIR}/include)
 
-pybind11_add_module(${TRTLLM_PYBIND_MODULE} ${SRCS})
+nanobind_add_module(${TRTLLM_PYBIND_MODULE} ${SRCS})
 
 set_property(TARGET ${TRTLLM_PYBIND_MODULE} PROPERTY POSITION_INDEPENDENT_CODE
                                                      ON)
@@ -34,9 +34,8 @@ target_link_libraries(
   ${TRTLLM_PYBIND_MODULE}
   PUBLIC ${SHARED_TARGET} ${UNDEFINED_FLAG} ${NO_AS_NEEDED_FLAG}
          ${Python3_LIBRARIES} ${TORCH_LIBRARIES} torch_python)
-target_compile_definitions(
-  ${TRTLLM_PYBIND_MODULE} PUBLIC TRTLLM_PYBIND_MODULE=${TRTLLM_PYBIND_MODULE}
-                                 PYBIND11_DETAILED_ERROR_MESSAGES=1)
+target_compile_definitions(${TRTLLM_PYBIND_MODULE}
+                           PUBLIC TRTLLM_PYBIND_MODULE=${TRTLLM_PYBIND_MODULE})
 
 if(NOT WIN32)
   set_target_properties(

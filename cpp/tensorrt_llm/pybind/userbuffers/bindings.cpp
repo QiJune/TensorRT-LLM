@@ -19,13 +19,13 @@
 #include "tensorrt_llm/kernels/userbuffers/ub_interface.h"
 #include "tensorrt_llm/kernels/userbuffers/userbuffersManager.h"
 
-namespace py = pybind11;
+namespace py = nanobind;
 namespace tub = tensorrt_llm::runtime::ub;
 
 namespace tensorrt_llm::kernels::userbuffers
 {
 
-void UserBufferBindings::initBindings(pybind11::module_& m)
+void UserBufferBindings::initBindings(py::module_& m)
 {
     py::class_<tub::UBBuffer>(m, "UBBuffer")
         .def_readonly("size", &tub::UBBuffer::size)
