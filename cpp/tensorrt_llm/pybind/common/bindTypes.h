@@ -18,12 +18,12 @@
 #pragma once
 
 #include "tensorrt_llm/pybind/common/customCasters.h"
-#include <pybind11/pybind11.h>
+#include <nanobind/nanobind.h>
 
 namespace PybindUtils
 {
 
-namespace py = pybind11;
+namespace py = nanobind;
 
 template <typename T>
 void bindList(py::module& m, std::string const& name)

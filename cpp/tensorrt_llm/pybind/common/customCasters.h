@@ -17,12 +17,6 @@
 
 #pragma once
 
-#include "pybind11/cast.h"
-#include "pybind11/detail/common.h"
-#include "pybind11/detail/descr.h"
-#include "pybind11/pybind11.h"
-#include "pybind11/pytypes.h"
-
 #include "tensorrt_llm/batch_manager/common.h"
 #include "tensorrt_llm/batch_manager/decoderBuffers.h"
 #include "tensorrt_llm/common/optionalRef.h"
@@ -33,19 +27,20 @@
 #include "tensorrt_llm/runtime/torchView.h"
 
 #include <filesystem>
-#include <pybind11/stl_bind.h>
 #include <torch/extension.h>
+
+#include <nanobind/nanobind.h>
 
 // Pybind requires to have a central include in order for type casters to work.
 // Opaque bindings add a type caster, so they have the same requirement.
 // See the warning in https://pybind11.readthedocs.io/en/stable/advanced/cast/custom.html
 
 // Opaque bindings
-PYBIND11_MAKE_OPAQUE(tensorrt_llm::batch_manager::ReqIdsSet)
-PYBIND11_MAKE_OPAQUE(std::vector<tensorrt_llm::batch_manager::SlotDecoderBuffers>)
+NB_MAKE_OPAQUE(tensorrt_llm::batch_manager::ReqIdsSet)
+NB_MAKE_OPAQUE(std::vector<tensorrt_llm::batch_manager::SlotDecoderBuffers>)
 
 // Custom casters
-namespace PYBIND11_NAMESPACE
+namespace NB_NAMESPACE
 {
 
 namespace detail
@@ -56,9 +51,9 @@ struct type_caster<tensorrt_llm::common::OptionalRef<T>>
 {
     using value_conv = make_caster<T>;
 
-    PYBIND11_TYPE_CASTER(tensorrt_llm::common::OptionalRef<T>, value_conv::name);
+    nb::cast(tensorrt_llm::common::OptionalRef<T>, value_conv::name);
 
-    bool load(handle src, bool convert)
+    bool from_python(handle src, bool convert)
     {
         if (src.is_none())
         {
@@ -68,7 +63,7 @@ struct type_caster<tensorrt_llm::common::OptionalRef<T>>
         }
 
         value_conv conv;
-        if (!conv.load(src, convert))
+        if (!conv.from_python(src, convert))
             return false;
 
         // Create an OptionalRef with a reference to the converted value
@@ -101,7 +96,7 @@ private:
     }
 
 public:
-    static handle cast(T const& path, return_value_policy, handle)
+    static handle from_cpp(T const& path, return_value_policy, handle)
     {
         if (auto py_str = unicode_from_fs_native(path.native()))
         {
@@ -110,7 +105,7 @@ public:
         return nullptr;
     }
 
-    bool load(handle handle, bool)
+    bool from_python(handle handle, bool)
     {
         PyObject* native = nullptr;
         if constexpr (std::is_same_v<typename T::value_type, char>)
@@ -146,7 +141,7 @@ public:
         return true;
     }
 
-    PYBIND11_TYPE_CASTER(T, const_name("os.PathLike"));
+    nb::cast(T, const_name("os.PathLike"));
 };
 
 template <>
@@ -158,9 +153,9 @@ template <>
 class type_caster<tensorrt_llm::executor::StreamPtr>
 {
 public:
-    PYBIND11_TYPE_CASTER(tensorrt_llm::executor::StreamPtr, _("int"));
+    nb::cast(tensorrt_llm::executor::StreamPtr, _("int"));
 
-    bool load([[maybe_unused]] handle src, bool)
+    bool from_python([[maybe_unused]] handle src, bool)
     {
         auto stream_ptr = src.cast<uintptr_t>();
         value = std::make_shared<tensorrt_llm::runtime::CudaStream>(reinterpret_cast<cudaStream_t>(stream_ptr));
@@ -168,7 +163,7 @@ public:
         return true;
     }
 
-    static handle cast(
+    static handle from_cpp(
         tensorrt_llm::executor::StreamPtr const& src, return_value_policy /* policy */, handle /* parent */)
     {
         // Return cudaStream_t as integer.
@@ -180,10 +175,10 @@ template <>
 struct type_caster<tensorrt_llm::executor::Tensor>
 {
 public:
-    PYBIND11_TYPE_CASTER(tensorrt_llm::executor::Tensor, _("torch.Tensor"));
+    nb::cast(tensorrt_llm::executor::Tensor, _("torch.Tensor"));
 
     // Convert PyObject(torch.Tensor) -> tensorrt_llm::executor::Tensor
-    bool load(handle src, bool)
+    bool from_python(handle src, bool)
     {
         PyObject* obj = src.ptr();
         if (THPVariable_Check(obj))
@@ -196,7 +191,8 @@ public:
     }
 
     // Convert tensorrt_llm::executor::Tensor -> PyObject(torch.Tensor)
-    static handle cast(tensorrt_llm::executor::Tensor const& src, return_value_policy /* policy */, handle /* parent */)
+    static handle from_cpp(
+        tensorrt_llm::executor::Tensor const& src, return_value_policy /* policy */, handle /* parent */)
     {
         return THPVariable_Wrap(tensorrt_llm::runtime::Torch::tensor(tensorrt_llm::executor::detail::toITensor(src)));
     }
@@ -206,10 +202,10 @@ template <>
 struct type_caster<tensorrt_llm::runtime::ITensor::SharedPtr>
 {
 public:
-    PYBIND11_TYPE_CASTER(tensorrt_llm::runtime::ITensor::SharedPtr, _("torch.Tensor"));
+    nb::cast(tensorrt_llm::runtime::ITensor::SharedPtr, _("torch.Tensor"));
 
     // Convert PyObject(torch.Tensor) -> tensorrt_llm::runtime::ITensor::SharedPtr
-    bool load(handle src, bool)
+    bool from_python(handle src, bool)
     {
         PyObject* obj = src.ptr();
         if (THPVariable_Check(obj))
@@ -222,7 +218,7 @@ public:
     }
 
     // Convert tensorrt_llm::runtime::ITensor::SharedPtr -> PyObject(torch.Tensor)
-    static handle cast(
+    static handle from_cpp(
         tensorrt_llm::runtime::ITensor::SharedPtr const& src, return_value_policy /* policy */, handle /* parent */)
     {
         if (src == nullptr)
@@ -237,10 +233,10 @@ template <>
 struct type_caster<tensorrt_llm::runtime::ITensor::SharedConstPtr>
 {
 public:
-    PYBIND11_TYPE_CASTER(tensorrt_llm::runtime::ITensor::SharedConstPtr, _("torch.Tensor"));
+    nb::cast(tensorrt_llm::runtime::ITensor::SharedConstPtr, _("torch.Tensor"));
 
     // Convert PyObject(torch.Tensor) -> tensorrt_llm::runtime::ITensor::SharedConstPtr
-    bool load(handle src, bool)
+    bool from_python(handle src, bool)
     {
         PyObject* obj = src.ptr();
         if (THPVariable_Check(obj))
@@ -253,7 +249,7 @@ public:
     }
 
     // Convert tensorrt_llm::runtime::ITensor::SharedConstPtr -> PyObject(torch.Tensor)
-    static handle cast(tensorrt_llm::runtime::ITensor::SharedConstPtr const& src, return_value_policy /* policy */,
+    static handle from_cpp(tensorrt_llm::runtime::ITensor::SharedConstPtr const& src, return_value_policy /* policy */,
         handle /* parent */)
     {
         if (src == nullptr)
@@ -266,4 +262,4 @@ public:
 };
 
 } // namespace detail
-} // namespace PYBIND11_NAMESPACE
+} // namespace NB_NAMESPACE
