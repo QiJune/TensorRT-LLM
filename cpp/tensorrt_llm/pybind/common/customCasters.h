@@ -51,7 +51,7 @@ struct type_caster<tensorrt_llm::common::OptionalRef<T>>
 {
     using value_conv = make_caster<T>;
 
-    nb::cast(tensorrt_llm::common::OptionalRef<T>, value_conv::name);
+    nanobind::cast(tensorrt_llm::common::OptionalRef<T>, value_conv::name);
 
     bool from_python(handle src, bool convert)
     {
@@ -141,7 +141,7 @@ public:
         return true;
     }
 
-    nb::cast(T, const_name("os.PathLike"));
+    nanobind::cast(T, const_name("os.PathLike"));
 };
 
 template <>
@@ -153,7 +153,7 @@ template <>
 class type_caster<tensorrt_llm::executor::StreamPtr>
 {
 public:
-    nb::cast(tensorrt_llm::executor::StreamPtr, _("int"));
+    nanobind::cast(tensorrt_llm::executor::StreamPtr, _("int"));
 
     bool from_python([[maybe_unused]] handle src, bool)
     {
@@ -175,7 +175,7 @@ template <>
 struct type_caster<tensorrt_llm::executor::Tensor>
 {
 public:
-    nb::cast(tensorrt_llm::executor::Tensor, _("torch.Tensor"));
+    nanobind::cast(tensorrt_llm::executor::Tensor, _("torch.Tensor"));
 
     // Convert PyObject(torch.Tensor) -> tensorrt_llm::executor::Tensor
     bool from_python(handle src, bool)
@@ -202,7 +202,7 @@ template <>
 struct type_caster<tensorrt_llm::runtime::ITensor::SharedPtr>
 {
 public:
-    nb::cast(tensorrt_llm::runtime::ITensor::SharedPtr, _("torch.Tensor"));
+    nanobind::cast(tensorrt_llm::runtime::ITensor::SharedPtr, _("torch.Tensor"));
 
     // Convert PyObject(torch.Tensor) -> tensorrt_llm::runtime::ITensor::SharedPtr
     bool from_python(handle src, bool)
@@ -233,7 +233,7 @@ template <>
 struct type_caster<tensorrt_llm::runtime::ITensor::SharedConstPtr>
 {
 public:
-    nb::cast(tensorrt_llm::runtime::ITensor::SharedConstPtr, _("torch.Tensor"));
+    nanobind::cast(tensorrt_llm::runtime::ITensor::SharedConstPtr, _("torch.Tensor"));
 
     // Convert PyObject(torch.Tensor) -> tensorrt_llm::runtime::ITensor::SharedConstPtr
     bool from_python(handle src, bool)
