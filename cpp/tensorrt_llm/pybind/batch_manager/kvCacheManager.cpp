@@ -23,16 +23,12 @@
 #include "tensorrt_llm/runtime/torchView.h"
 
 #include <ATen/ATen.h>
-#include <pybind11/functional.h>
-#include <pybind11/operators.h>
-#include <pybind11/stl.h>
-#include <pybind11/stl_bind.h>
 #include <torch/extension.h>
 
 namespace tb = tensorrt_llm::batch_manager;
 namespace tbk = tensorrt_llm::batch_manager::kv_cache_manager;
 namespace tr = tensorrt_llm::runtime;
-namespace py = pybind11;
+namespace py = nanobind;
 using BlockKey = tbk::BlockKey;
 using VecUniqueTokens = tensorrt_llm::runtime::VecUniqueTokens;
 using SizeType32 = tensorrt_llm::runtime::SizeType32;

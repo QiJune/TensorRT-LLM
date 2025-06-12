@@ -23,13 +23,9 @@
 #include "tensorrt_llm/batch_manager/transformerBuffers.h"
 
 #include <ATen/ATen.h>
-#include <pybind11/functional.h>
-#include <pybind11/operators.h>
-#include <pybind11/stl.h>
-#include <pybind11/stl_bind.h>
 #include <torch/extension.h>
 
-namespace py = pybind11;
+namespace py = nanobind;
 namespace tb = tensorrt_llm::batch_manager;
 namespace tr = tensorrt_llm::runtime;
 
@@ -38,7 +34,7 @@ using tr::SizeType32;
 namespace tensorrt_llm::pybind::batch_manager
 {
 
-void Buffers::initBindings(pybind11::module_& m)
+void Buffers::initBindings(py::module_& m)
 {
     py::class_<tb::TransformerBuffers>(m, "TransformerBuffers")
         .def(py::init<SizeType32, SizeType32, std::vector<SizeType32> const&, SizeType32, SizeType32,
