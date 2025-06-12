@@ -44,6 +44,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/nb_cast.h>
 #include <nanobind/operators.h>
+#include <nanobind/trampoline.h>
 
 #include <torch/extension.h>
 
