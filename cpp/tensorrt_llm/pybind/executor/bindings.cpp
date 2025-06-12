@@ -23,7 +23,6 @@
 #include "tensorrt_llm/executor/types.h"
 
 #include <nanobind/nanobind.h>
-#include <nanobind/nb_cast.h>
 #include <nanobind/operators.h>
 
 #include <optional>

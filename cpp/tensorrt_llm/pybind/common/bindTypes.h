@@ -26,7 +26,7 @@ namespace PybindUtils
 namespace py = nanobind;
 
 template <typename T>
-void bindList(py::module& m, std::string const& name)
+void bindList(py::module_& m, std::string const& name)
 {
     py::class_<T>(m, name.c_str())
         .def(py::init())
@@ -58,7 +58,7 @@ void bindList(py::module& m, std::string const& name)
 }
 
 template <typename T>
-void bindSet(py::module& m, std::string const& name)
+void bindSet(py::module_& m, std::string const& name)
 {
     py::class_<T>(m, name.c_str())
         .def(py::init())
