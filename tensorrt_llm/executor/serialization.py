@@ -1,4 +1,5 @@
 import io
+import marshal
 # pickle is not secure, but but this whole file is a wrapper to make it
 # possible to mitigate the primary risk of code injection via pickle.
 import pickle  # nosec B403
@@ -155,8 +156,8 @@ class Unpickler(pickle.Unpickler):
 # dump and dumps are just aliases because the serucity controls are on the deserialization
 # side. However they are included here so that in the future if a more secure serialization
 # soliton is identified, it can be added with less impact to the rest of the application.
-dump = pickle.dump  # nosec B301
-dumps = pickle.dumps  # nosec B301
+dump = marshal.dump  # nosec B301
+dumps = marshal.dumps  # nosec B301
 
 
 def load(file,
