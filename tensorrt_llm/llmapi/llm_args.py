@@ -1155,26 +1155,6 @@ class BaseLlmArgs(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def set_runtime_knobs_from_build_config(self):
-        # TODO: remove this after PyT become default to adapt PyT with build_config as input
-        assert self.build_config is not None, "build_config is not initialized"
-        if self.backend == "pytorch":
-            if self.build_config:
-                for key in [
-                        "max_batch_size", "max_num_tokens", "max_seq_len",
-                        "max_input_len", "max_beam_width"
-                ]:
-                    if getattr(self.build_config, key) is not None:
-                        if (v := getattr(self, key,
-                                         None)) is not None and v != getattr(
-                                             self.build_config, key):
-                            logger.warning(
-                                f"overriding {key} from build_config")
-                        setattr(self, key, getattr(self.build_config, key))
-
-        return self
-
-    @model_validator(mode="after")
     def validate_build_config_with_runtime_params(self):
         # Note: max_batch_size and max_num_tokens in LlmArgs are for runtime,
         # which will be passed to the C++ Executor API, overwriting the values
