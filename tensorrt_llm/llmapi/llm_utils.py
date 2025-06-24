@@ -946,7 +946,6 @@ def llm_args_to_executor_config(args: BaseLlmArgs, tokenizer) -> ExecutorConfig:
         if isinstance(args, TrtLlmArgs) else None,
         speculative_config=args.speculative_config,
         hf_model_dir=self._hf_model_dir,
-        trt_engine_dir=self._engine_dir,
         max_input_len=args.max_input_len,
         max_seq_len=max_seq_len)
 
