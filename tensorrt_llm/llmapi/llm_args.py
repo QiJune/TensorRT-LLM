@@ -1155,44 +1155,6 @@ class BaseLlmArgs(BaseModel):
         return self
 
     @model_validator(mode="after")
-    def validate_build_config_with_runtime_params(self):
-        # Note: max_batch_size and max_num_tokens in LlmArgs are for runtime,
-        # which will be passed to the C++ Executor API, overwriting the values
-        # from an built engine. In order to set build configuration, it is
-        # recommended to use build_config instead.
-        assert isinstance(
-            self.build_config, BuildConfig
-        ), f"build_config is not initialized: {self.build_config}"
-
-        if self.max_batch_size is not None:
-            if self.max_batch_size > self.build_config.max_batch_size:
-                raise ValueError(
-                    f"max_batch_size [{self.max_batch_size}] is greater than build_config.max_batch_size [{self.build_config.max_batch_size}] in build_config"
-                )
-        if self.max_num_tokens is not None:
-            if self.max_num_tokens > self.build_config.max_num_tokens:
-                raise ValueError(
-                    f"max_num_tokens [{self.max_num_tokens}] is greater than build_config.max_num_tokens [{self.build_config.max_num_tokens}] in build_config"
-                )
-        if self.max_seq_len is not None:
-            if self.max_seq_len != self.build_config.max_seq_len:
-                logger.warning(
-                    f"max_seq_len [{self.max_seq_len}] is overridden by build_config.max_seq_len [{self.build_config.max_seq_len}] in build_config"
-                )
-        if self.max_beam_width is not None:
-            if self.max_beam_width != self.build_config.max_beam_width:
-                logger.warning(
-                    f"max_beam_width [{self.max_beam_width}] is overridden by build_config.max_beam_width [{self.build_config.max_beam_width}] in build_config"
-                )
-        if self.max_input_len is not None:
-            if self.max_input_len != self.build_config.max_input_len:
-                logger.warning(
-                    f"max_input_len [{self.max_input_len}] is overridden by build_config.max_input_len [{self.build_config.max_input_len}] in build_config"
-                )
-
-        return self
-
-    @model_validator(mode="after")
     def validate_build_config_remaining(self):
         is_trt_llm_args = isinstance(self, TrtLlmArgs)
 
@@ -1520,6 +1482,44 @@ class TrtLlmArgs(BaseLlmArgs):
         assert isinstance(
             self.build_config, BuildConfig
         ), f"build_config is not initialized: {self.build_config}"
+        return self
+
+    @model_validator(mode="after")
+    def validate_build_config_with_runtime_params(self):
+        # Note: max_batch_size and max_num_tokens in LlmArgs are for runtime,
+        # which will be passed to the C++ Executor API, overwriting the values
+        # from an built engine. In order to set build configuration, it is
+        # recommended to use build_config instead.
+        assert isinstance(
+            self.build_config, BuildConfig
+        ), f"build_config is not initialized: {self.build_config}"
+
+        if self.max_batch_size is not None:
+            if self.max_batch_size > self.build_config.max_batch_size:
+                raise ValueError(
+                    f"max_batch_size [{self.max_batch_size}] is greater than build_config.max_batch_size [{self.build_config.max_batch_size}] in build_config"
+                )
+        if self.max_num_tokens is not None:
+            if self.max_num_tokens > self.build_config.max_num_tokens:
+                raise ValueError(
+                    f"max_num_tokens [{self.max_num_tokens}] is greater than build_config.max_num_tokens [{self.build_config.max_num_tokens}] in build_config"
+                )
+        if self.max_seq_len is not None:
+            if self.max_seq_len != self.build_config.max_seq_len:
+                logger.warning(
+                    f"max_seq_len [{self.max_seq_len}] is overridden by build_config.max_seq_len [{self.build_config.max_seq_len}] in build_config"
+                )
+        if self.max_beam_width is not None:
+            if self.max_beam_width != self.build_config.max_beam_width:
+                logger.warning(
+                    f"max_beam_width [{self.max_beam_width}] is overridden by build_config.max_beam_width [{self.build_config.max_beam_width}] in build_config"
+                )
+        if self.max_input_len is not None:
+            if self.max_input_len != self.build_config.max_input_len:
+                logger.warning(
+                    f"max_input_len [{self.max_input_len}] is overridden by build_config.max_input_len [{self.build_config.max_input_len}] in build_config"
+                )
+
         return self
 
     @model_validator(mode="after")
