@@ -1941,13 +1941,13 @@ class PyExecutor:
 
     @nvtx_range("_handle_cancelled_requests")
     def _handle_cancelled_requests(self):
+        if self.dist.rank == 0 and len(self.canceled_req_ids) == 0:
+            return
+
         #TODO: properly handle canceled ids in pp case
         if self.dist.has_tp:
             self.canceled_req_ids = self.dist.broadcast(self.canceled_req_ids,
                                                         root=0)
-
-        if len(self.canceled_req_ids) == 0:
-            return
 
         # Tracks canceled requests for proper handling in overlap mode during `sampler.update_requests`.
         for request in self.active_requests:
