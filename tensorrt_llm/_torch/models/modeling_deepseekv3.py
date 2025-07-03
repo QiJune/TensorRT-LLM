@@ -501,7 +501,6 @@ class Deepseekv3MoE(nn.Module):
     def compute_routed_output(self, hidden_states, hidden_states_fp4,
                               all_rank_num_tokens, do_finalize):
         # max-throughput
-        use_dp_padding = False
         if self.use_dp and self.mapping.tp_size > 1:
             max_num_token = max(all_rank_num_tokens)
             hidden_states = torch.nn.functional.pad(
@@ -523,7 +522,7 @@ class Deepseekv3MoE(nn.Module):
             do_finalize=do_finalize,
             output_dtype=hidden_states.dtype,
             all_rank_num_tokens=all_rank_num_tokens,
-            use_dp_padding=use_dp_padding,
+            use_dp_padding=True,
         )
 
         return routed_output
