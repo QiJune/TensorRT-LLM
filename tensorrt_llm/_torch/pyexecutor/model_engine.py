@@ -864,6 +864,7 @@ class PyTorchModelEngine(ModelEngine):
             padding_size = padded_batch_size - batch_size
             if padding_size + scheduled_requests.batch_size > self.batch_size:
                 return 0
+            return padding_size
 
         padding_size = get_padding_size()
         if padding_size == 0:
