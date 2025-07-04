@@ -847,17 +847,26 @@ class PyTorchModelEngine(ModelEngine):
                 new_batch_size = max(gen_only_batch[1]
                                      for gen_only_batch in graph_batch_size)
 
-        if (not self._run_cuda_graphs or not self._cuda_graph_padding_enabled
-                or not can_run_cuda_graph
-                or new_batch_size > self._max_cuda_graph_batch_size):
-            return 0
+        def get_padding_size():
+            if (not self._run_cuda_graphs
+                    or not self._cuda_graph_padding_enabled
+                    or not can_run_cuda_graph
+                    or new_batch_size > self._max_cuda_graph_batch_size):
+                # balance workload of each attention dp rank
+                if self.enable_attention_dp and not self._run_cuda_graphs and can_run_cuda_graph:
+                    return new_batch_size - batch_size
+                return 0
 
-        padded_batch_size = self._round_up_batch_size(new_batch_size)
-        if batch_size == padded_batch_size:
-            return 0
+            padded_batch_size = self._round_up_batch_size(new_batch_size)
+            if batch_size == padded_batch_size:
+                return 0
 
-        padding_size = padded_batch_size - batch_size
-        if padding_size + scheduled_requests.batch_size > self.batch_size:
+            padding_size = padded_batch_size - batch_size
+            if padding_size + scheduled_requests.batch_size > self.batch_size:
+                return 0
+
+        padding_size = get_padding_size()
+        if padding_size == 0:
             return 0
 
         # No padding if it would create too many concurrent requests.
