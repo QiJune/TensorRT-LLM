@@ -55,7 +55,7 @@ public:
         return 0;
     }
 
-    torch::Tensor run(torch::Tensor input, torch::optional<torch::List<int64_t>> sizes)
+    torch::Tensor run(torch::Tensor input, torch::optional<torch::List<int64_t>> sizes, bool called_by_run_list = false)
     {
         TLLM_CHECK_WITH_INFO(mNcclComm.get() != nullptr, "mNcclComm should be initialized before used");
         auto stream = at::cuda::getCurrentCUDAStream(input.get_device());
@@ -74,7 +74,10 @@ public:
         {
             size_t numel_base = std::accumulate(outputShape.cbegin() + 1, outputShape.cend(), 1, std::multiplies<>{});
             int64_t split_offset = 0;
-            ncclGroupStart();
+            if (!called_by_run_list)
+            {
+                ncclGroupStart();
+            }
             for (int root = 0; root < static_cast<int>(mGroup.size()); ++root)
             {
                 auto split_size = sizes.value()[root];
@@ -83,7 +86,10 @@ public:
                     numel_base * split_size, (*getDtypeMap())[type], root, *mNcclComm, stream));
                 split_offset += split_size;
             }
-            ncclGroupEnd();
+            if (!called_by_run_list)
+            {
+                ncclGroupEnd();
+            }
         }
         else
         {
@@ -100,7 +106,7 @@ public:
         ncclGroupStart();
         for (auto const& input : input_list)
         {
-            auto output = run(input, sizes);
+            auto output = run(input, sizes, true);
             output_list.push_back(output);
         }
         ncclGroupEnd();
