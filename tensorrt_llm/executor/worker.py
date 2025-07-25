@@ -152,7 +152,11 @@ class GenerationExecutorWorker(GenerationExecutor):
                 speculative_config=llm_args.speculative_config,
                 hf_model_dir=hf_model_dir,
                 max_input_len=llm_args.max_input_len,
-                max_seq_len=max_seq_len)
+                max_seq_len=max_seq_len,
+                checkpoint_format=None if llm_args.backend == "_autodeploy" else
+                llm_args.checkpoint_format,
+                checkpoint_loader=None if llm_args.backend == "_autodeploy" else
+                llm_args.checkpoint_loader)
 
             self._executor_config.logits_post_processor_config = tllm.LogitsPostProcessorConfig(
                 processor_batched=batched_logits_processor, replicate=False)
