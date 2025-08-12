@@ -142,6 +142,7 @@ class KvCacheCreator:
                                          beam_width=max_beam_width, ),
                                      output_config=trtllm.OutputConfig(),
                                      end_id=-1)
+            request.is_dummy_request = True
             requests.append(request)
             remaining_tokens -= input_seq_len
         if self._mapping.enable_attention_dp:
