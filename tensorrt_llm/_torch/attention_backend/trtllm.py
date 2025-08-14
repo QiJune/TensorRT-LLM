@@ -768,8 +768,14 @@ class TrtllmAttentionMetadata(AttentionMetadata):
             self.kv_cache_block_offsets[:, :self.num_seqs].copy_(
                 self.host_kv_cache_block_offsets[:, :self.num_seqs],
                 non_blocking=True)
+
+            error_message = (
+                f"The max KV cache length of input sequences ({self.kv_lens[:self.num_seqs].max()}) "
+                f"exceeds the KV cache manager's maximum supported length "
+                f"({self.kv_cache_manager.max_seq_len}).")
+
             assert self.kv_lens[:self.num_seqs].max(
-            ) <= self.kv_cache_manager.max_seq_len, f"the max kv cache lengths of input sequences {self.kv_lens[:self.num_seqs].max()} exceed the KV cache manager's maximum supported length {self.kv_cache_manager.max_seq_len}"
+            ) <= self.kv_cache_manager.max_seq_len, error_message
 
         self.kv_lens_cuda_runtime = self.kv_lens_cuda[:self.num_seqs]
         self.kv_lens_runtime = self.kv_lens[:self.num_seqs]
