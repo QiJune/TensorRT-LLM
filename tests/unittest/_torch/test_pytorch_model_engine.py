@@ -157,8 +157,8 @@ class PyTorchModelEngineTestCase(unittest.TestCase):
             batch.generation_requests = []
 
             pages_before = kv_cache_manager.get_num_free_blocks()
-            with model_engine._maybe_pad_batch(
-                    batch, kv_cache_manager) as padded_batch:
+            with model_engine.cuda_graph_runner.pad_batch(
+                    batch, resource_manager) as padded_batch:
                 # No padding for prefill
                 self.assertIs(batch, padded_batch)
             self.assertEqual(kv_cache_manager.get_num_free_blocks(),
