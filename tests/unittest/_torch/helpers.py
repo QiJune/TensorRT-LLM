@@ -168,7 +168,7 @@ def reference_block_scale_moe_torch(
     return results.view_as(x)
 
 
-class CUDAGraphRunnerHelper:
+class CUDAGraphRunnerTester:
     """
     A testing helper class that simplifies the use of CUDAGraphRunner for
     single-batch decoding steps in a unit test environment.

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import torch
-from _torch.helpers import CUDAGraphRunnerHelper
+from _torch.helpers import CUDAGraphRunnerTester
 from parameterized import parameterized
 from transformers import LlamaConfig
 from transformers import LlamaForCausalLM as HFLlamaForCausalLM
@@ -332,7 +332,7 @@ class TestLlama(unittest.TestCase):
                                      position_ids=position_ids,
                                      attn_metadata=attn_metadata)
             else:
-                graph_runner = CUDAGraphRunnerHelper(
+                graph_runner = CUDAGraphRunnerTester(
                     attn_metadata.max_num_requests, "cuda", attn_metadata)
                 graph_runner.capture(lambda inputs: llama.forward(**inputs))
 
