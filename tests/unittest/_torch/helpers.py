@@ -1,8 +1,11 @@
 import threading
+from types import SimpleNamespace
 from typing import Any, Callable, Dict, Optional, Tuple
 
 import torch
 import torch.nn.functional as F
+
+from tensorrt_llm._torch.pyexecutor.cuda_graph_runner import CUDAGraphRunner
 
 
 def ceil_div(x: int, y: int) -> int:
@@ -163,6 +166,104 @@ def reference_block_scale_moe_torch(
         results[batch_idx] += final_scales[batch_idx, nth_expert, None] * output
 
     return results.view_as(x)
+
+
+class CUDAGraphRunnerHelper:
+    """
+    A testing helper class that simplifies the use of CUDAGraphRunner for
+    single-batch decoding steps in a unit test environment.
+
+    It wraps an instance of CUDAGraphRunner and provides a simplified interface
+    for capturing and replaying a CUDA graph. It internally creates a mock engine
+    object with the necessary attributes required by CUDAGraphRunner.
+    """
+
+    def __init__(self, batch_size: int, device: str, attn_metadata: Any):
+        """
+        Initializes the helper and the underlying CUDAGraphRunner.
+
+        Args:
+            batch_size: The batch size for which the CUDA graph will be captured.
+            device: The torch device to use (e.g., "cuda").
+            attn_metadata: An instance of attention metadata that is
+                already prepared for CUDA graph capture (i.e., the output of
+                `metadata.create_cuda_graph_metadata(...)`).
+        """
+        self.batch_size = batch_size
+        self.device = torch.device(device)
+        self.attn_metadata = attn_metadata
+        self.captured = False
+
+        # 1. Create a mock engine object using SimpleNamespace.
+        # This object simulates the real PyTorchModelEngine and provides the
+        # configuration attributes that CUDAGraphRunner's constructor and
+        # methods will access.
+        mock_engine = SimpleNamespace(
+            # Configuration for enabling CUDA graph
+            pytorch_backend_config=SimpleNamespace(
+                use_cuda_graph=True, cuda_graph_padding_enabled=False),
+
+            # Batch size and beam width settings
+            _cuda_graph_batch_sizes=[batch_size],
+            _max_cuda_graph_batch_size=batch_size,
+            max_beam_width=1,
+
+            # Speculative decoding is disabled in the test scenario
+            is_spec_decode=False,
+            spec_config=SimpleNamespace(max_draft_len=0),
+
+            # Other required attributes
+            _cuda_graph_mem_pool=None,
+            use_mrope=False,  # Not used in the test's Llama model config
+        )
+
+        # 2. Instantiate the actual CUDAGraphRunner with the mock engine.
+        self.runner = CUDAGraphRunner(mock_engine)
+
+    def capture(self, forward_fn: Callable[[Dict[str, Any]], torch.Tensor]):
+        """
+        Captures the CUDA graph for the provided model's forward function.
+
+        This method prepares the initial inputs required by CUDAGraphRunner
+        and calls its `capture` method. It should only be called once.
+
+        Args:
+            forward_fn: A callable (e.g., a lambda) that takes a dictionary of
+                keyword arguments and executes the model's forward pass.
+        """
+        if self.captured:
+            raise RuntimeError("Graph has already been captured.")
+
+        # For capturing, CUDAGraphRunner needs a dictionary of initial inputs.
+        # In this decoding-only test case, this dictionary primarily needs to
+        # contain the graph-compatible attention metadata.
+        initial_inputs = {
+            "attn_metadata": self.attn_metadata,
+            "spec_metadata": None,
+        }
+
+        self.runner.capture(self.batch_size, forward_fn, initial_inputs)
+        self.captured = True
+
+    def run(self, inputs: Dict[str, Any]) -> torch.Tensor:
+        """
+        Replays the previously captured CUDA graph with new dynamic inputs.
+
+        Args:
+            inputs: A dictionary containing the dynamic inputs for the model,
+                    which must include 'input_ids', 'position_ids', and the
+                    same 'attn_metadata' object used for capture.
+
+        Returns:
+            The output tensor from the model's forward pass.
+        """
+        if not self.captured:
+            raise RuntimeError("Graph must be captured before it can be run.")
+
+        # The `replay` method returns a weak reference to the output tensor.
+        # We dereference it before returning for caller convenience.
+        output_weak_ref = self.runner.replay(self.batch_size, inputs)
+        return output_weak_ref()
 
 
 class graph_capturing_local(threading.local):
