@@ -1,5 +1,4 @@
 import threading
-from types import SimpleNamespace
 from typing import Any, Callable, Dict, Optional, Tuple
 
 import torch
@@ -168,6 +167,26 @@ def reference_block_scale_moe_torch(
     return results.view_as(x)
 
 
+class MockPytorchBackendConfig:
+
+    def __init__(self, use_cuda_graph, cuda_graph_padding_enabled):
+        self.use_cuda_graph = use_cuda_graph
+        self.cuda_graph_padding_enabled = cuda_graph_padding_enabled
+
+
+class MockSpecConfig:
+
+    def __init__(self, max_draft_len):
+        self.max_draft_len = max_draft_len
+
+
+class MockEngine:
+    """A replacement for SimpleNamespace that supports weak references."""
+
+    def __init__(self, **kwargs):
+        self.__dict__.update(kwargs)
+
+
 class CUDAGraphRunnerTester:
     """
     A testing helper class that simplifies the use of CUDAGraphRunner for
@@ -194,27 +213,17 @@ class CUDAGraphRunnerTester:
         self.attn_metadata = attn_metadata
         self.captured = False
 
-        # 1. Create a mock engine object using SimpleNamespace.
-        # This object simulates the real PyTorchModelEngine and provides the
-        # configuration attributes that CUDAGraphRunner's constructor and
-        # methods will access.
-        mock_engine = SimpleNamespace(
-            # Configuration for enabling CUDA graph
-            pytorch_backend_config=SimpleNamespace(
+        # 1. Create a mock engine object
+        mock_engine = MockEngine(
+            pytorch_backend_config=MockPytorchBackendConfig(
                 use_cuda_graph=True, cuda_graph_padding_enabled=False),
-
-            # Batch size and beam width settings
             _cuda_graph_batch_sizes=[batch_size],
             _max_cuda_graph_batch_size=batch_size,
             max_beam_width=1,
-
-            # Speculative decoding is disabled in the test scenario
             is_spec_decode=False,
-            spec_config=SimpleNamespace(max_draft_len=0),
-
-            # Other required attributes
+            spec_config=MockSpecConfig(max_draft_len=0),
             _cuda_graph_mem_pool=None,
-            use_mrope=False,  # Not used in the test's Llama model config
+            use_mrope=False,
         )
 
         # 2. Instantiate the actual CUDAGraphRunner with the mock engine.
