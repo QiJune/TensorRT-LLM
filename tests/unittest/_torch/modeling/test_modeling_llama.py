@@ -326,6 +326,11 @@ class TestLlama(unittest.TestCase):
         ]
         gen_position_ids = torch.cat(gen_position_ids).unsqueeze(0).cuda()
 
+        graph_runner = None
+        if scenario.use_cuda_graph:
+            mock_engine = create_mock_engine(1)
+            graph_runner = CUDAGraphRunner(mock_engine)
+
         def run_forward(input_ids, position_ids, attn_metadata):
             attn_metadata.prepare()
             if not scenario.use_cuda_graph:
@@ -333,8 +338,6 @@ class TestLlama(unittest.TestCase):
                                      position_ids=position_ids,
                                      attn_metadata=attn_metadata)
             else:
-                mock_engine = create_mock_engine(1)
-                graph_runner = CUDAGraphRunner(mock_engine)
                 inputs = {
                     "input_ids": input_ids,
                     "position_ids": position_ids,
@@ -342,7 +345,6 @@ class TestLlama(unittest.TestCase):
                 }
                 graph_runner.capture(1, lambda inputs: llama.forward(**inputs),
                                      inputs)
-
                 for _ in range(2):
                     # Run it twice. This helps us catch problems if buffers are accidentally reallocated
                     # in prepare().
@@ -366,5 +368,7 @@ class TestLlama(unittest.TestCase):
                                    ref.logits[:, -1].float(),
                                    atol=0.4,
                                    rtol=0.4)
+        if graph_runner is not None:
+            graph_runner.clear()
 
         kv_cache_manager.shutdown()
