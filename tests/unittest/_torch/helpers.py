@@ -172,12 +172,6 @@ class MockPytorchBackendConfig:
         self.cuda_graph_padding_enabled = cuda_graph_padding_enabled
 
 
-class MockSpecConfig:
-
-    def __init__(self, max_draft_len):
-        self.max_draft_len = max_draft_len
-
-
 class MockEngine:
     """A replacement for SimpleNamespace that supports weak references."""
 
@@ -194,7 +188,7 @@ def create_mock_engine(batch_size: int):
         _max_cuda_graph_batch_size=batch_size,
         max_beam_width=1,
         is_spec_decode=False,
-        spec_config=MockSpecConfig(max_draft_len=0),
+        spec_config=None,
         _cuda_graph_mem_pool=None,
         use_mrope=False,
     )
