@@ -225,9 +225,10 @@ class CUDAGraphRunnerTester:
             _cuda_graph_mem_pool=None,
             use_mrope=False,
         )
+        self.engine = mock_engine
 
         # 2. Instantiate the actual CUDAGraphRunner with the mock engine.
-        self.runner = CUDAGraphRunner(mock_engine)
+        self.runner = CUDAGraphRunner(self.engine)
 
     def capture(self, forward_fn: Callable[[Dict[str, Any]], torch.Tensor]):
         """
