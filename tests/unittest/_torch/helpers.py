@@ -270,10 +270,8 @@ class CUDAGraphRunnerTester:
         if not self.captured:
             raise RuntimeError("Graph must be captured before it can be run.")
 
-        # The `replay` method returns a weak reference to the output tensor.
-        # We dereference it before returning for caller convenience.
-        output_weak_ref = self.runner.replay(self.batch_size, inputs)
-        return output_weak_ref()
+        output_tensor = self.runner.replay(self.batch_size, inputs)
+        return output_tensor
 
 
 class graph_capturing_local(threading.local):
