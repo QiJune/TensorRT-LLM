@@ -340,9 +340,8 @@ class TestLlama(unittest.TestCase):
                     "position_ids": position_ids,
                     "attn_metadata": attn_metadata,
                 }
-                graph_runner.capture(1,
-                                     lambda inputs: llama.forward(**inputs),
-                                     initial_inputs=inputs)
+                graph_runner.capture(1, lambda inputs: llama.forward(**inputs),
+                                     inputs)
 
                 for _ in range(2):
                     # Run it twice. This helps us catch problems if buffers are accidentally reallocated
