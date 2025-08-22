@@ -333,18 +333,20 @@ class TestLlama(unittest.TestCase):
                                      attn_metadata=attn_metadata)
             else:
                 graph_runner = CUDAGraphRunnerTester(
-                    attn_metadata.max_num_requests, "cuda", attn_metadata)
-                graph_runner.capture(lambda inputs: llama.forward(**inputs))
+                    attn_metadata.max_num_requests, "cuda")
+                inputs = {
+                    "input_ids": input_ids,
+                    "position_ids": position_ids,
+                    "attn_metadata": attn_metadata,
+                }
+                graph_runner.capture(lambda inputs: llama.forward(**inputs),
+                                     initial_inputs=inputs)
 
                 for _ in range(2):
                     # Run it twice. This helps us catch problems if buffers are accidentally reallocated
                     # in prepare().
                     attn_metadata.prepare()
-                    logits = graph_runner.run({
-                        "input_ids": input_ids,
-                        "position_ids": position_ids,
-                        "attn_metadata": attn_metadata,
-                    })
+                    logits = graph_runner.replay(inputs)
                 return logits
 
         if scenario.use_cuda_graph:

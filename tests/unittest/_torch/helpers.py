@@ -197,21 +197,16 @@ class CUDAGraphRunnerTester:
     object with the necessary attributes required by CUDAGraphRunner.
     """
 
-    def __init__(self, batch_size: int, device: str, attn_metadata: Any):
+    def __init__(self, batch_size: int, device: str):
         """
         Initializes the helper and the underlying CUDAGraphRunner.
 
         Args:
             batch_size: The batch size for which the CUDA graph will be captured.
             device: The torch device to use (e.g., "cuda").
-            attn_metadata: An instance of attention metadata that is
-                already prepared for CUDA graph capture (i.e., the output of
-                `metadata.create_cuda_graph_metadata(...)`).
         """
         self.batch_size = batch_size
         self.device = torch.device(device)
-        self.attn_metadata = attn_metadata
-        self.captured = False
 
         # 1. Create a mock engine object
         mock_engine = MockEngine(
@@ -230,48 +225,12 @@ class CUDAGraphRunnerTester:
         # 2. Instantiate the actual CUDAGraphRunner with the mock engine.
         self.runner = CUDAGraphRunner(self.engine)
 
-    def capture(self, forward_fn: Callable[[Dict[str, Any]], torch.Tensor]):
-        """
-        Captures the CUDA graph for the provided model's forward function.
-
-        This method prepares the initial inputs required by CUDAGraphRunner
-        and calls its `capture` method. It should only be called once.
-
-        Args:
-            forward_fn: A callable (e.g., a lambda) that takes a dictionary of
-                keyword arguments and executes the model's forward pass.
-        """
-        if self.captured:
-            raise RuntimeError("Graph has already been captured.")
-
-        # For capturing, CUDAGraphRunner needs a dictionary of initial inputs.
-        # In this decoding-only test case, this dictionary primarily needs to
-        # contain the graph-compatible attention metadata.
-        initial_inputs = {
-            "attn_metadata": self.attn_metadata,
-            "spec_metadata": None,
-        }
-
+    def capture(self, forward_fn: Callable[[Dict[str, Any]], torch.Tensor],
+                initial_inputs: Dict[str, Any]):
         self.runner.capture(self.batch_size, forward_fn, initial_inputs)
-        self.captured = True
 
-    def run(self, inputs: Dict[str, Any]) -> torch.Tensor:
-        """
-        Replays the previously captured CUDA graph with new dynamic inputs.
-
-        Args:
-            inputs: A dictionary containing the dynamic inputs for the model,
-                    which must include 'input_ids', 'position_ids', and the
-                    same 'attn_metadata' object used for capture.
-
-        Returns:
-            The output tensor from the model's forward pass.
-        """
-        if not self.captured:
-            raise RuntimeError("Graph must be captured before it can be run.")
-
-        output_tensor = self.runner.replay(self.batch_size, inputs)
-        return output_tensor
+    def replay(self, current_inputs: Dict[str, Any]) -> torch.Tensor:
+        return self.runner.replay(self.batch_size, current_inputs)
 
 
 class graph_capturing_local(threading.local):
