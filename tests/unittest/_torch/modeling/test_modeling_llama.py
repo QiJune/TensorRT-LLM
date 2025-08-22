@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import torch
-from _torch.helpers import CUDAGraphRunnerTester
+from _torch.helpers import create_mock_engine
 from parameterized import parameterized
 from transformers import LlamaConfig
 from transformers import LlamaForCausalLM as HFLlamaForCausalLM
@@ -15,6 +15,7 @@ from tensorrt_llm._torch.attention_backend.utils import get_attention_backend
 from tensorrt_llm._torch.metadata import KVCacheParams
 from tensorrt_llm._torch.model_config import ModelConfig
 from tensorrt_llm._torch.models.modeling_llama import LlamaForCausalLM
+from tensorrt_llm._torch.pyexecutor.cuda_graph_runner import CUDAGraphRunner
 from tensorrt_llm._torch.pyexecutor.resource_manager import KVCacheManager
 from tensorrt_llm.bindings.executor import KvCacheConfig
 from tensorrt_llm.mapping import Mapping
@@ -332,8 +333,8 @@ class TestLlama(unittest.TestCase):
                                      position_ids=position_ids,
                                      attn_metadata=attn_metadata)
             else:
-                graph_runner = CUDAGraphRunnerTester(
-                    attn_metadata.max_num_requests, "cuda")
+                mock_engine = create_mock_engine()
+                graph_runner = CUDAGraphRunner(mock_engine)
                 inputs = {
                     "input_ids": input_ids,
                     "position_ids": position_ids,

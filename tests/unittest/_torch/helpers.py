@@ -4,8 +4,6 @@ from typing import Any, Callable, Dict, Optional, Tuple
 import torch
 import torch.nn.functional as F
 
-from tensorrt_llm._torch.pyexecutor.cuda_graph_runner import CUDAGraphRunner
-
 
 def ceil_div(x: int, y: int) -> int:
     return (x + y - 1) // y
@@ -187,50 +185,19 @@ class MockEngine:
         self.__dict__.update(kwargs)
 
 
-class CUDAGraphRunnerTester:
-    """
-    A testing helper class that simplifies the use of CUDAGraphRunner for
-    single-batch decoding steps in a unit test environment.
+def create_mock_engine(batch_size: int):
 
-    It wraps an instance of CUDAGraphRunner and provides a simplified interface
-    for capturing and replaying a CUDA graph. It internally creates a mock engine
-    object with the necessary attributes required by CUDAGraphRunner.
-    """
-
-    def __init__(self, batch_size: int, device: str):
-        """
-        Initializes the helper and the underlying CUDAGraphRunner.
-
-        Args:
-            batch_size: The batch size for which the CUDA graph will be captured.
-            device: The torch device to use (e.g., "cuda").
-        """
-        self.batch_size = batch_size
-        self.device = torch.device(device)
-
-        # 1. Create a mock engine object
-        mock_engine = MockEngine(
-            pytorch_backend_config=MockPytorchBackendConfig(
-                use_cuda_graph=True, cuda_graph_padding_enabled=False),
-            _cuda_graph_batch_sizes=[batch_size],
-            _max_cuda_graph_batch_size=batch_size,
-            max_beam_width=1,
-            is_spec_decode=False,
-            spec_config=MockSpecConfig(max_draft_len=0),
-            _cuda_graph_mem_pool=None,
-            use_mrope=False,
-        )
-        self.engine = mock_engine
-
-        # 2. Instantiate the actual CUDAGraphRunner with the mock engine.
-        self.runner = CUDAGraphRunner(self.engine)
-
-    def capture(self, forward_fn: Callable[[Dict[str, Any]], torch.Tensor],
-                initial_inputs: Dict[str, Any]):
-        self.runner.capture(self.batch_size, forward_fn, initial_inputs)
-
-    def replay(self, current_inputs: Dict[str, Any]) -> torch.Tensor:
-        return self.runner.replay(self.batch_size, current_inputs)
+    return MockEngine(
+        pytorch_backend_config=MockPytorchBackendConfig(
+            use_cuda_graph=True, cuda_graph_padding_enabled=False),
+        _cuda_graph_batch_sizes=[batch_size],
+        _max_cuda_graph_batch_size=batch_size,
+        max_beam_width=1,
+        is_spec_decode=False,
+        spec_config=MockSpecConfig(max_draft_len=0),
+        _cuda_graph_mem_pool=None,
+        use_mrope=False,
+    )
 
 
 class graph_capturing_local(threading.local):
