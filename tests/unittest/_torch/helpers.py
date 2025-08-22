@@ -1,4 +1,3 @@
-import threading
 from typing import Any, Callable, Dict, Optional, Tuple
 
 import torch
@@ -194,23 +193,6 @@ def create_mock_engine(batch_size: int):
     )
 
 
-class graph_capturing_local(threading.local):
-
-    def __init__(self):
-        self.is_graph_capturing = False
-
-
-_local = graph_capturing_local()
-
-
-def set_graph_capturing(enable: bool):
-    _local.is_graph_capturing = enable
-
-
-def is_graph_capturing() -> bool:
-    return _local.is_graph_capturing
-
-
 class DecodingCUDAGraphRunner:
 
     def __init__(
@@ -252,12 +234,10 @@ class DecodingCUDAGraphRunner:
         # internal states according to the docs:
         # https://pytorch.org/docs/stable/notes/cuda.html#cuda-graph-semantics
         # This also lets us initialize states in the attn_metadata.
-        set_graph_capturing(True)
         for _ in range(2):
             forward_fn(inputs)
         with torch.cuda.graph(self._graph, pool=pool):
             output = forward_fn(inputs)
-        set_graph_capturing(False)
         # Mark weak ref here. The output tensor should be freed properly.
         from tensorrt_llm._torch.utils import make_weak_ref
         self._output = make_weak_ref(output)
