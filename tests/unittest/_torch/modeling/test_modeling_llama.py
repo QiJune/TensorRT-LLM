@@ -370,5 +370,4 @@ class TestLlama(unittest.TestCase):
                                    rtol=0.4)
         if graph_runner is not None:
             graph_runner.clear()
-
         kv_cache_manager.shutdown()
