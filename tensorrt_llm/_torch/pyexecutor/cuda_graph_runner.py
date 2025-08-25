@@ -293,7 +293,6 @@ class CUDAGraphRunner:
         for graph in self.graphs.values():
             graph.reset()
         self.graphs.clear()
-        self.static_inputs.clear()
         self.graph_outputs.clear()
         self.graph_metadata.clear()
         del self.memory_pool
