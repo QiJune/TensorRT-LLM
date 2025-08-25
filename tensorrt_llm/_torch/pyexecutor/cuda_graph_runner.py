@@ -48,7 +48,9 @@ class CUDAGraphRunner:
         self.position_ids = torch.zeros((
             1,
             engine.batch_size * self.max_beam_width * (self.draft_len + 1),
-        ))
+        ),
+                                        device="cuda",
+                                        dtype=torch.int32)
         if engine.use_mrope:
             self.mrope_position_deltas = torch.zeros((engine.batch_size, 1),
                                                      device="cuda",
