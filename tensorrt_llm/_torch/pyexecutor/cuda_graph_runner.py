@@ -41,7 +41,18 @@ class CUDAGraphRunner:
         self.spec_config = engine.spec_config
 
         self.graphs: Dict[Tuple[int, int], torch.cuda.CUDAGraph] = {}
-        self.static_inputs: Dict[Tuple[int, int], Dict[str, torch.Tensor]] = {}
+        self.input_ids = torch.ones(
+            (engine.batch_size * self.max_beam_width * (self.draft_len + 1), ),
+            device="cuda",
+            dtype=torch.int32)
+        self.position_ids = torch.zeros((
+            1,
+            engine.batch_size * self.max_beam_width * (self.draft_len + 1),
+        ))
+        if engine.use_mrope:
+            self.mrope_position_deltas = torch.zeros((engine.batch_size, 1),
+                                                     device="cuda",
+                                                     dtype=torch.int32)
         self.graph_outputs: Dict[Tuple[int, int],
                                  Callable[[], Optional[torch.Tensor]]] = {}
         self.graph_metadata: Dict[Tuple[int, int], Dict[str, Any]] = {}
@@ -142,29 +153,13 @@ class CUDAGraphRunner:
         engine = self._get_engine()
         key = (batch_size, self.draft_len)
         spec_metadata = initial_inputs.get("spec_metadata", None)
-        # [CUDA graph spec decode padding]
-        # We pad input IDs/position IDs to the maximum draft length (token per request).
-        # We're forced to do this because we cannot reallocate inputs over many graph runs.
-        token_per_request = spec_metadata.max_draft_len + 1 if spec_metadata is not None else 1
 
         static_tensors = {
-            "input_ids":
-            torch.ones((batch_size * self.max_beam_width * token_per_request, ),
-                       device="cuda",
-                       dtype=torch.int32),
-            "position_ids":
-            torch.zeros((
-                1,
-                batch_size * self.max_beam_width * token_per_request,
-            ),
-                        device="cuda",
-                        dtype=torch.int32),
+            "input_ids": self.input_ids,
+            "position_ids": self.position_ids,
         }
         if engine.use_mrope:
-            static_tensors["mrope_position_deltas"] = torch.zeros(
-                (batch_size, 1), device="cuda", dtype=torch.int32)
-        self.static_inputs[key] = static_tensors
-
+            static_tensors["mrope_position_deltas"] = self.mrope_position_deltas
         capture_inputs = initial_inputs.copy()
         capture_inputs.update(static_tensors)
 
@@ -198,18 +193,15 @@ class CUDAGraphRunner:
             assert current_inputs.get(
                 "spec_metadata") is stored_meta["spec_metadata"]
 
-        static_tensors = self.static_inputs[key]
-
         input_ids = current_inputs["input_ids"]
         seqlen = input_ids.shape[0]
-        static_tensors["input_ids"][:seqlen].copy_(input_ids)
+        self.input_ids[:seqlen].copy_(input_ids)
 
         position_ids = current_inputs["position_ids"]
-        static_tensors["position_ids"][:, :seqlen].copy_(position_ids)
+        self.position_ids[:, :seqlen].copy_(position_ids)
 
         if "mrope_position_deltas" in current_inputs:
-            assert "mrope_position_deltas" in static_tensors
-            static_tensors["mrope_position_deltas"][:batch_size].copy_(
+            self.mrope_position_deltas[:batch_size].copy_(
                 current_inputs["mrope_position_deltas"])
 
         self.graphs[key].replay()
