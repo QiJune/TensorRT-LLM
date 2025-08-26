@@ -155,13 +155,15 @@ class CUDAGraphRunner:
         engine = self._get_engine()
         key = (batch_size, self.draft_len)
         spec_metadata = initial_inputs.get("spec_metadata", None)
-
+        seqlen = initial_inputs["input_ids"].shape[0]
         static_tensors = {
-            "input_ids": self.input_ids,
-            "position_ids": self.position_ids,
+            "input_ids": self.input_ids[:seqlen],
+            "position_ids": self.position_ids[:, :seqlen],
         }
         if engine.use_mrope:
-            static_tensors["mrope_position_deltas"] = self.mrope_position_deltas
+            static_tensors[
+                "mrope_position_deltas"] = self.mrope_position_deltas[:,
+                                                                      batch_size]
         capture_inputs = initial_inputs.copy()
         capture_inputs.update(static_tensors)
 
