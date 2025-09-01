@@ -78,7 +78,7 @@ public:
             for (int root = 0; root < static_cast<int>(mGroup.size()); ++root)
             {
                 auto split_size = sizes.value()[root];
-                NCCLCHECK_THROW(ncclBroadcast(input.data_ptr(),
+                NCCLCHECK_THROW(ncclBroadcast((COMM_SESSION.getRank() == root) ? input.data_ptr() : nullptr,
                     output.index({torch::indexing::Slice(split_offset, torch::indexing::None)}).mutable_data_ptr(),
                     numel_base * split_size, (*getDtypeMap())[type], root, *mNcclComm, stream));
                 split_offset += split_size;
