@@ -387,6 +387,7 @@ class PyTorchModelEngine(ModelEngine):
         self.is_warmup = False
 
         self.attn_backend = get_attention_backend(attn_backend)
+        self.draft_tokens_cuda = None
 
         if self.is_spec_decode:
             self.spec_metadata = None
