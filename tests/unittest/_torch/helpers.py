@@ -176,7 +176,7 @@ def create_mock_cuda_graph_runner(batch_size: int):
         max_supported_batch_size=batch_size,
         max_batch_size=batch_size,
         max_beam_width=1,
-        max_draft_len=1,
+        max_draft_len=0,
         use_mrope=False,
         spec_config=None,
         cuda_graph_mem_pool=None,
