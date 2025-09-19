@@ -602,9 +602,9 @@ class TestLlama3_1_8BInstruct(LlmapiAccuracyTestHarness):
     @parametrize_with_ids("gen_tp", [1, 2])
     @pytest.mark.parametrize("testset", ["GSM8K", "MMLU"])
     def test_ctx_pp_gen_tp_asymmetric(self, ctx_pp, gen_tp, testset):
-        if ctx_pp * gen_tp * 2 > get_device_count():
+        if ctx_pp + gen_tp > get_device_count():
             pytest.skip(
-                f"Not enough devices for ctx_pp={ctx_pp}*gen_tp={gen_tp} test")
+                f"Not enough devices for ctx_pp={ctx_pp}+gen_tp={gen_tp} test")
         return run_parallel_test(self.MODEL_NAME, self.MODEL_PATH, ctx_pp, 1, 1,
                                  gen_tp, 1, 1, [get_accuracy_task(testset)])
 
@@ -697,9 +697,9 @@ class TestDeepSeekV3Lite(LlmapiAccuracyTestHarness):
             task.evaluate(llm)
 
     @pytest.mark.skip_less_device(8)
+    @skip_pre_hopper
     @parametrize_with_ids("overlap_scheduler", [True, False])
-    @parametrize_with_ids("mtp_nextn",
-                          [0, pytest.param(2, marks=skip_pre_hopper)])
+    @parametrize_with_ids("mtp_nextn", [0, 2])
     @pytest.mark.skip_less_device(8)
     def test_auto_dtype(self, overlap_scheduler, mtp_nextn):
         ctx_server_config = {"disable_overlap_scheduler": True}

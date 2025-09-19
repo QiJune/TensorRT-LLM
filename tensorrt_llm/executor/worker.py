@@ -18,8 +18,7 @@ from .._utils import (KVCacheEventSerializer, global_mpi_rank, global_mpi_size,
                       mpi_comm, mpi_rank, nvtx_range_debug)
 from ..bindings import executor as tllm
 from ..builder import ConfigEncoder, Engine, EngineConfig
-from ..llmapi.llm_args import (BaseLlmArgs, KvCacheConnectorConfig,
-                               PybindMirror, TorchLlmArgs)
+from ..llmapi.llm_args import BaseLlmArgs, KvCacheConnectorConfig, PybindMirror
 from ..llmapi.mpi_session import set_mpi_session_cpp
 from ..llmapi.tokenizer import TokenizerBase
 from ..llmapi.tracer import VizTracer, global_tracer, set_global_tracer
@@ -86,7 +85,9 @@ class GenerationExecutorWorker(GenerationExecutor):
         self._await_response_helper = AwaitResponseHelper(
             self)  # TODO: make it weakref
         self._executor_config = executor_config
-        self._is_pytorch_backend = llm_args is not None and llm_args.backend == "pytorch"
+        self._is_pytorch_backend = llm_args is not None and llm_args.backend in [
+            "pytorch", "_autodeploy"
+        ]
         self.llm_args = llm_args
 
         if not self._is_pytorch_backend and kv_connector_config is not None:
@@ -468,7 +469,6 @@ class GenerationExecutorWorker(GenerationExecutor):
                 )
 
         if self._is_pytorch_backend:
-            assert isinstance(self.llm_args, TorchLlmArgs)
             if not self.llm_args.disable_overlap_scheduler:
                 is_disaggregated = self.engine.kv_cache_transceiver is not None
                 if is_disaggregated and (
@@ -512,6 +512,10 @@ class GenerationExecutorWorker(GenerationExecutor):
                 else:
                     # use max_tokens if can't deduce default_max_tokens
                     return max_tokens
+            if executor_config is not None:
+                assert (
+                    len(prompt_token_ids) <= executor_config.max_seq_len
+                ), f"`prompt_token_ids` length ({len(prompt_token_ids)}) is greater than `max_seq_len` ({executor_config.max_seq_len})"
             splited_prompt_len = int(len(prompt_token_ids) / cp_size)
             default_max_tokens = max_seq_len - splited_prompt_len - query_token_len
             if default_max_tokens <= 0:
@@ -572,7 +576,8 @@ class GenerationExecutorWorker(GenerationExecutor):
                 request.sampling_params.logits_processor,
                 kv_cache_retention_config=request.kv_cache_retention_config,
                 context_phase_params=context_phase_params,
-                type=request_type)
+                type=request_type,
+                cache_salt_id=request.cache_salt_id)
             executor_request.py_lora_path = py_lora_path
 
             if self._is_pytorch_backend and request.multimodal_params is not None:
@@ -591,6 +596,9 @@ class GenerationExecutorWorker(GenerationExecutor):
             executor_request.py_scheduling_params = None
             if self._is_pytorch_backend and request.scheduling_params is not None:
                 executor_request.py_scheduling_params = request.scheduling_params
+
+            if request.arrival_time is not None:
+                executor_request.py_arrival_time = request.arrival_time
 
             if request.query_token_ids is not None:
                 # pytorch star attention workflow
@@ -888,6 +896,7 @@ def worker_main(
                             worker.submit(req)
                         except RequestError as e:
                             logger.error(f"submit request failed: {e}")
+                            logger.error(traceback.format_exc())
                             worker._await_response_helper.temp_error_responses.put(
                                 ErrorResponse(req.id, e, req.id))
                     else:

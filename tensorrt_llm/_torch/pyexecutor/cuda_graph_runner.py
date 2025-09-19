@@ -63,8 +63,10 @@ class CUDAGraphRunner:
         self.kv_cache_manager_key = kv_cache_manager_key
 
         # --- Internal state ---
+        self.max_possible_draft_len = (self.spec_config.max_draft_len
+                                       if self.enable_spec_decode else 0)
+
         self.graphs: Dict[Tuple[int, int], torch.cuda.CUDAGraph] = {}
-        self.static_inputs: Dict[Tuple[int, int], Dict[str, torch.Tensor]] = {}
         self.graph_outputs: Dict[Tuple[int, int],
                                  Callable[[], Optional[torch.Tensor]]] = {}
         self.graph_metadata: Dict[Tuple[int, int], Dict[str, Any]] = {}
@@ -140,42 +142,41 @@ class CUDAGraphRunner:
         draft_len = self.spec_config.max_draft_len if is_spec_decode else 0
         return (batch_size, draft_len) not in self.graph_outputs
 
-    def capture(self, batch_size: int, is_spec_decode: bool,
-                forward_fn: Callable, initial_inputs: Dict[str, Any]):
+    def capture(self,
+                batch_size: int,
+                is_spec_decode: bool,
+                forward_fn: Callable,
+                initial_inputs: Dict[str, Any],
+                postprocess_fn: Optional[Callable] = None):
         """Captures the forward pass for a given batch size."""
         draft_len = self.spec_config.max_draft_len if is_spec_decode else 0
         key = (batch_size, draft_len)
 
-        spec_metadata = initial_inputs.get("spec_metadata", None)
         # [CUDA graph spec decode padding]
         # We pad input IDs/position IDs to the maximum draft length (token per request).
         # We're forced to do this because we cannot reallocate inputs over many graph runs.
-        token_per_request = spec_metadata.max_draft_len + 1 if spec_metadata is not None else 1
+        token_per_request = self.max_possible_draft_len + 1
+        num_tokens_for_capture = (batch_size * self.max_beam_width *
+                                  token_per_request)
 
-        static_tensors = {
+        sliced_static_tensors = {
             "input_ids":
-            torch.ones((batch_size * self.max_beam_width * token_per_request, ),
-                       device="cuda",
-                       dtype=torch.int32),
+            self.shared_static_tensors["input_ids"][:num_tokens_for_capture],
             "position_ids":
-            torch.zeros((
-                1,
-                batch_size * self.max_beam_width * token_per_request,
-            ),
-                        device="cuda",
-                        dtype=torch.int32),
+            self.shared_static_tensors["position_ids"]
+            [:, :num_tokens_for_capture],
         }
         if self.use_mrope:
-            static_tensors["mrope_position_deltas"] = torch.zeros(
+            sliced_static_tensors["mrope_position_deltas"] = torch.zeros(
                 (batch_size, 1), device="cuda", dtype=torch.int32)
-        self.static_inputs[key] = static_tensors
 
+        # Use the sliced tensors for capture
         capture_inputs = initial_inputs.copy()
-        capture_inputs.update(static_tensors)
+        capture_inputs.update(sliced_static_tensors)
 
         self.graph_metadata[key] = {
             "attn_metadata": initial_inputs["attn_metadata"],
-            "spec_metadata": spec_metadata,
+            "spec_metadata": initial_inputs.get("spec_metadata", None),
         }
 
         # We have to do warm up runs to initialize PyTorch's
@@ -186,8 +187,12 @@ class CUDAGraphRunner:
         with with_multi_stream(True), piecewise_cuda_graph(False):
             for _ in range(self.WARMUP_STEPS):
                 forward_fn(capture_inputs)
+                if postprocess_fn is not None:
+                    postprocess_fn(capture_inputs)
             with torch.cuda.graph(graph, pool=self.memory_pool):
                 output = forward_fn(capture_inputs)
+            if postprocess_fn is not None:
+                postprocess_fn(capture_inputs)
 
         self.graphs[key] = graph
         self.graph_outputs[key] = make_weak_ref(output)
@@ -205,7 +210,7 @@ class CUDAGraphRunner:
             assert current_inputs.get(
                 "spec_metadata") is stored_meta["spec_metadata"]
 
-        static_tensors = self.static_inputs[key]
+        static_tensors = self.shared_static_tensors
 
         input_ids = current_inputs["input_ids"]
         seqlen = input_ids.shape[0]
@@ -216,7 +221,8 @@ class CUDAGraphRunner:
 
         if "mrope_position_deltas" in current_inputs:
             assert "mrope_position_deltas" in static_tensors
-            static_tensors["mrope_position_deltas"][:batch_size].copy_(
+            mrope_num = current_inputs["mrope_position_deltas"].shape[0]
+            static_tensors["mrope_position_deltas"][:mrope_num].copy_(
                 current_inputs["mrope_position_deltas"])
 
         self.graphs[key].replay()
@@ -307,7 +313,6 @@ class CUDAGraphRunner:
         for graph in self.graphs.values():
             graph.reset()
         self.graphs.clear()
-        self.static_inputs.clear()
         self.graph_outputs.clear()
         self.graph_metadata.clear()
         self.padding_dummy_request = None

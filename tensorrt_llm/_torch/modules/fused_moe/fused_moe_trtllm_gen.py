@@ -3,8 +3,12 @@ from typing import Dict, List, Optional, Union
 import torch
 from torch import nn
 
+from tensorrt_llm._utils import get_sm_version
+
+from ...custom_ops.trtllm_gen_custom_ops import \
+    fp4_block_scale_fake_output_without_finalize
 from ...model_config import ModelConfig
-from ...utils import Fp4QuantizedTensor, next_positive_power_of_2
+from ...utils import Fp4QuantizedTensor
 from .interface import MoE, MoEWeightLoadingMode
 from .quantization import (DeepSeekFP8BlockScalesFusedMoEMethod,
                            NVFP4TRTLLMGenFusedMoEMethod,
@@ -76,7 +80,13 @@ class TRTLLMGenFusedMoE(MoE):
             swiglu_alpha=swiglu_alpha,
             swiglu_beta=swiglu_beta,
             swiglu_limit=swiglu_limit,
+            layer_idx=layer_idx,
         )
+
+        sm_version = get_sm_version()
+        if sm_version >= 120:
+            raise NotImplementedError(
+                "TRTLLMGenFusedMoE does not support SM120 and above.")
 
         assert not self.smart_router, "Smart router is not supported in TRTLLMGenFusedMoE."
 
@@ -105,27 +115,6 @@ class TRTLLMGenFusedMoE(MoE):
 
         if self.bias or self.swiglu_alpha is not None or self.swiglu_beta is not None or self.swiglu_limit is not None:
             assert self.has_w4a16_mxfp4 or self.has_w4a8_mxfp4_fp8 or self.has_w4a8_mxfp4_mxfp8, "TRTLLMGenFusedMoE only supports mxfp4 quantization with bias, swiglu_alpha, swiglu_beta and swiglu_limit."
-
-    def _get_tile_tokens_dim(self, x: torch.Tensor):
-        top_k = self.routing_method.top_k
-        # Number of tokens in the input tensor.
-        num_tokens = x.shape[0]
-        # Factor to account for the imbalance of the experts.
-        # factor equals to the max_real_num_tokens_per_expert / perfect_num_tokens_per_expert
-        # 1.0 means perfect expert distribution.
-        # > 1.0 means some experts have more tokens than the perfect distribution.
-        # < 1.0 does not make sense.
-        imbalance_factor = 1.3
-        # Calculate the number of tokens per expert assuming perfect distribution.
-        num_tokens_per_expert = (num_tokens * top_k) // self.num_experts
-        # Apply the imbalance factor.
-        num_tokens_per_expert = int(num_tokens_per_expert * imbalance_factor)
-        # And pad the number to the next power of 2.
-        tile_tokens_dim = next_positive_power_of_2(num_tokens_per_expert)
-        # Cap to 8-64 tokens per CTA tile as it's the range supported by the kernel.
-        tile_tokens_dim = min(max(tile_tokens_dim, 8), 64)
-
-        return tile_tokens_dim
 
     def _get_quant_method(self):
         if self.quant_config is not None:
@@ -179,10 +168,11 @@ class TRTLLMGenFusedMoE(MoE):
 
         self.quant_method.load_weights(self, weights, self.weight_loading_mode)
 
-    def forward(
+    def forward_impl(
         self,
         x: Union[torch.Tensor, Fp4QuantizedTensor],
         router_logits: torch.Tensor,
+        *,
         do_finalize: bool = True,
         all_rank_num_tokens: Optional[List[int]] = None,
         use_dp_padding: Optional[bool] = None,
@@ -302,9 +292,9 @@ class TRTLLMGenFusedMoE(MoE):
                 slot_start,  # local_expert_start;  use ep_rank if stride!=1
                 self.expert_size_per_partition,  # local_expert_size
                 routed_scaling_factor,
-                self._get_tile_tokens_dim(x),
                 self.routing_method.routing_method_type,
                 0,  # act_type
+                1.3,  # imbalance_factor
             )
             final_hidden_states = final_hidden_states[:, :self.
                                                       hidden_size].contiguous()
@@ -341,9 +331,9 @@ class TRTLLMGenFusedMoE(MoE):
                 slot_start,  # local_expert_start;  use ep_rank if stride!=1
                 self.expert_size_per_partition,  # local_expert_size
                 routed_scaling_factor,
-                self._get_tile_tokens_dim(x),
                 self.routing_method.routing_method_type,
                 0,  # act_type
+                1.3,  # imbalance_factor
             )
             final_hidden_states = final_hidden_states[:, :self.
                                                       hidden_size].contiguous()
@@ -378,9 +368,9 @@ class TRTLLMGenFusedMoE(MoE):
                 slot_start,  # local_expert_start;  use ep_rank if stride!=1
                 self.expert_size_per_partition,  # local_expert_size
                 routed_scaling_factor,
-                self._get_tile_tokens_dim(x),
                 self.routing_method.routing_method_type,
                 0,  # act_type
+                1.3,  # imbalance_factor
             )
         else:
             raise NotImplementedError(
@@ -398,3 +388,35 @@ class TRTLLMGenFusedMoE(MoE):
             final_hidden_states = final_hidden_states[:
                                                       all_rank_num_tokens[rank]]
         return final_hidden_states
+
+    def forward_fake(
+        self,
+        x: Union[torch.Tensor, Fp4QuantizedTensor],
+        router_logits: torch.Tensor,
+        *,
+        do_finalize: bool = True,
+        output_dtype: Optional[torch.dtype] = None,
+        all_rank_num_tokens: Optional[List[int]] = None,
+        use_dp_padding: Optional[bool] = None,
+        **kwargs,
+    ) -> Union[torch.Tensor, List[torch.Tensor]]:
+        if do_finalize:
+            # TRTLLMGenFusedMoE only supports bfloat16 output
+            return super().forward_fake(x,
+                                        router_logits,
+                                        do_finalize=do_finalize,
+                                        output_dtype=torch.bfloat16,
+                                        all_rank_num_tokens=all_rank_num_tokens,
+                                        use_dp_padding=use_dp_padding,
+                                        **kwargs)
+        else:
+            is_deepseek_v3_routing = isinstance(self.routing_method,
+                                                DeepSeekV3MoeRoutingMethod)
+            top_k = self.routing_method.routing_impl.top_k if is_deepseek_v3_routing else self.routing_method.top_k
+            routing_bias = self.routing_method.e_score_correction_bias if is_deepseek_v3_routing else None
+            return fp4_block_scale_fake_output_without_finalize(
+                x,
+                self.num_experts,
+                top_k,
+                routing_bias,
+            )

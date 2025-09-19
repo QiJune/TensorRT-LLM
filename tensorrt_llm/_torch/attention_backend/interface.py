@@ -25,6 +25,7 @@ class AttentionRuntimeFeatures:
     cache_reuse: bool = False
     has_speculative_draft_tokens: bool = False
     chunk_size: int = 0  # this is the chunk size for MLA chunked prefill, it will split kv cache into chunks to save global memory.
+    chunked_prefill_buffer_batch_size: int = 4  # real chunk size for MLA chunked prefill is chunked_prefill_buffer_batch_size * chunk_size.
 
 
 # The type of requests in qkv passed to attention
@@ -121,12 +122,7 @@ class AttentionMetadata:
         default_factory=AttentionRuntimeFeatures)
 
     # The number of tokens in each rank.
-    _all_rank_num_tokens: Optional[List[int]] = field(init=False,
-                                                      default=None,
-                                                      repr=False)
-    all_rank_num_tokens: Optional[List[int]]
-    # The max number of tokens among all ranks.
-    all_rank_max_num_tokens: Optional[int] = None
+    all_rank_num_tokens: Optional[List[int]] = None
 
     # These fields are set when changing seq_lens and _num_contexts to avoid computation
     # during execution. If the calculation happens during execution, torch compile treats it
@@ -140,6 +136,7 @@ class AttentionMetadata:
 
     # This buffer is currently only used for TrtllmAttentionMetadata.
     cache_indirection: Optional[torch.Tensor] = None
+    cuda_graph_buffers: dict[str, list[torch.Tensor]] = None
 
     _saved_tensors: Dict[str, torch.Tensor] = field(init=False,
                                                     default_factory=dict)
@@ -165,16 +162,6 @@ class AttentionMetadata:
             self._num_tokens = self._seq_lens_kv.sum().item()
         elif self._seq_lens is not None:
             self._num_tokens = self._seq_lens.sum().item()
-
-    @property
-    def all_rank_num_tokens(self) -> Optional[List[int]]:
-        return self._all_rank_num_tokens
-
-    @all_rank_num_tokens.setter
-    def all_rank_num_tokens(self, value: Optional[List[int]]):
-        value = value if value is not AttentionMetadata.all_rank_num_tokens else None
-        self._all_rank_num_tokens = value
-        self.all_rank_max_num_tokens = max(value) if value is not None else None
 
     @property
     def seq_lens(self) -> Optional[torch.Tensor]:
@@ -288,7 +275,8 @@ class AttentionMetadata:
     def create_cuda_graph_metadata(self,
                                    max_batch_size: int,
                                    sub_cross_metadata: bool = False,
-                                   max_draft_tokens: int = 0) -> Self:
+                                   max_draft_tokens: int = 0,
+                                   buffers=None) -> Self:
         """
         Creates metadata for CUDA graph execution.
         CUDA graphs require to use pre-allocated buffers for all tensors in fields.
@@ -300,6 +288,7 @@ class AttentionMetadata:
 
         cuda_graph_metadata = copy.copy(self)
         cuda_graph_metadata.is_cuda_graph = True
+        cuda_graph_metadata.cuda_graph_buffers = buffers
         if self.has_cross_sub_metadata:
             cuda_graph_metadata.cross = cuda_graph_metadata.cross.create_cuda_graph_metadata(
                 max_batch_size, True)
@@ -646,3 +635,4 @@ class MLAParams:
     qk_nope_head_dim: int = 0
     v_head_dim: int = 0
     predicted_tokens_per_seq: int = 1
+    chunked_prefill_buffer_batch_size: int = 1
