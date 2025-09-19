@@ -63,9 +63,6 @@ class CUDAGraphRunner:
         self.kv_cache_manager_key = kv_cache_manager_key
 
         # --- Internal state ---
-        self.max_possible_draft_len = (self.spec_config.max_draft_len
-                                       if self.enable_spec_decode else 0)
-
         self.graphs: Dict[Tuple[int, int], torch.cuda.CUDAGraph] = {}
         self.graph_outputs: Dict[Tuple[int, int],
                                  Callable[[], Optional[torch.Tensor]]] = {}
@@ -155,7 +152,7 @@ class CUDAGraphRunner:
         # [CUDA graph spec decode padding]
         # We pad input IDs/position IDs to the maximum draft length (token per request).
         # We're forced to do this because we cannot reallocate inputs over many graph runs.
-        token_per_request = self.max_possible_draft_len + 1
+        token_per_request = draft_len + 1
         num_tokens_for_capture = (batch_size * self.max_beam_width *
                                   token_per_request)
 
