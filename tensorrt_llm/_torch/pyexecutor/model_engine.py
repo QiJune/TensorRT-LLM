@@ -2426,6 +2426,7 @@ class PyTorchModelEngine(ModelEngine):
                         self._postprocess_inputs(inputs)
 
                     self.cuda_graph_runner.capture(batch_size,
+                                                   self.enable_spec_decode,
                                                    capture_forward_fn, inputs,
                                                    capture_postprocess_fn)
 
