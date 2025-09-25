@@ -40,6 +40,7 @@ class CUDAGraphRunner:
         max_batch_size: int,
         max_beam_width: int,
         max_draft_len: int,
+        max_num_tokens: int,
         use_mrope: bool,
         spec_config: Optional["DecodingBaseConfig"],
         cuda_graph_mem_pool: Optional[int],
@@ -56,6 +57,7 @@ class CUDAGraphRunner:
         self.max_batch_size = max_batch_size
         self.max_beam_width = max_beam_width
         self.max_draft_len = max_draft_len
+        self.max_num_tokens = max_num_tokens
         self.use_mrope = use_mrope
         self.spec_config = spec_config
         self.enable_attention_dp = enable_attention_dp

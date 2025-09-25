@@ -468,6 +468,7 @@ class PyTorchModelEngine(ModelEngine):
             max_batch_size=self.batch_size,
             max_beam_width=self.max_beam_width,
             max_draft_len=self.max_draft_len,
+            max_num_tokens=self.max_num_tokens,
             use_mrope=self.use_mrope,
             spec_config=self.spec_config,
             cuda_graph_mem_pool=self._cuda_graph_mem_pool,
