@@ -6,6 +6,7 @@ import torch
 
 from tensorrt_llm.mapping import Mapping
 
+from ...inputs.multimodal import MultimodalParams
 from ..attention_backend.interface import AttentionMetadata
 from ..distributed import MPIDist
 from ..expert_statistic import ExpertStatistic
@@ -69,6 +70,41 @@ class CUDAGraphRunner:
         self.graph_metadata: Dict[Tuple[int, int], Dict[str, Any]] = {}
         self.memory_pool = cuda_graph_mem_pool
         self.padding_dummy_request: Optional["Request"] = None
+        self.shared_static_tensors: Dict[str, torch.Tensor] = {}
+        if self.enabled:
+            # The max draft length is needed for sizing tensors, but we can't
+            # know the runtime-enabled draft length here.
+            # We size for the maximum possible configured draft length.
+            max_possible_draft_len = self.spec_config.max_draft_len if self.spec_config else 0
+            self._create_shared_static_tensors(max_possible_draft_len)
+
+    def _create_shared_static_tensors(self, max_draft_len: int):
+        """Allocates static tensors sized for the largest possible batch."""
+        token_per_request = max_draft_len + 1
+        max_total_tokens = (self.max_supported_batch_size *
+                            self.max_beam_width * token_per_request)
+        max_total_tokens = min(max_total_tokens, self.max_num_tokens)
+
+        self.shared_static_tensors = {
+            "input_ids":
+            torch.ones((max_total_tokens, ), device="cuda", dtype=torch.int32),
+            "position_ids":
+            torch.zeros((1, max_total_tokens), device="cuda",
+                        dtype=torch.int32),
+        }
+        if self.use_mrope:
+            self.shared_static_tensors["position_ids"] = torch.zeros(
+                (3, 1, max_total_tokens), device="cuda", dtype=torch.int32)
+            self.shared_static_tensors["multimodal_params"] = [
+                MultimodalParams(
+                    multimodal_data={
+                        "mrope_config": {
+                            "mrope_position_deltas":
+                            torch.zeros(
+                                (1, 1), device="cuda", dtype=torch.int32)
+                        }
+                    }) for _ in range(max_total_tokens)
+            ]
 
     def __del__(self):
         self.clear()
@@ -164,10 +200,12 @@ class CUDAGraphRunner:
             [:, :num_tokens_for_capture],
         }
         if self.use_mrope:
-            sliced_static_tensors["mrope_position_deltas"] = torch.zeros(
-                (batch_size, 1), device="cuda", dtype=torch.int32)
+            sliced_static_tensors["position_ids"] = self.shared_static_tensors[
+                "position_ids"][:, :, :num_tokens_for_capture],
+            sliced_static_tensors[
+                "multimodal_params"] = self.shared_static_tensors[
+                    "multimodal_params"][:batch_size * self.max_beam_width]
 
-        # Use the sliced tensors for capture
         capture_inputs = initial_inputs.copy()
         capture_inputs.update(sliced_static_tensors)
 
@@ -214,13 +252,20 @@ class CUDAGraphRunner:
         static_tensors["input_ids"][:seqlen].copy_(input_ids)
 
         position_ids = current_inputs["position_ids"]
-        static_tensors["position_ids"][:, :seqlen].copy_(position_ids)
-
-        if "mrope_position_deltas" in current_inputs:
-            assert "mrope_position_deltas" in static_tensors
-            mrope_num = current_inputs["mrope_position_deltas"].shape[0]
-            static_tensors["mrope_position_deltas"][:mrope_num].copy_(
-                current_inputs["mrope_position_deltas"])
+        if self.use_mrope and current_inputs.get(
+                'multimodal_params') is not None:
+            static_tensors["position_ids"][:, :, :seqlen].copy_(position_ids)
+            for i, multimodal_param in enumerate(
+                    current_inputs['multimodal_params']):
+                # NOTE: Only 'mrope_position_deltas' is needed on generation
+                # for multimodal models with CUDA graphs.
+                static_tensors['multimodal_params'][i].multimodal_data[
+                    'mrope_config']['mrope_position_deltas'].copy_(
+                        multimodal_param.multimodal_data['mrope_config']
+                        ['mrope_position_deltas'],
+                        non_blocking=True)
+        else:
+            static_tensors["position_ids"][:, :seqlen].copy_(position_ids)
 
         self.graphs[key].replay()
         output_ref = self.graph_outputs[key]
