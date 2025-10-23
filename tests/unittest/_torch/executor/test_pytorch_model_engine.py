@@ -119,6 +119,7 @@ def create_model_engine_and_kvcache(llm_args: TorchLlmArgs = None):
     batch_size = 13
 
     llm_args = llm_args if llm_args else TorchLlmArgs(
+        model="dummy",
         max_batch_size=batch_size,
         max_num_tokens=max_tokens,
         cuda_graph_config=CudaGraphConfig(
@@ -264,6 +265,7 @@ class PyTorchModelEngineTestCase(unittest.TestCase):
 
     def test_layerwise_nvtx_marker(self):
         llm_args = TorchLlmArgs(
+            model="dummy",
             enable_layerwise_nvtx_marker=True,
             cuda_graph_config=CudaGraphConfig(enable_padding=True))
         model_engine, kv_cache_manager = create_model_engine_and_kvcache(
@@ -292,17 +294,20 @@ class PyTorchModelEngineTestCase(unittest.TestCase):
         kv_cache_manager.shutdown()
 
     def test_cuda_graph_padding_filters_huge_batch_size(self):
-        llm_args = TorchLlmArgs(cuda_graph_config=CudaGraphConfig(
-            enable_padding=True,
-            batch_sizes=[1, 2, 3, 1000000000000000000000000]))
+        llm_args = TorchLlmArgs(
+            model="dummy",
+            cuda_graph_config=CudaGraphConfig(
+                enable_padding=True,
+                batch_sizes=[1, 2, 3, 1000000000000000000000000]))
         model_engine = DummyModelEngine(llm_args, 32, torch.half)
 
         self.assertEqual(model_engine._cuda_graph_batch_sizes,
                          [1, 2, 3, model_engine.max_seq_len])
 
     def test_forward_pass_callable_on_cuda_graph_on(self):
-        llm_args = TorchLlmArgs(
-            cuda_graph_config=CudaGraphConfig(enable_padding=True, ))
+        llm_args = TorchLlmArgs(model="dummy",
+                                cuda_graph_config=CudaGraphConfig(
+                                    enable_padding=True, ))
         model_engine, kv_cache_manager = create_model_engine_and_kvcache(
             llm_args)
 
@@ -324,7 +329,7 @@ class PyTorchModelEngineTestCase(unittest.TestCase):
         mock_callable.assert_called_once()
 
     def test_forward_pass_callable_on_cuda_graph_off(self):
-        llm_args = TorchLlmArgs()
+        llm_args = TorchLlmArgs(model="dummy")
         model_engine, kv_cache_manager = create_model_engine_and_kvcache(
             llm_args)
 
@@ -346,7 +351,7 @@ class PyTorchModelEngineTestCase(unittest.TestCase):
         mock_callable.assert_called_once()
 
     def test_foward_pass_callable_off(self):
-        llm_args = TorchLlmArgs()
+        llm_args = TorchLlmArgs(model="dummy")
         model_engine, kv_cache_manager = create_model_engine_and_kvcache(
             llm_args)
         self.assertTrue(model_engine.forward_pass_callable is None,
@@ -366,7 +371,7 @@ class PyTorchModelEngineTestCase(unittest.TestCase):
         model_engine.forward(batch, resource_manager)
 
     def test_foward_pass_callable_backward_compat(self):
-        llm_args = TorchLlmArgs()
+        llm_args = TorchLlmArgs(model="dummy")
         model_engine, kv_cache_manager = create_model_engine_and_kvcache(
             llm_args)
         self.assertTrue(model_engine.forward_pass_callable is None,
@@ -390,7 +395,7 @@ class PyTorchModelEngineTestCase(unittest.TestCase):
         """Test _prepare_tp_inputs function with helix parallelism."""
 
         # Create model engine with helix parallelism.
-        llm_args = TorchLlmArgs()
+        llm_args = TorchLlmArgs(model="dummy")
         model_engine = DummyModelEngine(llm_args,
                                         batch_size=4,
                                         dtype=torch.half)
