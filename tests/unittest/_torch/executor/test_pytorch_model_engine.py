@@ -158,12 +158,12 @@ class PyTorchModelEngineTestCase(unittest.TestCase):
         resource_manager = ResourceManager(
             {ResourceManagerType.KV_CACHE_MANAGER: kv_cache_manager})
 
-        seqlens_and_batch_sizes = [
+        batch_sizes_and_seqlens = [
             (5, 1),
             (13, 1),
             (5, 25),
         ]
-        for (batch_size, max_seq_len) in seqlens_and_batch_sizes:
+        for (batch_size, max_seq_len) in batch_sizes_and_seqlens:
             requests = [
                 _create_request(max_seq_len, i) for i in range(batch_size)
             ]
