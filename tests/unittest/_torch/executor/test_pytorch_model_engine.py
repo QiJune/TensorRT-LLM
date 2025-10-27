@@ -102,7 +102,6 @@ def _create_request(num_tokens, req_id: int):
 
 
 def create_model_engine_and_kvcache(llm_args: TorchLlmArgs = None):
-    max_num_requests = 15
     tokens_per_block = 1
     max_tokens = 258  # Atleast 1 more than the max seq len
     num_layers = 1
@@ -121,7 +120,7 @@ def create_model_engine_and_kvcache(llm_args: TorchLlmArgs = None):
     assert (8 in llm_args.cuda_graph_config.batch_sizes
             and 16 in llm_args.cuda_graph_config.batch_sizes)
 
-    model_engine = DummyModelEngine(llm_args, max_num_requests, torch.half)
+    model_engine = DummyModelEngine(llm_args, torch.half)
 
     kv_cache_config = KvCacheConfig(max_tokens=max_tokens)
     mapping = Mapping(world_size=1, tp_size=1, rank=0)
