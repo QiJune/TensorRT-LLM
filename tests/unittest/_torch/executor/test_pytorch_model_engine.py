@@ -318,9 +318,7 @@ class PyTorchModelEngineTestCase(unittest.TestCase):
         mock_callable.assert_called_once()
 
     def test_forward_pass_callable_on_cuda_graph_off(self):
-        llm_args = TorchLlmArgs(model="dummy")
-        model_engine, kv_cache_manager = create_model_engine_and_kvcache(
-            llm_args)
+        model_engine, kv_cache_manager = create_model_engine_and_kvcache()
 
         mock_callable = Mock()
         model_engine.register_forward_pass_callable(mock_callable)
@@ -340,9 +338,7 @@ class PyTorchModelEngineTestCase(unittest.TestCase):
         mock_callable.assert_called_once()
 
     def test_foward_pass_callable_off(self):
-        llm_args = TorchLlmArgs(model="dummy")
-        model_engine, kv_cache_manager = create_model_engine_and_kvcache(
-            llm_args)
+        model_engine, kv_cache_manager = create_model_engine_and_kvcache()
         self.assertTrue(model_engine.forward_pass_callable is None,
                         "forward_pass_callback should be None by default")
 
@@ -360,9 +356,7 @@ class PyTorchModelEngineTestCase(unittest.TestCase):
         model_engine.forward(batch, resource_manager)
 
     def test_foward_pass_callable_backward_compat(self):
-        llm_args = TorchLlmArgs(model="dummy")
-        model_engine, kv_cache_manager = create_model_engine_and_kvcache(
-            llm_args)
+        model_engine, kv_cache_manager = create_model_engine_and_kvcache()
         self.assertTrue(model_engine.forward_pass_callable is None,
                         "forward_pass_callback should be None by default")
 
