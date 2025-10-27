@@ -288,7 +288,7 @@ class PyTorchModelEngineTestCase(unittest.TestCase):
             cuda_graph_config=CudaGraphConfig(
                 enable_padding=True,
                 batch_sizes=[1, 2, 3, 1000000000000000000000000]))
-        model_engine = DummyModelEngine(llm_args, 32, torch.half)
+        model_engine = DummyModelEngine(llm_args, torch.half)
 
         self.assertEqual(model_engine._cuda_graph_batch_sizes,
                          [1, 2, 3, model_engine.max_seq_len])
@@ -379,9 +379,7 @@ class PyTorchModelEngineTestCase(unittest.TestCase):
 
         # Create model engine with helix parallelism.
         llm_args = TorchLlmArgs(model="dummy")
-        model_engine = DummyModelEngine(llm_args,
-                                        batch_size=4,
-                                        dtype=torch.half)
+        model_engine = DummyModelEngine(llm_args, dtype=torch.half)
 
         # Provide mapping for model engine.
         cp_size = 2
