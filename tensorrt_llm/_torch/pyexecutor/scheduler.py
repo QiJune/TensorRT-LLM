@@ -528,8 +528,7 @@ class PyCapacityScheduler:
         scheduled_requests: RequestList = []
         paused_requests: RequestList = []
 
-        if hasattr(self.kv_cache_manager, "start_scheduling"):
-            self.kv_cache_manager.start_scheduling()
+        self.kv_cache_manager_cpp.start_scheduling()
 
         # Track free blocks manually in Python to simulate transactional state.
         stats = self.kv_cache_manager_cpp.get_kv_cache_stats()
@@ -603,8 +602,6 @@ class PyCapacityScheduler:
 
     def _schedule_guaranteed_no_evict(self, active_requests: RequestList):
         scheduled_requests: RequestList = []
-
-        # Pending lists separated to enforce priority: Disagg Init > Context Init
         pending_disagg_requests: RequestList = []
         pending_context_requests: RequestList = []
 
@@ -625,7 +622,6 @@ class PyCapacityScheduler:
                     or req_state.value >= self.no_schedule_after_state.value):
                 continue
 
-            # Check capacity limits logic
             if len(scheduled_requests) >= self.max_num_requests:
                 if is_disagg_init:
                     pending_disagg_requests.append(request)
@@ -633,35 +629,26 @@ class PyCapacityScheduler:
                     pending_context_requests.append(request)
                 continue
 
-            # Prioritize Running Requests (Generation)
+            # Unconditionally schedule Running Requests
             if (req_state == LlmRequestState.GENERATION_IN_PROGRESS
                     or req_state == LlmRequestState.GENERATION_TO_COMPLETE):
 
                 needed = self.kv_cache_manager_cpp.get_remaining_blocks_to_completion(
                     request, self.default_window_size)
 
-                # [FIX]: GuaranteedNoEvict implies we NEVER evict running requests even if memory is tight.
-                # We deduct from available_blocks even if it goes negative (indicating oversubscription).
-                # This ensures existing requests keep running, and prevents new requests in Pass 2.
                 scheduled_requests.append(request)
                 available_blocks -= needed
             else:
-                # Non-running requests go to pending
                 if is_disagg_init:
                     pending_disagg_requests.append(request)
                 else:
                     pending_context_requests.append(request)
 
-        # --- Pass 2: New / Context Requests ---
-        # Critical: Process Disagg Init requests BEFORE standard Context Init
+        # --- Pass 2: New Requests (Disagg First) ---
         all_pending = pending_disagg_requests + pending_context_requests
 
         for request in all_pending:
             if len(scheduled_requests) >= self.max_num_requests:
-                break
-
-            # If available_blocks is negative (due to Pass 1), we naturally stop here.
-            if available_blocks <= 0:
                 break
 
             needed_blocks = self.kv_cache_manager_cpp.get_remaining_blocks_to_completion(
