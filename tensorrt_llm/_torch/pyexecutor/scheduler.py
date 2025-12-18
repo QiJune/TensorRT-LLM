@@ -1,5 +1,4 @@
 import dataclasses
-import math
 from abc import ABC, abstractmethod
 from collections import namedtuple
 from dataclasses import dataclass
@@ -476,7 +475,6 @@ class PyCapacityScheduler:
         self.no_schedule_after_state = no_schedule_after_state
 
         if self.kv_cache_manager is not None:
-            self.tokens_per_block = self.kv_cache_manager.tokens_per_block
             self.kv_cache_manager_cpp = kv_cache_manager.impl
             self.default_window_size = self.kv_cache_manager.max_seq_len
 
@@ -496,39 +494,6 @@ class PyCapacityScheduler:
         else:
             raise NotImplementedError(
                 f"Policy {self.policy} not implemented in PyCapacityScheduler")
-
-    def _get_req_needed_blocks(self, req: LlmRequest,
-                               is_guaranteed_no_evict: bool) -> int:
-        """
-        Robustly calculate needed blocks.
-        Tries to use C++ API if safe, otherwise falls back to Python math.
-        """
-        # For GuaranteedNoEvict, we need Total Blocks to completion.
-        # For MaxUtilization, we typically need incremental blocks (1 step).
-
-        # Scenario A: Disagg Init or Context Init (New Requests)
-        # The sequence might NOT be in C++ Manager yet. Do math manually to be safe.
-        if req.state == LlmRequestState.DISAGG_GENERATION_INIT or req.state == LlmRequestState.CONTEXT_INIT:
-            if is_guaranteed_no_evict:
-                # Need TOTAL blocks for the whole request
-                total_len = req.prompt_len + req.max_new_tokens
-                return math.ceil(total_len / self.tokens_per_block)
-            else:
-                # Need just the Context blocks for now (Simplified)
-                # Or use C++ get_needed_blocks_one_step if it doesn't lookup sequence
-                return math.ceil(req.prompt_len / self.tokens_per_block)
-
-        # Scenario B: Generation (Running Requests)
-        # Sequence IS in C++ Manager. Use C++ API for accuracy (shared blocks, beam width, etc).
-        if req.state == LlmRequestState.GENERATION_IN_PROGRESS or req.state == LlmRequestState.GENERATION_TO_COMPLETE:
-            if is_guaranteed_no_evict:
-                return self.kv_cache_manager_cpp.get_remaining_blocks_to_completion(
-                    req, self.default_window_size)
-            else:
-                return self.kv_cache_manager_cpp.get_needed_blocks_one_step(
-                    req, False, self.default_window_size)
-
-        return 0
 
     def _schedule_max_requests(self, active_requests: RequestList):
         scheduled_requests: RequestList = []
@@ -575,6 +540,9 @@ class PyCapacityScheduler:
 
         while idx < len(cached_active_list):
             req = cached_active_list[idx]
+
+            # 1. State Filter
+            # Allow Disagg Gen Init to pass through (matching C++ logic)
             is_disagg_init = (
                 req.state == LlmRequestState.DISAGG_GENERATION_INIT)
 
@@ -584,12 +552,21 @@ class PyCapacityScheduler:
                 idx += 1
                 continue
 
+            # 2. Max Requests Check
             if len(scheduled_requests) >= self.max_num_requests:
                 break
 
-            # 3. Try Allocation
-            needed_blocks = self._get_req_needed_blocks(
-                req, is_guaranteed_no_evict=False)
+            # 3. Try Allocation (Python Manual Check)
+            needed_blocks = 0
+            if is_disagg_init:
+                needed_blocks = self.kv_cache_manager_cpp.get_needed_blocks_one_step(
+                    req, False, self.default_window_size)
+            elif req.state == LlmRequestState.GENERATION_IN_PROGRESS:
+                needed_blocks = self.kv_cache_manager_cpp.get_needed_blocks_one_step(
+                    req, False, self.default_window_size)
+            elif req.state == LlmRequestState.CONTEXT_INIT:
+                needed_blocks = self.kv_cache_manager_cpp.get_needed_blocks_one_step(
+                    req, False, self.default_window_size)
 
             if current_free_blocks >= needed_blocks:
                 current_free_blocks -= needed_blocks
@@ -597,7 +574,7 @@ class PyCapacityScheduler:
                 idx += 1
                 continue
 
-            # 4. Backtracking
+            # 4. Backtracking / Eviction Logic
             victim_idx = -1
             for i in range(len(scheduled_requests) - 1, -1, -1):
                 r = scheduled_requests[i]
@@ -611,9 +588,10 @@ class PyCapacityScheduler:
                 paused_requests.append(victim_req)
 
                 # Reclaim victim's blocks manually
-                victim_needed = self._get_req_needed_blocks(
-                    victim_req, is_guaranteed_no_evict=False)
+                victim_needed = self.kv_cache_manager_cpp.get_needed_blocks_one_step(
+                    victim_req, False, self.default_window_size)
                 current_free_blocks += victim_needed
+
                 # Retry current req without incrementing idx
                 continue
             else:
@@ -641,13 +619,13 @@ class PyCapacityScheduler:
             is_disagg_init = (
                 req_state == LlmRequestState.DISAGG_GENERATION_INIT)
 
-            # Filter valid states (Allow Disagg Init)
+            # Filter valid states
             if not is_disagg_init and (
                     req_state.value < self.no_schedule_until_state.value
                     or req_state.value >= self.no_schedule_after_state.value):
                 continue
 
-            # Capacity Check
+            # Check capacity limits logic
             if len(scheduled_requests) >= self.max_num_requests:
                 if is_disagg_init:
                     pending_disagg_requests.append(request)
@@ -656,12 +634,15 @@ class PyCapacityScheduler:
                 continue
 
             # Prioritize Running Requests (Generation)
-            # In C++ NoEvict, running requests are scheduled unconditionally in the first pass
             if (req_state == LlmRequestState.GENERATION_IN_PROGRESS
                     or req_state == LlmRequestState.GENERATION_TO_COMPLETE):
 
-                needed = self._get_req_needed_blocks(
-                    request, is_guaranteed_no_evict=True)
+                needed = self.kv_cache_manager_cpp.get_remaining_blocks_to_completion(
+                    request, self.default_window_size)
+
+                # [FIX]: GuaranteedNoEvict implies we NEVER evict running requests even if memory is tight.
+                # We deduct from available_blocks even if it goes negative (indicating oversubscription).
+                # This ensures existing requests keep running, and prevents new requests in Pass 2.
                 scheduled_requests.append(request)
                 available_blocks -= needed
             else:
@@ -679,14 +660,18 @@ class PyCapacityScheduler:
             if len(scheduled_requests) >= self.max_num_requests:
                 break
 
-            needed_blocks = self._get_req_needed_blocks(
-                request, is_guaranteed_no_evict=True)
+            # If available_blocks is negative (due to Pass 1), we naturally stop here.
+            if available_blocks <= 0:
+                break
+
+            needed_blocks = self.kv_cache_manager_cpp.get_remaining_blocks_to_completion(
+                request, self.default_window_size)
 
             if needed_blocks <= available_blocks:
                 scheduled_requests.append(request)
                 available_blocks -= needed_blocks
             else:
-                # Head-of-line blocking (Standard NoEvict behavior)
+                # Head-of-line blocking
                 break
 
         return self._classify_output(active_requests, scheduled_requests, [])
