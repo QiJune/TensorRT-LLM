@@ -10,6 +10,7 @@ from strenum import StrEnum
 from tensorrt_llm.bindings import internal as tb_internal
 from tensorrt_llm.llmapi.llm_args import CapacitySchedulerPolicy
 
+# Assuming these imports exist in your environment
 from .llm_request import LlmRequest, LlmRequestState
 
 RequestList = list[LlmRequest]
@@ -247,6 +248,10 @@ class ContextChunkingConfig:
     chunk_unit_size: int
 
 
+class MicroBatchScheduler:
+    """Base class to match structure."""
+
+
 class PyMicroBatchScheduler(MicroBatchScheduler):
 
     def __init__(
@@ -268,60 +273,64 @@ class PyMicroBatchScheduler(MicroBatchScheduler):
         context_requests: RequestList = []
         generation_requests: RequestList = []
 
-        current_batch_tokens = 0
-        scheduled_req_count = 0
+        # Current total tokens in the scheduled batch (Generation + Context)
+        batch_num_tokens = 0
+        scheduled_req_size = 0
         scheduled_beam_width = 0
 
         contexts_to_be_chunked: RequestList = []
+        # Total tokens required by chunked requests (calculated tentatively)
         num_chunked_tokens = 0
-        all_context_fits = True
+        all_context_requests_fit = True
 
+        # 1. Main Scheduling Loop
         for req in active_requests:
-            # Skip invalid states or inflight requests
+            # Skip requests already in flight (should be filtered by caller, but C++ checks)
             if req.request_id in inflight_request_ids:
                 continue
 
-            # Note: C++ checks noScheduleUntil/After here. Assuming caller handles it or req.state reflects it.
-
             req_num_tokens = 0
 
-            # --- 1. Encoder Handling (Added) ---
+            # --- A. Encoder Request Handling (Previously Missing) ---
             if req.state == LlmRequestState.ENCODER_INIT:
-                req_num_tokens = req.encoder_output_len  # Verify property name
-                if self.max_context_length is not None and req_num_tokens > self.max_context_length:
-                    # Log error or throw equivalent to C++ CHECK
-                    pass
+                # C++: reqNumTokens = llmReq->getEncoderOutputLen();
+                req_num_tokens = req.encoder_output_len
 
-                if self.max_num_tokens is not None and (current_batch_tokens +
+                if self.max_context_length is not None and req_num_tokens > self.max_context_length:
+                    # C++ does TLLM_CHECK here. We skip or log.
+                    continue
+
+                # Check Batch Token Budget
+                if self.max_num_tokens is not None and (batch_num_tokens +
                                                         req_num_tokens
                                                         > self.max_num_tokens):
                     break
 
                 context_requests.append(req)
-                current_batch_tokens += req_num_tokens
+                batch_num_tokens += req_num_tokens
 
-            # --- 2. Context Handling ---
+            # --- B. Context Request Handling ---
             elif req.state == LlmRequestState.CONTEXT_INIT:
                 if not self.ctx_chunk_config:
-                    # No Chunking: Greedy allocation
-                    # C++: getNumTokens(beam) + draft
-                    req_num_tokens = req.context_remaining_length
+                    # No Chunking: Schedule full context
+                    # C++: getNumTokens(beam) + (hasDraft ? getNumDraftTokens : 0)
+                    base_tokens = req.context_remaining_length  # effectively getNumTokens(0)
                     draft_tokens = req.num_draft_tokens if req.has_draft_tokens else 0
-                    total_tokens = req_num_tokens + draft_tokens
+                    req_num_tokens = base_tokens + draft_tokens
 
-                    if self.max_context_length is not None and total_tokens > self.max_context_length:
-                        pass  # Error handling
+                    if self.max_context_length is not None and req_num_tokens > self.max_context_length:
+                        continue
 
                     if self.max_num_tokens is not None and (
-                            current_batch_tokens + total_tokens
+                            batch_num_tokens + req_num_tokens
                             > self.max_num_tokens):
                         break
 
                     context_requests.append(req)
-                    current_batch_tokens += total_tokens
+                    batch_num_tokens += req_num_tokens
                 else:
-                    # Chunking Enabled
-                    # Initialize chunk size to full remaining
+                    # Chunking Enabled: Tentative schedule
+                    # C++: setContextChunkSize(remaining); reqNumTokens = size + draft
                     req.context_chunk_size = req.context_remaining_length
 
                     draft_tokens = req.num_draft_tokens if (
@@ -329,65 +338,72 @@ class PyMicroBatchScheduler(MicroBatchScheduler):
                         and req.has_draft_tokens) else 0
                     req_num_tokens = req.context_chunk_size + draft_tokens
 
+                    # C++: Check maxContextLength constraints
                     if self.max_context_length is not None:
                         if self.max_context_length < req_num_tokens:
                             req_num_tokens = self.max_context_length
-                            all_context_fits = False
+                            all_context_requests_fit = False
 
                     contexts_to_be_chunked.append(req)
                     num_chunked_tokens += req_num_tokens
 
-            # --- 3. Generation Handling ---
+            # --- C. Generation Request Handling ---
             elif req.state == LlmRequestState.GENERATION_IN_PROGRESS:
                 beam_width = req.sampling_config.beam_width
                 req_num_tokens = beam_width + req.num_draft_tokens
 
-                if self.max_num_tokens is not None and (current_batch_tokens +
+                if self.max_num_tokens is not None and (batch_num_tokens +
                                                         req_num_tokens
                                                         > self.max_num_tokens):
                     break
 
-                # Beam Width Consistency Check
+                # Beam Width Consistency Check (C++ Logic)
                 if scheduled_beam_width == 0:
                     scheduled_beam_width = beam_width
                 elif scheduled_beam_width != beam_width:
+                    # Skip requests with different beam width in this batch
                     continue
 
                 generation_requests.append(req)
-                current_batch_tokens += req_num_tokens
+                batch_num_tokens += req_num_tokens
 
-            # Batch Size Check
-            scheduled_req_count += 1
-            if scheduled_req_count >= self.max_batch_size:
+            # --- Batch Size Limit Check ---
+            scheduled_req_size += 1
+            if scheduled_req_size >= self.max_batch_size:
                 break
 
-        # Check if chunking logic is needed
+        # 2. Verify Chunking Fits
         if self.max_num_tokens is not None and num_chunked_tokens > (
-                self.max_num_tokens - current_batch_tokens):
-            all_context_fits = False
+                self.max_num_tokens - batch_num_tokens):
+            all_context_requests_fit = False
 
-        # Apply Chunking Strategy
-        if not all_context_fits:
-            # C++ check: mCtxChunkConfig must be valid
-            if contexts_to_be_chunked:
+        # 3. Apply Chunking Strategy if needed
+        if not all_context_requests_fit and contexts_to_be_chunked:
+            if not self.ctx_chunk_config:
+                pass  # Error in C++: "If chunking not enabled..."
+            else:
                 remaining_capacity = (
-                    self.max_num_tokens - current_batch_tokens
+                    self.max_num_tokens - batch_num_tokens
                 ) if self.max_num_tokens is not None else None
 
                 self._set_ctx_requests_chunk_size(contexts_to_be_chunked,
                                                   remaining_capacity)
 
-        # Finalize Context Requests
+        # 4. Finalize Chunked Requests
         for req in contexts_to_be_chunked:
             if req.context_chunk_size > 0:
                 context_requests.append(req)
-                current_batch_tokens += req.context_chunk_size
+                # C++: batchNumTokens += chunk size
+                batch_num_tokens += req.context_chunk_size
+
+        # Note: C++ calls utils::sortRequests here. Python lists preserve order,
+        # usually acceptable unless specific downstream kernel requirements exist.
 
         return context_requests, generation_requests
 
     def _set_ctx_requests_chunk_size(self, requests: RequestList,
                                      capacity: Optional[int]):
-        # Reset chunk sizes to 0 first (Matches C++ setCtxRequestsChunkSize start)
+        # C++: Resets all chunk sizes to 0 at start
         for req in requests:
             req.context_chunk_size = 0
 
@@ -404,43 +420,37 @@ class PyMicroBatchScheduler(MicroBatchScheduler):
     def _chunk_equal_progress(self, requests: RequestList,
                               capacity: Optional[int], unit_size: int):
         num_ctx_tokens = 0
-        num_tokens_single_loop = 1  # Force entry into loop
+        num_tokens_single_loop = 1
 
-        # C++ Loop Condition: (!ctxTokensCapacity || numCtxTokens < ctxTokensCapacity.value()) && numTokensSingleLoop
+        # C++ Loop: while ((!capacity || numCtxTokens < capacity) && numTokensSingleLoop)
         while (capacity is None
                or num_ctx_tokens < capacity) and num_tokens_single_loop > 0:
             num_tokens_single_loop = 0
             for req in requests:
                 past_size = req.context_chunk_size
 
-                # C++ logic implies we iterate up.
-                # Note: C++ uses req->getContextChunkSize() which was reset to 0.
-                # It does NOT use context_remaining_length here directly, it increments `suggested`
-
-                # We need the UPPER BOUND for this request (Total remaining)
-                max_req_len = req.context_remaining_length
-
+                # C++ logic: suggested = past + unit
                 suggested_size = past_size + unit_size
 
-                # Clamp to actual need
-                # C++ logic does not explicitly clamp 'suggested' here in the snippet
-                # but 'actualChunkSize' implies the logic handles it or setContextChunkSize handles it?
-                # Looking at C++: `llmReq->setContextChunkSize(suggestedChunkSize)`
-                # We assume `req` object clamps it internally or we clamp it here.
-                # Safe to clamp:
-                if suggested_size > max_req_len:
-                    suggested_size = max_req_len
+                # Ensure we don't exceed what the request actually needs
+                remaining_total = req.context_remaining_length
+                suggested_size = min(suggested_size, remaining_total)
 
                 req.context_chunk_size = suggested_size
 
                 actual_size = req.context_chunk_size
                 actual_increment = actual_size - past_size
 
-                # Capacity Check
-                if (capacity is not None and num_ctx_tokens + actual_increment > capacity) or \
-                   (self.max_context_length is not None and actual_size > self.max_context_length):
-                    # Revert
-                    req.context_chunk_size = past_size
+                # Check Constraints
+                # 1. Capacity
+                if capacity is not None and (num_ctx_tokens + actual_increment
+                                             > capacity):
+                    req.context_chunk_size = past_size  # Revert
+                    continue
+
+                # 2. Max Context Length
+                if self.max_context_length is not None and actual_size > self.max_context_length:
+                    req.context_chunk_size = past_size  # Revert
                     continue
 
                 num_ctx_tokens += actual_increment
@@ -448,7 +458,6 @@ class PyMicroBatchScheduler(MicroBatchScheduler):
 
     def _chunk_fcfs(self, requests: RequestList, capacity: Optional[int],
                     unit_size: int):
-        # Matches C++ logic
         current_capacity = capacity if capacity is not None else float('inf')
 
         for req in requests:
@@ -461,21 +470,20 @@ class PyMicroBatchScheduler(MicroBatchScheduler):
             if self.max_context_length is not None:
                 actual_size = min(self.max_context_length, actual_size)
 
-            # Align if truncated
-            if actual_size != suggested_size:
+            # Round down to unit size if we had to truncate
+            if actual_size < suggested_size:
                 actual_size = (int(actual_size) // unit_size) * unit_size
 
             req.context_chunk_size = int(actual_size)
 
+            # C++: ctxTokensCapacity = ctxTokensCapacity - actualChunkSize
             if capacity is not None:
                 current_capacity -= req.context_chunk_size
 
     def _fit_draft_tokens(self, requests: RequestList, capacity: Optional[int],
                           unit_size: int):
-        # Matches C++ fitDraftTokens logic
-        num_ctx_tokens = 0
-        for req in requests:
-            num_ctx_tokens += req.context_chunk_size
+        # Calculate tokens already taken by the batch so far
+        num_ctx_tokens = sum(req.context_chunk_size for req in requests)
 
         for req in requests:
             if req.is_last_context_chunk and req.has_draft_tokens:
@@ -490,13 +498,10 @@ class PyMicroBatchScheduler(MicroBatchScheduler):
                 if capacity is not None:
                     remaining_space = min(remaining_space,
                                           capacity - num_ctx_tokens)
-                    num_ctx_tokens += remaining_space  # Draft tokens take space
+                    num_ctx_tokens += remaining_space
 
                 draft_discard = req.num_draft_tokens - remaining_space
                 if draft_discard > 0:
-                    # Important: Python object needs to support this or we handle it
-                    # C++ calls llmReq->discardDraftTokens(draftTokensToDiscard)
-                    # If python binding exposes this, call it.
                     if hasattr(req, "discard_draft_tokens"):
                         req.discard_draft_tokens(draft_discard)
 
