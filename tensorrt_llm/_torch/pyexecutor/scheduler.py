@@ -476,6 +476,7 @@ class PyCapacityScheduler:
         self.no_schedule_after_state = no_schedule_after_state
 
         if self.kv_cache_manager is not None:
+            self.tokens_per_block = self.kv_cache_manager.tokens_per_block
             self.kv_cache_manager_cpp = kv_cache_manager.impl
             self.default_window_size = self.kv_cache_manager.max_seq_len
 
