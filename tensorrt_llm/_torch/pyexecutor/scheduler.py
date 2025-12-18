@@ -348,7 +348,7 @@ class PyMicroBatchScheduler(MicroBatchScheduler):
                     num_chunked_tokens += req_num_tokens
 
             # --- C. Generation Request Handling ---
-            elif req.state == LlmRequestState.GENERATION_IN_PROGRESS:
+            else:
                 beam_width = req.sampling_config.beam_width
                 req_num_tokens = beam_width + req.num_draft_tokens
 
