@@ -731,10 +731,9 @@ class PyCapacityScheduler:
         pending_disagg_requests: RequestList = []
         pending_context_requests: RequestList = []
 
-        # KV Cache Resource Tracking
         available_blocks_map = self._get_initial_available_blocks_map()
 
-        # PEFT Resource Tracking
+        # PEFT Tracking
         claimed_peft_pages = 0
         uniq_task_ids: Set[int] = set()
 
@@ -756,68 +755,59 @@ class PyCapacityScheduler:
                     pending_context_requests.append(request)
                 continue
 
+            # Unconditionally schedule Running Requests
             if (req_state == LlmRequestState.GENERATION_IN_PROGRESS
                     or req_state == LlmRequestState.GENERATION_TO_COMPLETE):
 
-                # 1. Update KV Cache Map (Unconditional)
+                scheduled_requests.append(request)
                 self._req_force_update_map(request,
                                            available_blocks_map,
                                            is_guaranteed_no_evict=True)
 
-                # 2. Update PEFT Usage
-                # C++: if (isNewTask) claimedPeftPages += determineNumPages(req);
+                # PEFT Accounting for running reqs
                 if self.peft_cache_manager and request.lora_task_id is not None:
                     task_id = request.lora_task_id
                     if task_id not in uniq_task_ids:
-                        # Binding check: determine_num_pages
-                        pages = self.peft_cache_manager_cpp.determine_num_pages(
+                        claimed_peft_pages += self.peft_cache_manager.determine_num_pages(
                             request)
-                        claimed_peft_pages += pages
                         uniq_task_ids.add(task_id)
-
-                scheduled_requests.append(request)
             else:
                 if is_disagg_init:
                     pending_disagg_requests.append(request)
                 else:
                     pending_context_requests.append(request)
 
-        # --- Pass 2: New / Context Requests ---
-        available_peft_pages = self.max_peft_pages - claimed_peft_pages
+        # --- Pass 2: New / Context Requests (Disagg First) ---
         all_pending = pending_disagg_requests + pending_context_requests
 
         for request in all_pending:
             if len(scheduled_requests) >= self.max_num_requests:
                 break
 
-            # 1. Check PEFT Capacity
-            needed_peft_pages = 0
+            # PEFT Check
+            needed_peft = 0
             is_new_task = False
             task_id = None
-
             if self.peft_cache_manager and request.lora_task_id is not None:
                 task_id = request.lora_task_id
                 is_new_task = (task_id not in uniq_task_ids)
                 if is_new_task:
-                    needed_peft_pages = self.peft_cache_manager_cpp.determine_num_pages(
+                    needed_peft = self.peft_cache_manager.determine_num_pages(
                         request)
-                    if needed_peft_pages > available_peft_pages:
-                        # Not enough PEFT memory
+                    if claimed_peft_pages + needed_peft > self.max_peft_pages:
                         break  # Head-of-line blocking
 
-            # 2. Check KV Cache Capacity
-            if not self._req_check_and_update_map(
-                    request, available_blocks_map, is_guaranteed_no_evict=True):
-                # Not enough KV blocks
+            # KV Check
+            if self._req_check_and_update_map(request,
+                                              available_blocks_map,
+                                              is_guaranteed_no_evict=True):
+                scheduled_requests.append(request)
+                if is_new_task:
+                    claimed_peft_pages += needed_peft
+                    uniq_task_ids.add(task_id)
+            else:
+                # Head-of-line blocking
                 break
-
-            # 3. Commit Schedule
-            scheduled_requests.append(request)
-
-            # Commit PEFT usage
-            if is_new_task:
-                available_peft_pages -= needed_peft_pages
-                uniq_task_ids.add(task_id)
 
         return self._classify_output(active_requests, scheduled_requests, [])
 
