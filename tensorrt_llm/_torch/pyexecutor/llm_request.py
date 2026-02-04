@@ -583,6 +583,13 @@ class LlmRequest(tensorrt_llm.bindings.internal.batch_manager.LlmRequest):
             additional_outputs=additional_outputs)
         self.child_requests = []
 
+        # Pre-validation cache for attention_dp optimization
+        # When a request passes simulation in GlobalCoordinator.can_accept_request(),
+        # we cache the estimated tokens/blocks to avoid recalculating in _fused_schedule_request()
+        self.py_pre_validated: bool = False
+        self.py_estimated_tokens: int = 0
+        self.py_estimated_blocks: int = 0
+
         self._py_embedding_bias_1d: Optional[torch.Tensor] = None
         if hasattr(self, 'embedding_bias') and self.embedding_bias is not None:
             # Pre-squeeze to 1D if needed (remove batch dimension)

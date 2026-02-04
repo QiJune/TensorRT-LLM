@@ -860,6 +860,9 @@ def create_py_executor_instance(
     if scheduler_capacity == 1 and mapping.enable_attention_dp and kv_cache_manager:
         scheduler_capacity += 1
 
+    # Extract server_role from llm_args for scheduler selection
+    server_role = getattr(llm_args, 'server_role', None)
+
     use_python_scheduler = os.getenv("TLLM_USE_PYTHON_SCHEDULER", "0") == "1"
     if use_python_scheduler and not isinstance(kv_cache_manager,
                                                KVCacheManagerV2):
@@ -873,7 +876,10 @@ def create_py_executor_instance(
             scheduler_policy=scheduler_config.capacity_scheduler_policy,
             ctx_chunk_config=ctx_chunk_config,
             two_step_lookahead=mapping.has_pp(),
-            scheduler_capacity=scheduler_capacity)
+            scheduler_capacity=scheduler_capacity,
+            dist=dist,
+            max_num_active_requests=model_engine.get_max_num_sequences(),
+            server_role=server_role)
     else:
         if isinstance(kv_cache_manager, KVCacheManagerV2):
             capacity_scheduler = KVCacheV2DummyScheduler(
