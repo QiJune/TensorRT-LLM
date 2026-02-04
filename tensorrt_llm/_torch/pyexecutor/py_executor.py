@@ -371,10 +371,10 @@ class PyExecutor:
                 scheduler.enable_global_scheduling = True
 
                 # Configure batching/waiting parameters for attention_dp
-                scheduler.attention_dp_enable_balance = self.attention_dp_enable_balance
+                scheduler.global_coordinator.attention_dp_enable_balance = self.attention_dp_enable_balance
                 if self.attention_dp_enable_balance:
-                    scheduler.attention_dp_time_out_iters = self.attention_dp_time_out_iters
-                    scheduler.attention_dp_batching_wait_iters = self.attention_dp_batching_wait_iters
+                    scheduler.global_coordinator.attention_dp_time_out_iters = self.attention_dp_time_out_iters
+                    scheduler.global_coordinator.attention_dp_batching_wait_iters = self.attention_dp_batching_wait_iters
 
                 logger.info(
                     "Enabled global scheduling for attention_dp (balance=%s)",
