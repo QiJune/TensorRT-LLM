@@ -15,6 +15,7 @@ from tensorrt_llm.logger import logger
 
 from .llm_request import LlmRequest, LlmRequestState
 from .request_utils import merge_requests
+from .resource_manager import ResourceManagerType
 
 RequestList = list[LlmRequest]
 
@@ -804,9 +805,15 @@ class GlobalCoordinator:
         Calculate assignment score for a rank.
         Higher score = better assignment.
 
-        Scoring components:
-        1. Load penalty: Avoid overloaded ranks
-        2. Context request penalty: Balance context vs generation
+        PRIMARY GOAL: Balance TOKEN WORKLOAD across ranks.
+        Token balance directly correlates with execution time balance,
+        which is the true performance metric. Request count balance
+        is secondary since requests vary significantly in token count.
+
+        Scoring components (by priority):
+        1. Token load penalty (PRIMARY): Heavily penalize high token load
+        2. Context request penalty (SECONDARY): Balance context vs generation
+        3. Generation request penalty (SECONDARY): Minor load factor
 
         Args:
             rank_state: Current state of the candidate rank
@@ -816,16 +823,21 @@ class GlobalCoordinator:
         """
         score = 0.0
 
-        # Component 1: Load balancing (token-based)
+        # === PRIMARY: Token Load Balance (Most Important) ===
+        # This is the dominant factor because token count directly determines
+        # computation time. A rank with 2000 tokens takes 40x longer than
+        # a rank with 50 tokens, even if both have the same request count.
         if rank_state.max_token_budget > 0 and rank_state.max_token_budget != float(
                 'inf'):
             load_ratio = rank_state.current_batch_tokens / rank_state.max_token_budget
-            score -= load_ratio * 100.0
+            score -= load_ratio * 1000.0  # Heavily penalize high token load
 
-        # Component 2: Context vs generation balancing
-        # Penalize ranks with many context requests (they block generation)
-        score -= rank_state.num_active_ctx_reqs * 2.0
-        score -= rank_state.num_active_gen_reqs * 1.0
+        # === SECONDARY: Request Count Balance (Less Important) ===
+        # Context requests still matter because they block generation,
+        # but their weight is much lower relative to token load.
+        # This ensures token balance takes precedence over request count balance.
+        score -= rank_state.num_active_ctx_reqs * 10.0
+        score -= rank_state.num_active_gen_reqs * 5.0
 
         return score
 
@@ -1128,13 +1140,10 @@ class CapacityChecker:
         self._no_schedule_until_state_value = no_schedule_until_state_value
         self._no_schedule_after_state_value = no_schedule_after_state_value
 
-    def can_be_scheduled_with_disagg_exception(self, req: LlmRequest) -> bool:
+    def can_be_scheduled(self, req: LlmRequest) -> bool:
         """
-        Check if request can be scheduled, with exception for disagg generation init state.
-        Disagg generation init requests bypass the normal state gating.
+        Check if request can be scheduled based on state value.
         """
-        if req.is_disagg_generation_init_state:
-            return True
         # Use cached state values for performance
         state_value = req.state_value
         return (state_value >= self._no_schedule_until_state_value
@@ -1285,7 +1294,7 @@ class CapacityChecker:
             return True
         else:
             # Use NoEvictScheduledBlocksManager (GUARANTEED_NO_EVICT or STATIC_BATCH)
-            if req.is_context_init_state or req.is_disagg_generation_init_state:
+            if req.is_context_init_state:
                 enough_blocks = reserved_blocks.enough_available_blocks(req)
                 enough_cross_blocks = True
                 if reserved_cross_blocks is not None:
@@ -1520,42 +1529,351 @@ class SchedulingState:
     ctx_chunk_config: Optional['ContextChunkingConfig']
 
 
+class AttentionDPMixin:
+    """
+    Mixin providing optional attention_dp coordination functionality.
+
+    Attention_dp is enabled if `dist` parameter is provided, disabled otherwise.
+    This makes it composable with any scheduler that extends SimpleUnifiedScheduler.
+
+    When enabled, provides:
+    - Global coordination across TP ranks (GATHER → SIMULATE → COMMIT)
+    - Token-based load balancing via GlobalCoordinator
+    - Dummy request padding for collective operations
+    - Batching filters for synchronized scheduling
+
+    When disabled (dist=None):
+    - Falls back to base scheduler implementation (TP-only)
+    - No performance overhead
+
+    This mixin can be composed with disagg schedulers to provide
+    optional attention_dp support across disaggregated servers.
+    """
+
+    def __init__(self,
+                 *args,
+                 dist=None,
+                 max_num_active_requests: Optional[int] = None,
+                 **kwargs):
+        super().__init__(*args, **kwargs)
+        self.dist = dist
+        self.max_num_active_requests = max_num_active_requests
+        self.enable_global_scheduling = dist is not None and max_num_active_requests is not None
+
+        if self.enable_global_scheduling:
+            self.global_coordinator = GlobalCoordinator(
+                self, dist, max_num_active_requests)
+        else:
+            self.global_coordinator = None
+
+    def _activate_new_requests(
+        self,
+        active_requests: RequestList,
+        waiting_queue: Optional[deque],
+        cp_config: dict,
+        cp_rank: int,
+        cp_size: int,
+        exclude_last_generation_logits: bool,
+    ) -> tuple[RequestList, int]:
+        """Override to use global coordination if attention_dp enabled."""
+        if waiting_queue is None or len(waiting_queue) == 0:
+            return [], len(active_requests)
+
+        if self.enable_global_scheduling:
+            return self._activate_with_global_coordination(
+                active_requests, waiting_queue, cp_config, cp_rank, cp_size,
+                exclude_last_generation_logits)
+        else:
+            return super()._activate_new_requests(
+                active_requests, waiting_queue, cp_config, cp_rank, cp_size,
+                exclude_last_generation_logits)
+
+    def schedule_iteration(
+        self,
+        waiting_queue: Optional[deque],
+        active_requests: RequestList,
+        inflight_req_ids: set[int],
+        drafter=None,
+        max_total_draft_tokens: int = 0,
+        use_spec_decode: bool = False,
+        cp_config: Optional[dict] = None,
+        cp_rank: int = 0,
+        cp_size: int = 1,
+        exclude_last_generation_logits: bool = False,
+        kv_cache_manager=None,
+        resource_manager=None,
+    ) -> UnifiedSchedulerOutput:
+        """Override to add dummy padding step if attention_dp enabled."""
+        if waiting_queue:
+            new_requests, expected_num_active = self._activate_new_requests(
+                active_requests, waiting_queue, cp_config, cp_rank, cp_size,
+                exclude_last_generation_logits)
+            active_requests.extend(new_requests)
+
+            if self.global_coordinator is not None:
+                self.global_coordinator.expected_num_active_requests = expected_num_active
+
+        if self.enable_global_scheduling and kv_cache_manager is not None:
+            self._pad_dummy_requests(
+                active_requests=active_requests,
+                kv_cache_manager=kv_cache_manager,
+                resource_manager=resource_manager,
+                max_total_draft_tokens=max_total_draft_tokens,
+            )
+
+        return super().schedule_iteration(
+            waiting_queue=deque(),
+            active_requests=active_requests,
+            inflight_req_ids=inflight_req_ids,
+            drafter=drafter,
+            max_total_draft_tokens=max_total_draft_tokens,
+            use_spec_decode=use_spec_decode,
+            cp_config=cp_config,
+            cp_rank=cp_rank,
+            cp_size=cp_size,
+            exclude_last_generation_logits=exclude_last_generation_logits,
+            kv_cache_manager=kv_cache_manager,
+            resource_manager=resource_manager,
+        )
+
+    def _activate_with_global_coordination(
+        self,
+        active_requests: RequestList,
+        waiting_queue: deque,
+        cp_config: dict,
+        cp_rank: int,
+        cp_size: int,
+        exclude_last_generation_logits: bool,
+    ) -> tuple[RequestList, int]:
+        """
+        Activate new requests using global coordination (attention_dp).
+
+        This performs the full GATHER → SIMULATE → COMMIT flow to assign
+        new requests to ranks, then extracts assigned requests from waiting_queue.
+
+        Args:
+            active_requests: Currently active requests
+            waiting_queue: Queue of waiting RequestQueueItems
+            cp_config: CP configuration dict
+            cp_rank: Current CP rank
+            cp_size: Total number of CP ranks
+            exclude_last_generation_logits: Whether to exclude last generation logits
+
+        Returns:
+            Tuple of (new_llm_requests, expected_num_active_requests)
+        """
+        # === PHASE 1: GATHER ===
+        # Gather states first to know total active requests across all ranks
+        local_state = self.global_coordinator.build_local_state(active_requests)
+        all_rank_states = self.global_coordinator.gather_all_states(local_state)
+
+        # Calculate total active requests across all ranks
+        total_num_active_requests = sum(state.current_batch_size
+                                        for state in all_rank_states)
+
+        # Calculate how many new candidates we can accept
+        total_capacity = self.dist.tp_size * self.max_num_active_requests
+        num_new_candidates = max(
+            0,
+            min(total_capacity - total_num_active_requests, len(waiting_queue)))
+
+        if num_new_candidates == 0:
+            # No capacity for new requests
+            expected_num_active_requests = max(state.current_batch_size
+                                               for state in all_rank_states)
+            return [], expected_num_active_requests
+
+        # Extract candidate requests
+        candidate_requests = list(
+            itertools.islice(waiting_queue, num_new_candidates))
+
+        # Convert candidate RequestQueueItems to LlmRequests ONCE
+        # These will be used for simulation AND execution (no recreation)
+        candidate_llm_requests = merge_requests(
+            candidate_requests,
+            cp_config=cp_config,
+            cp_rank=cp_rank,
+            cp_size=cp_size,
+            exclude_last_generation_logits=exclude_last_generation_logits)
+
+        # Attach llm_request back to RequestQueueItem for simulation
+        # Note: merge_requests may create child requests, we need to map them back
+        llm_req_map = {}  # request_id -> LlmRequest
+        for llm_req in candidate_llm_requests:
+            llm_req_map[llm_req.request_id] = llm_req
+
+        for req_item in candidate_requests:
+            if req_item.id in llm_req_map:
+                req_item.llm_request = llm_req_map[req_item.id]
+
+        # === PHASE 2: SIMULATE ===
+        assignments = self.global_coordinator.simulate_global_schedule(
+            candidate_requests, all_rank_states)
+
+        # === PHASE 2.5: BATCHING CHECK ===
+        assignments = self.global_coordinator.apply_batching_filter(
+            assignments, candidate_requests)
+
+        # Calculate expected_num_active_requests (max across all ranks after assignment)
+        # This uses data we already have from the allgather, no extra communication needed
+        expected_num_active_requests = max(
+            all_rank_states[rank_id].current_batch_size +
+            len(assignments[rank_id])
+            for rank_id in range(len(all_rank_states)))
+
+        # === PHASE 3: EXTRACT ASSIGNED LLMREQUESTS ===
+        my_assigned_req_ids = set(assignments[self.dist.rank])
+        assigned_llm_requests = []
+
+        # Convert to list to allow safe modification of waiting_queue
+        items_to_process = list(waiting_queue)
+        waiting_queue.clear()
+
+        for req_item in items_to_process:
+            if (hasattr(req_item, 'llm_request') and req_item.llm_request
+                    and req_item.llm_request.request_id in my_assigned_req_ids):
+                # Reuse the LlmRequest we created earlier ✅ (created only once!)
+                assigned_llm_requests.append(req_item.llm_request)
+                # Also add child requests if they exist
+                if req_item.llm_request.child_requests:
+                    assigned_llm_requests.extend(
+                        req_item.llm_request.child_requests)
+            else:
+                # Put back unassigned items
+                waiting_queue.append(req_item)
+
+        return assigned_llm_requests, expected_num_active_requests
+
+    def _pad_dummy_requests(
+        self,
+        active_requests: RequestList,
+        kv_cache_manager,
+        resource_manager,
+        max_total_draft_tokens: int,
+    ) -> None:
+        """
+        Pad active_requests with dummy requests for attention_dp mode.
+
+        This ensures all ranks have the same number of active requests for collective operations.
+        Only pads if this rank has zero non-disagg requests but others have active requests.
+
+        Args:
+            active_requests: List of currently active requests (modified in-place)
+            kv_cache_manager: KV cache manager for creating dummy requests
+            resource_manager: Resource manager for spec decode support
+            max_total_draft_tokens: Maximum draft tokens for dummy requests
+        """
+        if not self.enable_global_scheduling:
+            # Only for attention_dp mode
+            return
+
+        # Get expected number of active requests from global coordinator
+        if not hasattr(self.global_coordinator, 'expected_num_active_requests'):
+            return
+
+        expected_num = self.global_coordinator.expected_num_active_requests
+
+        # Count non-disagg active requests
+        # Disagg requests in certain states don't count toward the active limit
+        num_active = len([
+            req for req in active_requests
+            if not (req.is_disagg_generation_init_state
+                    or req.is_disagg_generation_transmission_in_progress)
+        ])
+
+        # Pad only if this rank has 0 requests but others have requests
+        if expected_num - num_active > 0 and num_active == 0:
+            # Create one dummy generation request
+            dummy_req = kv_cache_manager.add_dummy_requests(
+                request_ids=[0],
+                is_gen=True,
+                prepare_resource=True,
+                max_num_draft_tokens=max_total_draft_tokens,
+            )[0]
+            dummy_req.is_attention_dp_dummy = True
+
+            # Add to spec resource manager if present
+            if resource_manager is not None:
+                spec_resource_mgr = resource_manager.get_resource_manager(
+                    ResourceManagerType.SPEC_RESOURCE_MANAGER)
+                if spec_resource_mgr is not None:
+                    spec_resource_mgr.add_dummy_requests([0])
+
+            active_requests.append(dummy_req)
+
+
 class SimpleUnifiedScheduler(RequestScheduler):
     """
-    Unified scheduler with FUSED single-pass scheduling for both modes.
+    Base unified scheduler with FUSED single-pass scheduling (TP-only).
 
     This scheduler combines capacity (KV cache) and micro-batch (token budget)
     checks into a single efficient loop, eliminating the double work of the
     traditional two-pass approach.
 
-    Supports two operational modes:
+    Operational mode:
+    - TP-only mode: Local scheduling on this rank only
+    - Supports batch waiting optimization
+    - Uses fused single-pass scheduling
 
-    1. TP-only mode (enable_global_scheduling=False):
-       - Local scheduling on this rank only
-       - Supports batch waiting optimization
-       - Uses fused single-pass scheduling
-
-    2. Attention DP mode (enable_global_scheduling=True):
-       - Global coordination across all TP ranks
-       - Reduces tp_allgather calls from 3+ to 1 per scheduling step
-       - Proactive architecture: Sync State → Global Simulation → Commit locally
-       - Token-based load balancing
-       - Uses fused single-pass scheduling with simulation mode
+    For attention_dp support, use AttentionDPScheduler instead.
+    For disaggregated setups, use DisaggGenerationScheduler or DisaggContextScheduler.
 
     Fused Scheduling Architecture:
     - Single loop checks both KV cache AND token budget together
     - Direct resource access (no wrapper schedulers)
-    - Reuses block manager infrastructure (NoEvictScheduledBlocksManager, MaxUtilizationScheduledBlocksManager)
+    - Reuses block manager infrastructure
     - Supports all capacity policies: MAX_UTILIZATION, GUARANTEED_NO_EVICT, STATIC_BATCH, MAX_REQUESTS
     - Supports chunking: EQUAL_PROGRESS and FIRST_COME_FIRST_SERVED
-    - Simulation mode for global coordination (no side effects)
 
     Performance benefits:
     - Faster: Single-pass vs two-pass (30-50% speedup)
     - Simpler: Eliminates PyCapacityScheduler and PyMicroBatchScheduler
     - More correct: No simulation/execution divergence bugs
     - Less memory: No duplicate state tracking
+
+    Internal Dispatch:
+    - Automatically dispatches to AttentionDPScheduler if dist parameter is provided
+    - This allows callers to use SimpleUnifiedScheduler as the entry point
+    - The appropriate implementation is selected based on parameters
     """
+
+    def __new__(cls,
+                *args,
+                dist=None,
+                max_num_active_requests=None,
+                server_role=None,
+                **kwargs):
+        """
+        Factory method that dispatches to the appropriate scheduler implementation.
+
+        Dispatch rules:
+        1. If server_role == ServerRole.CONTEXT → DisaggContextScheduler
+        2. If server_role == ServerRole.GENERATION → DisaggGenerationScheduler
+        3. If dist is not None and max_num_active_requests is not None → AttentionDPScheduler
+        4. Otherwise → SimpleUnifiedScheduler (base)
+
+        This allows callers to use SimpleUnifiedScheduler as the entry point
+        without needing to know about the different implementations.
+        """
+        # If being called on a subclass, use normal instantiation
+        if cls is not SimpleUnifiedScheduler:
+            return super().__new__(cls)
+
+        # Import ServerRole for comparison
+        from tensorrt_llm.llmapi.disagg_utils import ServerRole
+
+        # Dispatch based on server_role (disagg mode takes precedence)
+        if server_role == ServerRole.CONTEXT:
+            return object.__new__(DisaggContextScheduler)
+        elif server_role == ServerRole.GENERATION:
+            return object.__new__(DisaggGenerationScheduler)
+        # Dispatch based on attention_dp
+        elif dist is not None and max_num_active_requests is not None:
+            # Return AttentionDPScheduler instance
+            return object.__new__(AttentionDPScheduler)
+        else:
+            # Return base SimpleUnifiedScheduler instance (TP-only)
+            return super().__new__(cls)
 
     def __init__(
             self,
@@ -1568,19 +1886,19 @@ class SimpleUnifiedScheduler(RequestScheduler):
             cross_kv_cache_manager=None,
             two_step_lookahead: bool = False,
             scheduler_capacity: Optional[int] = None,
-            dist=None,  # Optional: Enable global scheduling for attention_dp
-            max_num_active_requests: Optional[
-                int] = None,  # Required for global coordination
+            dist=None,  # For internal dispatch (ignored in base, used by AttentionDPMixin)
+            max_num_active_requests:
+        Optional[
+            int] = None,  # For internal dispatch (ignored in base, used by AttentionDPMixin)
+            server_role=None,  # For internal dispatch (ignored in base)
     ):
+        # Note: dist and max_num_active_requests are accepted for API compatibility
+        # but ignored in the base class. They are used by AttentionDPMixin when
+        # __new__ returns an AttentionDPScheduler instance.
+
         # Use scheduler_capacity if provided, otherwise fall back to max_batch_size
         # scheduler_capacity may differ from max_batch_size (e.g., adjusted for attention_dp + disagg)
         capacity = scheduler_capacity if scheduler_capacity is not None else max_batch_size
-
-        # Global scheduling support for attention_dp
-        # When enabled, coordinates scheduling across all TP ranks with single allgather
-        self.dist = dist
-        self.max_num_active_requests = max_num_active_requests
-        self.enable_global_scheduling = dist is not None and max_num_active_requests is not None
 
         # Parse chunking config
         py_chunk_config = None
@@ -1598,7 +1916,7 @@ class SimpleUnifiedScheduler(RequestScheduler):
             py_chunk_config = ContextChunkingConfig(policy_enum,
                                                     ctx_chunk_config[1])
 
-        # FUSED PATH: Always use single-pass scheduling for both TP-only and global coordination
+        # FUSED PATH: Single-pass scheduling (TP-only)
         # Store resources directly for single-pass scheduling
         # This eliminates the double work of capacity + micro-batch scheduling
         self.kv_cache_manager = kv_cache_manager
@@ -1629,12 +1947,6 @@ class SimpleUnifiedScheduler(RequestScheduler):
         self.chunking_manager = ChunkingManager(
             py_chunk_config, max_num_tokens) if py_chunk_config else None
 
-        if self.enable_global_scheduling:
-            self.global_coordinator = GlobalCoordinator(
-                self, dist, max_num_active_requests)
-        else:
-            self.global_coordinator = None
-
         # Batch waiting state (for TP-only mode)
         # These track the waiting logic for batch waiting in TP-only mode
         # Will be configured by PyExecutor if needed
@@ -1643,7 +1955,58 @@ class SimpleUnifiedScheduler(RequestScheduler):
         self.enable_batch_waiting = False
         self.batch_wait_iters_count = 0
 
-    def activate_new_requests(
+    def schedule_iteration(
+        self,
+        waiting_queue: Optional[deque],
+        active_requests: RequestList,
+        inflight_req_ids: set[int],
+        # Drafter integration
+        drafter=None,
+        max_total_draft_tokens: int = 0,
+        use_spec_decode: bool = False,
+        # Context parallelism
+        cp_config: Optional[dict] = None,
+        cp_rank: int = 0,
+        cp_size: int = 1,
+        exclude_last_generation_logits: bool = False,
+        # Resource managers (for padding dummy requests)
+        kv_cache_manager=None,
+        resource_manager=None,
+    ) -> UnifiedSchedulerOutput:
+        """
+        Complete end-to-end scheduling for one iteration (TP-only).
+
+        This is the unified entry point that handles:
+        1. Activating new requests from waiting queue
+        2. Drafter integration (speculative decoding)
+        3. Batch scheduling
+        4. Post-processing
+
+        For attention_dp support with dummy padding, use AttentionDPScheduler instead.
+        """
+
+        # Step 1: Activate new requests (local only in base)
+        if waiting_queue:
+            new_requests, _ = self._activate_new_requests(
+                active_requests, waiting_queue, cp_config, cp_rank, cp_size,
+                exclude_last_generation_logits)
+            active_requests.extend(new_requests)
+
+        # Step 2: Integrate drafter (if provided)
+        if drafter is not None:
+            self._integrate_drafter(active_requests, max_total_draft_tokens,
+                                    use_spec_decode)
+
+        # Step 3: Schedule batch
+        output = self.schedule_request(active_requests, inflight_req_ids)
+
+        # Step 4: Post-process drafter
+        if drafter is not None and not use_spec_decode:
+            self._postprocess_drafter(output)
+
+        return output
+
+    def _activate_new_requests(
         self,
         active_requests: RequestList,
         waiting_queue: Optional[deque],
@@ -1653,10 +2016,7 @@ class SimpleUnifiedScheduler(RequestScheduler):
         exclude_last_generation_logits: bool,
     ) -> tuple[RequestList, int]:
         """
-        Activate new requests from waiting queue.
-
-        For attention_dp mode, uses global coordination to assign requests across ranks.
-        For regular TP mode, activates requests locally based on available capacity.
+        Activate new requests from waiting queue (TP-only mode).
 
         Args:
             active_requests: Currently active requests
@@ -1668,23 +2028,14 @@ class SimpleUnifiedScheduler(RequestScheduler):
 
         Returns:
             Tuple of (new_llm_requests, expected_num_active_requests)
-            - new_llm_requests: List of newly activated LlmRequests
-            - expected_num_active_requests: Maximum number of active requests across all ranks
         """
-        # Check if we have any waiting requests
         if waiting_queue is None or len(waiting_queue) == 0:
             return [], len(active_requests)
 
-        if self.enable_global_scheduling:
-            # Attention DP mode: Use global coordination to assign requests
-            return self._activate_with_global_coordination(
-                active_requests, waiting_queue, cp_config, cp_rank, cp_size,
-                exclude_last_generation_logits)
-        else:
-            # TP-only mode: Activate requests locally
-            return self._activate_local(active_requests, waiting_queue,
-                                        cp_config, cp_rank, cp_size,
-                                        exclude_last_generation_logits)
+        # TP-only mode: Activate requests locally
+        return self._activate_local(active_requests, waiting_queue, cp_config,
+                                    cp_rank, cp_size,
+                                    exclude_last_generation_logits)
 
     def _schedule_generation_only_during_waiting(
         self,
@@ -1747,10 +2098,15 @@ class SimpleUnifiedScheduler(RequestScheduler):
             return None  # Exit to normal path
 
         # Return with empty context requests (still waiting)
+        # DESIGN NOTE: Context requests in active_requests are intentionally NOT
+        # scheduled and NOT added to paused_requests. They remain in active_requests
+        # and will be scheduled in a future iteration when batch waiting stops.
+        # This deferred scheduling is the core of batch waiting optimization:
+        # we delay expensive context processing to accumulate more generation requests.
         return UnifiedSchedulerOutput(
-            context_requests=[],
+            context_requests=[],  # Intentionally empty (deferred, not paused)
             generation_requests=result.generation_requests,
-            paused_requests=result.paused_requests,
+            paused_requests=result.paused_requests,  # Only paused generation
             fitting_disagg_gen_init_requests=result.
             fitting_disagg_gen_init_requests,
             num_fitting_requests=result.num_fitting_requests,
@@ -1832,8 +2188,8 @@ class SimpleUnifiedScheduler(RequestScheduler):
         This method handles capacity scheduling (KV cache allocation) and
         micro-batch scheduling (token budget + chunking).
 
-        For TP-only mode (enable_global_scheduling=False), also applies batch waiting logic.
-        For attention_dp mode (enable_global_scheduling=True), batching is done during activation.
+        For TP-only mode, applies batch waiting logic if enabled.
+        For attention_dp support, use AttentionDPScheduler which handles batching during activation.
 
         Args:
             active_requests: Currently active requests
@@ -1842,11 +2198,10 @@ class SimpleUnifiedScheduler(RequestScheduler):
         Returns:
             UnifiedSchedulerOutput with scheduled requests
         """
-        # FUSED PATH: Always use single-pass scheduling
-        # Proactive optimization for TP-only mode:
+        # FUSED PATH: Single-pass scheduling (TP-only)
+        # Proactive optimization:
         # If we're already in waiting mode, skip context scheduling to save computation
-        if (not self.enable_global_scheduling and self.enable_batch_waiting
-                and self.batch_wait_iters_count > 0):
+        if (self.enable_batch_waiting and self.batch_wait_iters_count > 0):
             # Try generation-only scheduling (optimization path)
             result = self._schedule_generation_only_during_waiting(
                 active_requests, inflight_request_ids)
@@ -1859,13 +2214,69 @@ class SimpleUnifiedScheduler(RequestScheduler):
         result = self._fused_schedule_request(active_requests,
                                               inflight_request_ids)
 
-        # Apply batch waiting for TP-only mode
-        # For attention_dp, batching is done during activation via _apply_batching_filter()
-        if not self.enable_global_scheduling:
-            result.context_requests = self._apply_batch_waiting(
-                result.context_requests, result.generation_requests)
+        # Apply batch waiting (TP-only)
+        result.context_requests = self._apply_batch_waiting(
+            result.context_requests, result.generation_requests)
 
         return result
+
+    # ========== Helper methods for schedule_iteration ==========
+
+    def _integrate_drafter(
+        self,
+        active_requests: RequestList,
+        max_total_draft_tokens: int,
+        use_spec_decode: bool,
+    ) -> None:
+        """
+        Integrate drafter (speculative decoding) with active requests.
+
+        Sets up draft tokens for generation requests based on whether
+        speculation is enabled.
+
+        Args:
+            active_requests: List of currently active requests (modified in-place)
+            max_total_draft_tokens: Maximum draft tokens for this iteration
+            use_spec_decode: Whether speculation is enabled
+        """
+        try:
+            for req in active_requests:
+                # Only process generation requests
+                if req.state not in (LlmRequestState.GENERATION_IN_PROGRESS,
+                                     LlmRequestState.DISAGG_GENERATION_INIT):
+                    continue
+
+                # Save previous draft tokens
+                req.py_last_draft_tokens = req.py_draft_tokens
+
+                # Set up draft tokens based on spec decode state
+                if (max_total_draft_tokens > 0 and use_spec_decode
+                        and not req.py_disable_speculative_decoding):
+                    req.py_draft_tokens = [0] * max_total_draft_tokens
+                    req.py_draft_pages_allocated = max_total_draft_tokens
+                else:
+                    req.py_draft_tokens = []
+                    req.py_draft_pages_allocated = 0
+
+        except Exception as e:
+            logger.error(f"Error in _integrate_drafter: {e}")
+            raise
+
+    def _postprocess_drafter(self,
+                             scheduled_output: UnifiedSchedulerOutput) -> None:
+        """
+        Post-process scheduled batch for drafter.
+
+        If spec decode is disabled, mark all scheduled requests accordingly.
+
+        Args:
+            scheduled_output: Scheduled output to post-process (modified in-place)
+        """
+        # Mark all requests as having spec decode disabled
+        all_requests = (scheduled_output.context_requests +
+                        scheduled_output.generation_requests)
+        for request in all_requests:
+            request.py_disable_speculative_decoding = True
 
     # ========== Helper methods for _fused_schedule_request ==========
 
@@ -2037,9 +2448,7 @@ class SimpleUnifiedScheduler(RequestScheduler):
         req_state_value = req.state_value
         if not (req_state_value >= self._no_schedule_until_state_value
                 and req_state_value < self._no_schedule_after_state_value):
-            # For disagg gen init, allow exception
-            if not req.is_disagg_generation_init_state:
-                return False
+            return False
 
         # Skip in-progress generation (already handled for GUARANTEED_NO_EVICT)
         if reserved_blocks is not None and req.is_generation_in_progress_state:
@@ -2062,8 +2471,8 @@ class SimpleUnifiedScheduler(RequestScheduler):
             return False
 
         # Check request count limit
-        if len(state.context_requests) + len(state.generation_requests) + len(
-                state.fitting_disagg_gen_init) >= self.max_num_requests:
+        if len(state.context_requests) + len(
+                state.generation_requests) >= self.max_num_requests:
             return False
 
         return True
@@ -2121,7 +2530,7 @@ class SimpleUnifiedScheduler(RequestScheduler):
 
         # Return results
         num_fitting = len(state.context_requests) + len(
-            state.generation_requests) + len(state.fitting_disagg_gen_init)
+            state.generation_requests)
         return UnifiedSchedulerOutput(
             context_requests=state.context_requests,
             generation_requests=state.generation_requests,
@@ -2130,6 +2539,75 @@ class SimpleUnifiedScheduler(RequestScheduler):
             num_fitting_requests=num_fitting,
             updated_active_requests=None,
         )
+
+    def _check_peft_capacity(self, req, state) -> bool:
+        """
+        Check if request can fit in PEFT cache and update state if it can.
+
+        Args:
+            req: Request to check
+            state: Current scheduling state
+
+        Returns:
+            True if can fit (or no PEFT), False if insufficient PEFT capacity
+        """
+        if not state.has_peft:
+            return True  # No PEFT, always fits
+
+        lora_task_id, is_new_task, needed_peft_pages = self.peft_helper.get_task_info(
+            req, state.uniq_task_ids)
+
+        if needed_peft_pages > state.available_peft_pages:
+            return False  # Insufficient PEFT capacity
+
+        # Sufficient capacity - update state
+        if is_new_task:
+            state.available_peft_pages -= needed_peft_pages
+            state.uniq_task_ids.add(lora_task_id)
+
+        return True
+
+    def _should_skip_for_block_reuse(self, req, state) -> bool:
+        """
+        Check if request should be skipped for block reuse optimization.
+
+        Can be overridden by subclasses to add additional skip conditions.
+
+        Args:
+            req: Request to check
+            state: Current scheduling state
+
+        Returns:
+            True if request should be skipped, False otherwise
+        """
+        return (state.skipping_is_relevant
+                and self.capacity_checker.beneficial_to_skip(
+                    req, state.newly_contributed_context_blocks,
+                    state.newly_contributed_cross_context_blocks))
+
+    def _try_handle_special_request(self, req, state, scheduled_blocks_manager,
+                                    reserved_blocks, reserved_cross_blocks,
+                                    simulation_mode) -> tuple[bool, bool]:
+        """
+        Hook for subclasses to handle special request types.
+
+        Base implementation does nothing (no special requests).
+        Subclasses can override to add custom request handling (e.g., disagg_generation_init).
+
+        Args:
+            req: Request to potentially handle
+            state: Current scheduling state
+            scheduled_blocks_manager: Block manager for scheduling
+            reserved_blocks: Reserved blocks (for GUARANTEED_NO_EVICT)
+            reserved_cross_blocks: Reserved cross attention blocks
+            simulation_mode: Whether in simulation mode
+
+        Returns:
+            Tuple of (handled, should_break):
+            - handled: True if request was handled by this method, False otherwise
+            - should_break: True if scheduling loop should break, False if should continue
+        """
+        return False, False  # Base implementation: no special requests
 
     def _fused_schedule_request(
         self,
@@ -2152,6 +2630,11 @@ class SimpleUnifiedScheduler(RequestScheduler):
 
         Returns:
             UnifiedSchedulerOutput with scheduled requests
+
+        Note:
+            Subclasses can customize behavior by overriding hook methods:
+            - _should_skip_for_block_reuse(): Customize skip optimization logic
+            - _try_handle_special_request(): Add handling for custom request types
         """
         # Initialize block managers
         scheduled_blocks_manager, reserved_blocks, reserved_cross_blocks = \
@@ -2182,12 +2665,18 @@ class SimpleUnifiedScheduler(RequestScheduler):
                 state.paused_requests.append(req)
                 break
 
+            # Try special request handling first (hook for subclasses)
+            handled, should_break = self._try_handle_special_request(
+                req, state, scheduled_blocks_manager, reserved_blocks,
+                reserved_cross_blocks, simulation_mode)
+            if handled:
+                if should_break:
+                    break
+                else:
+                    continue
+
             # Block reuse skip optimization
-            if (state.skipping_is_relevant
-                    and not req.is_disagg_generation_init_state
-                    and self.capacity_checker.beneficial_to_skip(
-                        req, state.newly_contributed_context_blocks,
-                        state.newly_contributed_cross_context_blocks)):
+            if self._should_skip_for_block_reuse(req, state):
                 continue
 
             # --- A. Encoder Request Handling ---
@@ -2211,6 +2700,11 @@ class SimpleUnifiedScheduler(RequestScheduler):
                 if not can_fit_kv:
                     state.paused_requests.append(req)
                     break
+
+                # Check PEFT capacity
+                if not self._check_peft_capacity(req, state):
+                    state.paused_requests.append(req)
+                    continue  # Continue to next request (not break)
 
                 # Fits! Schedule it
                 state.context_requests.append(req)
@@ -2241,6 +2735,11 @@ class SimpleUnifiedScheduler(RequestScheduler):
                         state.paused_requests.append(req)
                         break
 
+                    # Check PEFT capacity
+                    if not self._check_peft_capacity(req, state):
+                        state.paused_requests.append(req)
+                        continue  # Continue to next request (not break)
+
                     # Fits! Schedule it
                     state.context_requests.append(req)
                     state.batch_num_tokens += req_num_tokens
@@ -2254,6 +2753,11 @@ class SimpleUnifiedScheduler(RequestScheduler):
                     if not can_fit_kv:
                         state.paused_requests.append(req)
                         break
+
+                    # Check PEFT capacity
+                    if not self._check_peft_capacity(req, state):
+                        state.paused_requests.append(req)
+                        continue  # Continue to next request (not break)
 
                     # Add to chunking queue
                     req.context_chunk_size = req.context_remaining_length
@@ -2273,30 +2777,6 @@ class SimpleUnifiedScheduler(RequestScheduler):
                     state.scheduled_req_size += 1
 
             # --- C. Generation Request Handling ---
-            elif req.is_disagg_generation_init_state:
-                # Disagg gen init - special handling
-                # Check KV cache capacity
-                can_fit_kv = self.capacity_checker.check_kv_capacity(
-                    req, scheduled_blocks_manager, reserved_blocks,
-                    reserved_cross_blocks, simulation_mode)
-                if not can_fit_kv:
-                    state.paused_requests.append(req)
-                    break
-
-                # Check PEFT capacity
-                if state.has_peft:
-                    lora_task_id, is_new_task, needed_peft_pages = self.peft_helper.get_task_info(
-                        req, state.uniq_task_ids)
-                    if needed_peft_pages > state.available_peft_pages:
-                        state.paused_requests.append(req)
-                        continue
-                    if is_new_task:
-                        state.available_peft_pages -= needed_peft_pages
-                        state.uniq_task_ids.add(lora_task_id)
-
-                # Fits! Add to disagg gen init list
-                state.fitting_disagg_gen_init.append(req)
-
             else:
                 # Regular generation request
                 req_num_tokens = self._estimate_tokens_needed(req)
@@ -2309,6 +2789,11 @@ class SimpleUnifiedScheduler(RequestScheduler):
                         > state.max_num_tokens):
                     state.paused_requests.append(req)
                     break
+
+                # Check PEFT capacity
+                if not self._check_peft_capacity(req, state):
+                    state.paused_requests.append(req)
+                    continue  # Continue to next request (not break)
 
                 # Beam width consistency check
                 if state.scheduled_beam_width == 0:
@@ -2453,8 +2938,8 @@ class SimpleUnifiedScheduler(RequestScheduler):
         """
         Activate new requests locally (TP-only mode, no global coordination).
 
-        This method handles request activation when enable_global_scheduling=False,
-        which means we're in TP-only mode without attention_dp.
+        This method handles request activation for the base SimpleUnifiedScheduler
+        which operates in TP-only mode without attention_dp.
 
         Args:
             active_requests: Currently active requests on this rank
@@ -2499,110 +2984,273 @@ class SimpleUnifiedScheduler(RequestScheduler):
 
         return new_llm_requests, expected_num_active_requests
 
-    def _activate_with_global_coordination(
-        self,
-        active_requests: RequestList,
-        waiting_queue: deque,
-        cp_config: dict,
-        cp_rank: int,
-        cp_size: int,
-        exclude_last_generation_logits: bool,
-    ) -> tuple[RequestList, int]:
-        """
-        Activate new requests using global coordination (attention_dp).
 
-        This performs the full GATHER → SIMULATE → COMMIT flow to assign
-        new requests to ranks, then extracts assigned requests from waiting_queue.
+class AttentionDPScheduler(AttentionDPMixin, SimpleUnifiedScheduler):
+    """
+    Unified scheduler with attention_dp support.
+
+    Use this for:
+    - Single server with attention_dp across TP ranks
+    - No disaggregation
+
+    Parameters:
+    - dist: Required - DistributionManager for attention_dp
+    - max_num_active_requests: Required - Maximum active requests across all ranks
+    - ... (other SimpleUnifiedScheduler parameters)
+
+    Example:
+        scheduler = AttentionDPScheduler(
+            max_batch_size=64,
+            max_num_tokens=2048,
+            kv_cache_manager=kv_cache_mgr,
+            peft_cache_manager=None,
+            scheduler_policy=CapacitySchedulerPolicy.MAX_UTILIZATION,
+            dist=dist,  # Required
+            max_num_active_requests=128,  # Required
+        )
+    """
+
+    def __init__(self, *args, dist, max_num_active_requests, **kwargs):
+        if dist is None:
+            raise ValueError("AttentionDPScheduler requires dist parameter")
+        if max_num_active_requests is None:
+            raise ValueError(
+                "AttentionDPScheduler requires max_num_active_requests parameter"
+            )
+        super().__init__(*args,
+                         dist=dist,
+                         max_num_active_requests=max_num_active_requests,
+                         **kwargs)
+
+
+class DisaggGenerationScheduler(AttentionDPMixin, SimpleUnifiedScheduler):
+    """
+    Unified scheduler for disaggregated generation server.
+
+    Use this for:
+    - Generation/decoding server in disaggregated serving
+    - Handles generation requests and disagg_generation_init requests only
+    - Optional attention_dp (controlled by `dist` parameter)
+
+    Examples:
+        # With attention_dp
+        scheduler = DisaggGenerationScheduler(
+            ...,
+            dist=dist,
+            max_num_active_requests=128,
+            kv_cache_transceiver=transceiver,
+        )
+
+        # Without attention_dp (TP-only)
+        scheduler = DisaggGenerationScheduler(
+            ...,
+            dist=None,
+            kv_cache_transceiver=transceiver,
+        )
+    """
+
+    def _should_schedule_request(self, req, inflight_request_ids: set[int],
+                                 reserved_blocks) -> bool:
+        """
+        Filter requests for generation server.
+
+        Generation server only handles:
+        - Generation requests (in-progress decoding)
+        - Disagg generation init requests (receiving KV from context server)
+
+        Skips:
+        - Encoder requests
+        - Context requests
+        """
+        # Skip inflight requests
+        if req.request_id in inflight_request_ids:
+            return False
+
+        # Skip in-progress generation (already handled for GUARANTEED_NO_EVICT)
+        if reserved_blocks is not None and req.is_generation_in_progress_state:
+            return False
+
+        # Generation server specific filtering
+        req_state_value = req.state_value
+
+        # Allow disagg generation init (bypass normal state range check)
+        if req.is_disagg_generation_init_state:
+            return True
+
+        # Allow generation requests (within normal state range)
+        if req_state_value == self._generation_in_progress_state_value:
+            # Check normal state range
+            if (req_state_value >= self._no_schedule_until_state_value
+                    and req_state_value < self._no_schedule_after_state_value):
+                return True
+
+        # Skip encoder and context requests (handled by context server)
+        return False
+
+    def _finalize_chunking(self, state) -> None:
+        """
+        No-op for generation server - chunking only happens on context server.
+        """
+
+    def _should_skip_for_block_reuse(self, req, state) -> bool:
+        """
+        Override to exclude disagg_generation_init from skip optimization.
+
+        Disagg gen init requests should always be considered for scheduling.
+        """
+        if req.is_disagg_generation_init_state:
+            return False
+        return super()._should_skip_for_block_reuse(req, state)
+
+    def _try_handle_special_request(self, req, state, scheduled_blocks_manager,
+                                    reserved_blocks, reserved_cross_blocks,
+                                    simulation_mode) -> tuple[bool, bool]:
+        """
+        Handle disagg_generation_init requests.
 
         Args:
-            active_requests: Currently active requests
-            waiting_queue: Queue of waiting RequestQueueItems
-            cp_config: CP configuration dict
-            cp_rank: Current CP rank
-            cp_size: Total number of CP ranks
-            exclude_last_generation_logits: Whether to exclude last generation logits
+            req: Request to potentially handle
+            state: Current scheduling state
+            scheduled_blocks_manager: Block manager for scheduling
+            reserved_blocks: Reserved blocks (for GUARANTEED_NO_EVICT)
+            reserved_cross_blocks: Reserved cross attention blocks
+            simulation_mode: Whether in simulation mode
 
         Returns:
-            Tuple of (new_llm_requests, expected_num_active_requests)
+            Tuple of (handled, should_break):
+            - handled: True if disagg_gen_init request was processed
+            - should_break: True if scheduling should stop (capacity issue)
         """
-        # === PHASE 1: GATHER ===
-        # Gather states first to know total active requests across all ranks
-        local_state = self.global_coordinator.build_local_state(active_requests)
-        all_rank_states = self.global_coordinator.gather_all_states(local_state)
+        # Handle disagg_generation_init requests
+        if req.is_disagg_generation_init_state:
+            # Check KV cache capacity
+            can_fit_kv = self.capacity_checker.check_kv_capacity(
+                req, scheduled_blocks_manager, reserved_blocks,
+                reserved_cross_blocks, simulation_mode)
+            if not can_fit_kv:
+                state.paused_requests.append(req)
+                return True, True  # Handled, should break
 
-        # Calculate total active requests across all ranks
-        total_num_active_requests = sum(state.current_batch_size
-                                        for state in all_rank_states)
+            # Check PEFT capacity (using shared helper)
+            if not self._check_peft_capacity(req, state):
+                state.paused_requests.append(req)
+                return True, False  # Handled, continue to next request
 
-        # Calculate how many new candidates we can accept
-        total_capacity = self.dist.tp_size * self.max_num_active_requests
-        num_new_candidates = max(
-            0,
-            min(total_capacity - total_num_active_requests, len(waiting_queue)))
+            # Fits! Add to disagg gen init list
+            state.fitting_disagg_gen_init.append(req)
+            return True, False  # Handled, continue to next request
 
-        if num_new_candidates == 0:
-            # No capacity for new requests
-            expected_num_active_requests = max(state.current_batch_size
-                                               for state in all_rank_states)
-            return [], expected_num_active_requests
+        return False, False  # Not a special request, use normal handling
 
-        # Extract candidate requests
-        candidate_requests = list(
-            itertools.islice(waiting_queue, num_new_candidates))
+    def _check_batch_limits(self, state: 'SchedulingState') -> bool:
+        """
+        Check if batch limits are reached (with disagg_gen_init included).
 
-        # Convert candidate RequestQueueItems to LlmRequests ONCE
-        # These will be used for simulation AND execution (no recreation)
-        candidate_llm_requests = merge_requests(
-            candidate_requests,
-            cp_config=cp_config,
-            cp_rank=cp_rank,
-            cp_size=cp_size,
-            exclude_last_generation_logits=exclude_last_generation_logits)
+        Args:
+            state: Current scheduling state
 
-        # Attach llm_request back to RequestQueueItem for simulation
-        # Note: merge_requests may create child requests, we need to map them back
-        llm_req_map = {}  # request_id -> LlmRequest
-        for llm_req in candidate_llm_requests:
-            llm_req_map[llm_req.request_id] = llm_req
+        Returns:
+            True if can continue scheduling, False if limits reached
+        """
+        # Check batch size limit
+        if state.scheduled_req_size >= state.max_batch_size:
+            return False
 
-        for req_item in candidate_requests:
-            if req_item.id in llm_req_map:
-                req_item.llm_request = llm_req_map[req_item.id]
+        # Check request count limit (include disagg_gen_init for generation server)
+        if len(state.context_requests) + len(state.generation_requests) + len(
+                state.fitting_disagg_gen_init) >= self.max_num_requests:
+            return False
 
-        # === PHASE 2: SIMULATE ===
-        assignments = self.global_coordinator.simulate_global_schedule(
-            candidate_requests, all_rank_states)
+        return True
 
-        # === PHASE 2.5: BATCHING CHECK ===
-        assignments = self.global_coordinator.apply_batching_filter(
-            assignments, candidate_requests)
+    def _build_scheduler_output(
+            self, state: 'SchedulingState') -> 'UnifiedSchedulerOutput':
+        """
+        Build final scheduler output with disagg_generation_init requests included.
 
-        # Calculate expected_num_active_requests (max across all ranks after assignment)
-        # This uses data we already have from the allgather, no extra communication needed
-        expected_num_active_requests = max(
-            all_rank_states[rank_id].current_batch_size +
-            len(assignments[rank_id])
-            for rank_id in range(len(all_rank_states)))
+        Overrides base method to correctly count disagg_gen_init requests in num_fitting.
 
-        # === PHASE 3: EXTRACT ASSIGNED LLMREQUESTS ===
-        my_assigned_req_ids = set(assignments[self.dist.rank])
-        assigned_llm_requests = []
+        Args:
+            state: Final scheduling state
 
-        # Convert to list to allow safe modification of waiting_queue
-        items_to_process = list(waiting_queue)
-        waiting_queue.clear()
+        Returns:
+            UnifiedSchedulerOutput with scheduled requests including disagg
+        """
+        # Sort requests for consistency
+        chunks_present = state.ctx_chunk_config is not None
+        if self.chunking_manager and chunks_present:
+            self.chunking_manager.sort_requests(state.context_requests,
+                                                state.generation_requests,
+                                                chunks_present)
 
-        for req_item in items_to_process:
-            if (hasattr(req_item, 'llm_request') and req_item.llm_request
-                    and req_item.llm_request.request_id in my_assigned_req_ids):
-                # Reuse the LlmRequest we created earlier ✅ (created only once!)
-                assigned_llm_requests.append(req_item.llm_request)
-                # Also add child requests if they exist
-                if req_item.llm_request.child_requests:
-                    assigned_llm_requests.extend(
-                        req_item.llm_request.child_requests)
-            else:
-                # Put back unassigned items
-                waiting_queue.append(req_item)
+        # Return results (include disagg_gen_init in num_fitting count)
+        num_fitting = len(state.context_requests) + len(
+            state.generation_requests) + len(state.fitting_disagg_gen_init)
+        return UnifiedSchedulerOutput(
+            context_requests=state.context_requests,
+            generation_requests=state.generation_requests,
+            paused_requests=state.paused_requests,
+            fitting_disagg_gen_init_requests=state.fitting_disagg_gen_init,
+            num_fitting_requests=num_fitting,
+            updated_active_requests=None,
+        )
 
-        return assigned_llm_requests, expected_num_active_requests
+
+class DisaggContextScheduler(AttentionDPMixin, SimpleUnifiedScheduler):
+    """
+    Unified scheduler for disaggregated context server.
+
+    Use this for:
+    - Context/prefill server in disaggregated serving
+    - Handles encoder and context requests only
+    - Supports chunking
+    - Optional attention_dp (controlled by `dist` parameter)
+
+    Examples:
+        # With attention_dp
+        scheduler = DisaggContextScheduler(
+            ...,
+            dist=dist,
+            max_num_active_requests=128,
+            kv_cache_transceiver=transceiver,
+        )
+
+        # Without attention_dp (TP-only)
+        scheduler = DisaggContextScheduler(
+            ...,
+            dist=None,
+            kv_cache_transceiver=transceiver,
+        )
+    """
+
+    def _should_schedule_request(self, req, inflight_request_ids: set[int],
+                                 reserved_blocks) -> bool:
+        """
+        Filter requests for context server.
+
+        Context server only handles:
+        - Encoder requests (e.g., vision encoder)
+        - Context requests (prefill/prompt processing)
+
+        Skips:
+        - Generation requests
+        - Disagg generation init requests (handled by generation server)
+        """
+        # First, apply base filtering
+        if not super()._should_schedule_request(req, inflight_request_ids,
+                                                reserved_blocks):
+            return False
+
+        # Context server specific filtering
+        req_state_value = req.state_value
+
+        # Allow encoder requests
+        if req_state_value == self._encoder_init_state_value:
+            return True
+
+        # Allow context requests
+        if req_state_value == self._context_init_state_value:
+            return True
+
+        # Skip generation and disagg_generation_init requests (handled by generation server)
+        return False

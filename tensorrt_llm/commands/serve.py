@@ -684,6 +684,9 @@ def serve(
             raise ValueError(f"Invalid server role: {server_role}. " \
                              f"Must be one of: {', '.join([role.name for role in ServerRole])}")
 
+        # Pass server_role to LLM args for scheduler selection
+        llm_args['server_role'] = server_role
+
     # Parse media_io_kwargs from JSON string to dict if provided
     parsed_media_io_kwargs = None
     if media_io_kwargs is not None:
