@@ -381,7 +381,7 @@ Measured with the host profiler.
 | `scheduler/scheduler.py` | Removed old Python scheduling classes (moved to unified_scheduler.py) |
 | `pyexecutor/py_executor.py` | Added `_prepare_and_schedule_batch_unified()` path |
 | `pyexecutor/request_utils.py` | Extracted validation, ADP routing, drafter utilities |
-| `pyexecutor/_util.py` | Instantiation gate: enabled when `TLLM_USE_PYTHON_SCHEDULER` is set to `1` |
+| `pyexecutor/_util.py` | Instantiation gate: enabled when `SchedulerConfig(use_python_scheduler=True)` |
 | `scheduler/setup_mypyc.py` | mypyc build script for compiling `unified_scheduler.py` to native C extension |
 | `scheduler/mypy_mypyc.ini` | mypy configuration for mypyc compilation (error suppressions for external types) |
 | `scripts/build_wheel.py` | Added `build_pyexecutor_scheduler()` for mypyc integration via `--mypyc` flag |
@@ -431,13 +431,14 @@ Compare scheduling outputs between `SimpleScheduler` (default) and
   requests that exceed the cumulative PEFT page budget
 
 ### Enable the refactored scheduler
-```bash
-export TLLM_USE_PYTHON_SCHEDULER=1
+```python
+from tensorrt_llm.llmapi import LLM, SchedulerConfig
+
+llm = LLM(model, scheduler_config=SchedulerConfig(use_python_scheduler=True))
 ```
 
 ### Profile with scheduler preset
 ```bash
-TLLM_USE_PYTHON_SCHEDULER=1 \
 TLLM_LINE_PROFILER_PATH=./profile.txt \
 TLLM_LINE_PROFILER_PRESET=scheduler_hotpath \
 trtllm-bench --model <model> throughput --dataset <dataset>

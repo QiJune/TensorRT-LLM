@@ -1306,7 +1306,7 @@ class UnifiedScheduler(RequestScheduler):
 
     Replaces the two-pass pipeline in SimpleScheduler (C++ bindings:
     BindCapacityScheduler → BindMicroBatchScheduler) with a single-pass
-    fused approach. Gated by TLLM_USE_PYTHON_SCHEDULER=1.
+    fused approach. Gated by SchedulerConfig(use_python_scheduler=True).
 
     The scheduled result is largely equivalent to SimpleScheduler, but the
     fused single-pass approach has intentional behavioral differences that

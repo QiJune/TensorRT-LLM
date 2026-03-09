@@ -1685,7 +1685,7 @@ class PyExecutor:
         return can_queue, can_queue_this_rank
 
     def _prepare_and_schedule_batch_unified(self):
-        """Scheduling path for UnifiedScheduler (TLLM_USE_PYTHON_SCHEDULER=1)."""
+        """Scheduling path for UnifiedScheduler (use_python_scheduler=True)."""
         # 1. Fill waiting queue from external request queue
         # In ADP mode, use global active-request count so the idle
         # check inside _fetch_and_enqueue_requests sees cluster-wide
