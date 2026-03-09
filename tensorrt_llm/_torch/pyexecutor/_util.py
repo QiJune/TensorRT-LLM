@@ -44,8 +44,7 @@ from .sampler import (EarlyStopSampler, EarlyStopWithMMResult, TorchSampler,
                       TRTLLMSampler)
 from .scheduler import (BindCapacityScheduler, BindMicroBatchScheduler,
                         KVCacheV2DummyScheduler, SimpleScheduler)
-from .scheduler.unified_scheduler import (ScheduleStepConfig,
-                                          SimpleUnifiedScheduler)
+from .scheduler.unified_scheduler import ScheduleStepConfig, UnifiedScheduler
 from .seq_slot_manager import SeqSlotManager
 
 GB = 1 << 30
@@ -1303,7 +1302,7 @@ def create_py_executor_instance(
         adp_router = DefaultADPRouter(
             dist=dist) if mapping.enable_attention_dp else None
 
-        scheduler = SimpleUnifiedScheduler(
+        scheduler = UnifiedScheduler(
             max_batch_size=max_batch_size,
             max_num_tokens=max_num_tokens,
             kv_cache_manager=kv_cache_manager.impl

@@ -1,4 +1,4 @@
-# SimpleUnifiedScheduler Refactor: Design Document
+# UnifiedScheduler Refactor: Design Document
 
 ## 1. Background
 
@@ -6,13 +6,13 @@ TensorRT-LLM has two scheduler implementations:
 
 - **SimpleScheduler** (C++ bindings): The default scheduler. Uses C++ `BindCapacityScheduler`
   + `BindMicroBatchScheduler` via nanobind.
-- **SimpleUnifiedScheduler** (pure Python): A Python mirror of SimpleScheduler, introduced
+- **UnifiedScheduler** (pure Python): A Python mirror of SimpleScheduler, introduced
   for extensibility and experimentation. On main branch it follows the same two-pass
   structure as SimpleScheduler but implemented in Python.
 
 The original two-pass Python implementation was slower due to Python interpreter overhead
 and excessive Python→C++ boundary crossings. This refactor optimizes
-`SimpleUnifiedScheduler` with a fused single-pass design, keeping scheduling intent and
+`UnifiedScheduler` with a fused single-pass design, keeping scheduling intent and
 major outputs aligned, with explicit intentional semantic differences documented in
 Section 4.
 
@@ -94,7 +94,7 @@ Only `unified_scheduler.py` is compiled — it contains all hot-path classes:
 - `GuaranteedNoEvictPolicy`, `MaxUtilizationPolicy`
 - `NoEvictScheduledBlocksManager`, `MaxUtilizationScheduledBlocksManager`
 - `PyCapacityScheduler`
-- `SimpleUnifiedScheduler`
+- `UnifiedScheduler`
 
 Other scheduler files (`scheduler.py`, `adp_router.py`, `waiting_queue.py`) are thin
 wrappers or C++ bindings that don't benefit from compilation.
@@ -377,7 +377,7 @@ Measured with the host profiler.
 
 | File | Change |
 |------|--------|
-| `scheduler/unified_scheduler.py` | Refactored TokenBudgetTracker, capacity policies, NoEvictScheduledBlocksManager, SimpleUnifiedScheduler |
+| `scheduler/unified_scheduler.py` | Refactored TokenBudgetTracker, capacity policies, NoEvictScheduledBlocksManager, UnifiedScheduler |
 | `scheduler/scheduler.py` | Removed old Python scheduling classes (moved to unified_scheduler.py) |
 | `pyexecutor/py_executor.py` | Added `_prepare_and_schedule_batch_unified()` path |
 | `pyexecutor/request_utils.py` | Extracted validation, ADP routing, drafter utilities |
@@ -392,7 +392,7 @@ Measured with the host profiler.
 ### Recommended correctness checks
 
 Compare scheduling outputs between `SimpleScheduler` (default) and
-`SimpleUnifiedScheduler` on the same workload.
+`UnifiedScheduler` on the same workload.
 
 **All policies — must match:**
 - Request ordering (verify LoRA sort and chunk partitioning match)

@@ -19,7 +19,7 @@ scheduler implementations. No concrete scheduling logic lives here.
 
 Implementations:
     simple_scheduler.py     — SimpleScheduler (C++ binding wrappers)
-    unified_scheduler.py    — SimpleUnifiedScheduler (pure-Python)
+    unified_scheduler.py    — UnifiedScheduler (pure-Python)
 """
 
 from abc import ABC, abstractmethod

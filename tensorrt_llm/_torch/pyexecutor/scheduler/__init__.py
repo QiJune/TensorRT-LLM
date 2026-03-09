@@ -18,7 +18,7 @@ Scheduler module for TensorRT-LLM PyExecutor.
 File layout:
     scheduler.py         — Interfaces (ABC) and shared data structures
     simple_scheduler.py  — SimpleScheduler (C++ binding wrappers)
-    unified_scheduler.py — SimpleUnifiedScheduler (pure-Python)
+    unified_scheduler.py — UnifiedScheduler (pure-Python)
     adp_router.py        — Attention-DP routing
     waiting_queue.py     — FCFS waiting queue
 """
@@ -58,7 +58,7 @@ from .unified_scheduler import (
     PyCapacityScheduler,
     ScheduleResult,
     ScheduleStepConfig,
-    SimpleUnifiedScheduler,
+    UnifiedScheduler,
     UnifiedScheduleStepOutput,
 )
 
@@ -79,11 +79,11 @@ __all__ = [
     "BindMicroBatchScheduler",
     "KVCacheV2DummyScheduler",
     "SimpleScheduler",
-    # SimpleUnifiedScheduler (Python)
+    # UnifiedScheduler (Python)
     "PyCapacityScheduler",
     "ScheduleResult",
     "ScheduleStepConfig",
-    "SimpleUnifiedScheduler",
+    "UnifiedScheduler",
     "UnifiedScheduleStepOutput",
     # ADP
     "ADPRouter",

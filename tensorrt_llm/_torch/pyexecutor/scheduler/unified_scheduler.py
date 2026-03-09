@@ -1297,11 +1297,11 @@ class UnifiedScheduleStepOutput:
 
 
 # ---------------------------------------------------------------------------
-# SimpleUnifiedScheduler — Python-only scheduler with consolidated logic
+# UnifiedScheduler — Python-only scheduler with consolidated logic
 # ---------------------------------------------------------------------------
 
 
-class SimpleUnifiedScheduler(RequestScheduler):
+class UnifiedScheduler(RequestScheduler):
     """Python-only scheduler with consolidated scheduling logic.
 
     Replaces the two-pass pipeline in SimpleScheduler (C++ bindings:

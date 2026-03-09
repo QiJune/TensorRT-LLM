@@ -199,7 +199,7 @@ _PRESET_CONFIGS: Dict[str, Dict[str, Dict[Optional[str], List[str]]]] = {
     # Note: mypyc-compiled functions lack __code__ and will be silently skipped.
     "scheduler_hotpath": {
         _SCHED: {
-            "SimpleUnifiedScheduler": [
+            "UnifiedScheduler": [
                 "schedule_step",
                 "schedule_active_requests",
                 "schedule_request",

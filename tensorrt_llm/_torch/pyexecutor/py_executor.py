@@ -68,7 +68,7 @@ from .scheduler import (RequestScheduler, ScheduledRequests,
                         SerializableSchedulerOutput, WaitingQueue,
                         create_waiting_queue)
 from .scheduler.adp_router import ADPRouter, DefaultADPRouter
-from .scheduler.unified_scheduler import SimpleUnifiedScheduler
+from .scheduler.unified_scheduler import UnifiedScheduler
 
 # Environment variable to specify iteration ranges for profiling start/stop.
 # Format: "start1-stop1,start2-stop2,..." or single iterations "iter1,iter2,..."
@@ -1685,7 +1685,7 @@ class PyExecutor:
         return can_queue, can_queue_this_rank
 
     def _prepare_and_schedule_batch_unified(self):
-        """Scheduling path for SimpleUnifiedScheduler (TLLM_USE_PYTHON_SCHEDULER=1)."""
+        """Scheduling path for UnifiedScheduler (TLLM_USE_PYTHON_SCHEDULER=1)."""
         # 1. Fill waiting queue from external request queue
         # In ADP mode, use global active-request count so the idle
         # check inside _fetch_and_enqueue_requests sees cluster-wide
@@ -1813,7 +1813,7 @@ class PyExecutor:
                                        result.num_fitting_requests, iter_stats)
 
     def _prepare_and_schedule_batch(self):
-        if isinstance(self.scheduler, SimpleUnifiedScheduler):
+        if isinstance(self.scheduler, UnifiedScheduler):
             return self._prepare_and_schedule_batch_unified()
 
         new_requests = self._fetch_and_activate_new_requests()
@@ -2745,7 +2745,7 @@ class PyExecutor:
 
     @nvtx_range("_schedule")
     def _schedule(self):
-        if isinstance(self.scheduler, SimpleUnifiedScheduler):
+        if isinstance(self.scheduler, UnifiedScheduler):
             result = self.scheduler.schedule_active_requests(
                 self.active_requests, self.inflight_req_ids)
             return (result.scheduled_requests,
