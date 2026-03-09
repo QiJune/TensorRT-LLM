@@ -288,7 +288,13 @@ class TokenBudgetTracker:
         return True
 
     def finalize(self) -> tuple[RequestList, RequestList, int]:
-        """Apply chunking and sorting. Returns (context, generation, num_fitting)."""
+        """Apply chunking and sorting. Returns (context, generation, num_fitting).
+
+        Note: num_fitting reflects requests admitted by try_add/try_add_*
+        before chunking. Requests with context_chunk_size == 0 are dropped
+        from context_requests below but num_fitting is not decremented.
+        See class docstring item 3 for the full semantics.
+        """
         # Verify chunking fits
         if self._has_token_limit and self._num_chunked_tokens > (
             self.max_num_tokens - self._batch_num_tokens
@@ -555,7 +561,7 @@ class GuaranteedNoEvictPolicy(SchedulerPolicyBase):
             if num_scheduled >= _max_num:
                 break
 
-            # sv is defined (set at line 551 on the non-disagg branch);
+            # sv is defined (set above on the non-disagg branch);
             # replaces req.is_generation_in_progress_state to reuse cached state_value.
             if not is_disagg and sv == _gen_in_progress:
                 # rc: 1=continue, 0=token budget exceeded, -1=batch full
@@ -752,7 +758,7 @@ class MaxUtilizationPolicy(SchedulerPolicyBase):
                 req_it += 1
                 continue
 
-            result = self._try_scheduling_request(
+            result, num_scheduled_peft_pages = self._try_scheduling_request(
                 scheduler,
                 req,
                 scheduled_requests,
@@ -807,45 +813,55 @@ class MaxUtilizationPolicy(SchedulerPolicyBase):
         max_num_requests: int,
         seen_task_ids: set[int],
         token_tracker: Optional[TokenBudgetTracker] = None,
-    ) -> Optional[bool]:
+    ) -> tuple[Optional[bool], int]:
         """Try to schedule a request.
 
-        Returns:
-            True: request scheduled successfully.
-            False: capacity failure (KV blocks, PEFT, max_num_requests)
+        Returns a tuple of (result, num_scheduled_peft_pages):
+            result is True: request scheduled successfully.
+            result is False: capacity failure (KV blocks, PEFT, max_num_requests)
                    — caller may pause an older request and retry.
-            None: token budget exhausted — caller should stop scheduling
+            result is None: token budget exhausted — caller should stop scheduling
                   (pausing won't help because it doesn't free token budget).
+            num_scheduled_peft_pages: updated running total of scheduled PEFT
+                  pages (mirrors C++ pass-by-reference semantics in
+                  capacityScheduler.cpp:429).
         """
         if num_scheduled >= max_num_requests:
-            return False
+            return False, num_scheduled_peft_pages
 
         if scheduled_blocks_manager.prepare_blocks_if_schedulable(req) is None:
-            return False
+            return False, num_scheduled_peft_pages
 
-        # PEFT check only when needed
+        # PEFT check only when needed — compute required pages but do NOT
+        # commit (add to seen_task_ids / accumulate pages) until all checks
+        # pass. Matches C++ which commits atomically on success only.
+        _peft_lora_task_id = 0
+        _peft_is_new_task = False
+        _peft_required_pages = 0
         if scheduler.peft_cache_manager is not None:
-            lora_task_id, is_new_task, num_required_peft_pages = scheduler._get_peft_task_info(
-                req, seen_task_ids
+            _peft_lora_task_id, _peft_is_new_task, _peft_required_pages = (
+                scheduler._get_peft_task_info(req, seen_task_ids)
             )
-            if num_required_peft_pages + num_scheduled_peft_pages > max_peft_pages:
-                return False
-            if is_new_task:
-                seen_task_ids.add(lora_task_id)
+            if _peft_required_pages + num_scheduled_peft_pages > max_peft_pages:
+                return False, num_scheduled_peft_pages
 
         # Token budget check — return None (not False) so the caller
         # does NOT enter the pause/backtrack path. Pausing frees KV
         # blocks but not token budget, so retrying would fail again.
         if token_tracker is not None:
             if not token_tracker.try_add(req):
-                return None
+                return None, num_scheduled_peft_pages
 
+        # All checks passed — commit all state atomically.
         scheduled_blocks_manager.update_scheduled_blocks()
+        if _peft_is_new_task:
+            seen_task_ids.add(_peft_lora_task_id)
+            num_scheduled_peft_pages += _peft_required_pages
         if req.is_disagg_generation_init_state:
             fitting_disagg.append(req)
         else:
             scheduled_requests.append(req)
-        return True
+        return True, num_scheduled_peft_pages
 
 
 class NoEvictScheduledBlocksManager:
@@ -1292,10 +1308,9 @@ class SimpleUnifiedScheduler(RequestScheduler):
     BindCapacityScheduler → BindMicroBatchScheduler) with a single-pass
     fused approach. Gated by TLLM_USE_PYTHON_SCHEDULER=1.
 
-    The immediate scheduled result (context_requests + generation_requests)
-    is equivalent to SimpleScheduler for the same inputs. However, the
-    fused single-pass approach has different internal semantics — this is
-    an intentional tradeoff for reduced host overhead.
+    The scheduled result is largely equivalent to SimpleScheduler, but the
+    fused single-pass approach has intentional behavioral differences that
+    produce equal or better token budget utilization.
 
     Differences vs the two-pass SimpleScheduler:
 
@@ -1304,25 +1319,34 @@ class SimpleUnifiedScheduler(RequestScheduler):
        instead of capacity first then microbatch second. This eliminates one
        full iteration over fitting_requests and reduces scheduler-side KV
        bookkeeping (reserve/check/decrement) on requests that would be dropped
-       by the token budget. Fused one-pass does not change final KV allocation
-       semantics (prepare_resources runs on the final batch only), but reduces
-       host overhead and unnecessary bookkeeping. Inflight and beam-width-
-       mismatch skips still follow the same semantics as the C++ capacity path.
+       by the token budget.
 
-    2. MaxUtilization produces fewer pauses:
-       When token budget is exhausted, the fused path stops the capacity
-       loop early (token failure returns None, not False, so pause/backtrack
-       is not triggered). In SimpleScheduler, capacity evaluates ALL requests
-       first (potentially pausing some to make room), then microbatch drops
-       the ones exceeding token budget — meaning those pauses were wasted.
-       The fused path avoids unnecessary pause/backtrack work when token
-       budget is the bottleneck.
+    2. Lighter resource state on token budget break (Section 4.1.1 in
+       design.md): When token budget is exhausted, the first-pass loop
+       breaks. The failing generation request is never admitted, so it
+       does not consume KV blocks, request slots, or PEFT pages. This
+       produces a lighter resource state than the old path (where capacity
+       admitted everything and microbatch dropped the excess afterward).
+       Effects:
+       a) paused_requests: fewer (MaxUtilization avoids wasted pauses)
+       b) context_requests: may have more entries (GuaranteedNoEvict
+          second pass admits context against the lighter state)
+       c) fitting_disagg_gen_init_requests: may differ in both directions
+          (deferred if after break, or extra if evaluated against lighter
+          state)
+       All differences result in equal or better utilization. The old
+       behavior was an artifact of the two-pass generation-first ordering
+       in microbatch, not a deliberate scheduling priority.
 
-    3. num_fitting_requests counts requests passing both capacity AND token
-       budget (via TokenBudgetTracker._num_fitting), not just capacity-fitting.
-       In SimpleScheduler, num_fitting_requests was len(fitting_requests)
-       from the capacity pass only. The new count reports how many requests
-       actually made it into the scheduled batch.
+    3. num_fitting_requests counts requests admitted by the fused capacity +
+       token-budget path (via TokenBudgetTracker._num_fitting), not just
+       capacity-fitting. In SimpleScheduler, num_fitting_requests was
+       len(fitting_requests) from the capacity pass only. Note: this count
+       is computed before late pruning — context chunking in finalize() may
+       drop requests with context_chunk_size == 0, and post-scheduler
+       filters (ADP balancing, batch waiting) may further shrink the context
+       batch, without updating this count. It therefore reflects "requests
+       admitted by the scheduler" rather than "final scheduled batch size."
 
     4. Scheduling orchestration consolidated in scheduler (code organization):
        Validation, ADP routing, and drafter setup are orchestrated by
