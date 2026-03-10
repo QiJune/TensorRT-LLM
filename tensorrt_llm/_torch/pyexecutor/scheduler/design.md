@@ -4,8 +4,8 @@
 
 TensorRT-LLM has two scheduler implementations:
 
-- **SimpleScheduler** (C++ bindings): The default scheduler. Uses C++ `BindCapacityScheduler`
-  + `BindMicroBatchScheduler` via nanobind.
+- **SimpleScheduler** (C++ bindings): The default scheduler. Uses C++ `BindCapacityScheduler`,
+  `BindMicroBatchScheduler` via nanobind.
 - **UnifiedScheduler** (pure Python): A Python mirror of SimpleScheduler, introduced
   for extensibility and experimentation. On main branch it follows the same two-pass
   structure as SimpleScheduler but implemented in Python.
@@ -148,23 +148,29 @@ GuaranteedNoEvict) and downstream scheduling therefore see a **lighter
 resource state** than the old two-pass path, where capacity admitted all
 generation unconditionally and microbatch dropped the excess afterward.
 
-This produces three kinds of differences vs the old path:
+This produces two kinds of differences vs the old path:
 
 **a) `paused_requests` may have fewer entries (MaxUtilization only).**
 The old path could pause requests to make room for later requests that
 microbatch would then drop anyway — wasted work. The fused path avoids this.
 
-**b) `context_requests` may have additional entries (GuaranteedNoEvict).**
-Context classified before the break gets a chance in the second pass against
-the lighter state. In the old path, microbatch saw all generation before
-context (generation-first ordering), so generation consumed budget first and
-context after a failing generation was unreachable.
+**b) Second-pass requests may see more available resources
+(GuaranteedNoEvict).** Because the failing generation request is never
+admitted, it does not consume KV blocks, PEFT pages, or token budget. The
+second pass — which processes both context and disagg-init requests — sees
+a lighter state than the old path. This can admit context or disagg that the
+old path would have blocked. (Disagg/context after the break point is still
+never reached — only those classified before the break benefit.)
 
-**c) `fitting_disagg_gen_init_requests` may differ in both directions.**
-Disagg after the break point is never reached (fewer). Disagg before the
-break point is evaluated against a lighter state — fewer KV blocks consumed,
-fewer PEFT pages claimed — so it may be admitted where the old path would
-have blocked it (more).
+The two request types have different practical thresholds:
+- **Extra context** requires speculative decoding or beam search, where each
+  generation request consumes multiple tokens (e.g., `beam_width +
+  draft_tokens`), creating enough token headroom for context. With standard
+  beam=1 and no speculation, generation requests are 1 token each, leaving
+  near-zero headroom.
+- **Extra disagg-init** can happen with any configuration, because disagg
+  bypasses token accounting — it only needs KV blocks and PEFT pages. The
+  lighter KV/PEFT state from the unadmitted generation is sufficient.
 
 These differences all result in **equal or better token budget utilization**
 than the old path. The old path's behavior was an artifact of the two-pass
@@ -200,90 +206,82 @@ Fused single-pass pipeline:
 
 Paused requests differ ([] vs [old_req]). Scheduled output is the same.
 
-**Example — GuaranteedNoEvict admits context from lighter state
-(token_budget=100, active_requests = [Gen_A(60), Ctx_C(30), Gen_B(50)]):**
+**Example — GuaranteedNoEvict second pass benefits from lighter state:**
+
+Setup: speculative decoding with 7 draft tokens → each generation request
+consumes `beam_width(1) + draft_tokens(7) = 8 tokens`. Token budget = 100.
+active_requests = [Gen_1..Gen_12, Ctx_X(4 tokens, chunked), Disagg_Y, Gen_13, Disagg_Z].
 
 ```
 Old two-pass pipeline:
 
   Capacity first pass: no token budget — classifies ALL requests
-    → Gen_A: generation → scheduled, decrement blocks
-    → Ctx_C: context → pending_requests
-    → Gen_B: generation → scheduled, decrement blocks
+    → Gen_1..Gen_12: generation → scheduled, blocks decremented (12 requests)
+    → Ctx_X:   context → pending_requests
+    → Disagg_Y: disagg → pending_dis_gen_init
+    → Gen_13:  generation → scheduled, blocks decremented
+    → Disagg_Z: disagg → pending_dis_gen_init
 
-  Capacity second pass: Ctx_C → blocks ok → added to scheduled
-    Result: fittingRequests = [Gen_A, Gen_B, Ctx_C]
+  batch_decrement_list([Gen_1..Gen_13]) → all 13 consume KV blocks
+
+  Capacity second pass: evaluates pending against remaining blocks
+    → Disagg_Y: blocks ok (after 13 gen consumed) → fitting_disagg
+    → Disagg_Z: blocks ok → fitting_disagg
+    → Ctx_X: blocks ok → added to scheduled
+    Result: fittingRequests = [Gen_1..Gen_13, Ctx_X]
+            fitting_disagg = [Disagg_Y, Disagg_Z]
 
   Microbatch: iterates fittingRequests (generation-first order)
-    → Gen_A: 60 tokens → ok (60/100)
-    → Gen_B: 50 tokens → 60+50=110 > 100 → break
-    → Ctx_C: NEVER REACHED
-    Result: scheduled = [Gen_A]
+    → Gen_1..Gen_12: 12×8 = 96 tokens → ok (96/100)
+    → Gen_13: 96+8 = 104 > 100 → break
+    → Ctx_X: NEVER REACHED
+    Result: scheduled = [Gen_1..Gen_12]
+            fitting_disagg = [Disagg_Y, Disagg_Z] (unchanged)
 
 Fused single-pass pipeline:
 
   First pass: token budget checked inline
-    → Gen_A: generation, 60 tokens ok → admitted
-    → Ctx_C: context → pending_requests (classified, not token-checked)
-    → Gen_B: generation, 60+50=110 > 100 → break
+    → Gen_1..Gen_12: 96 tokens → admitted, blocks decremented
+    → Ctx_X:   context → pending_requests (classified, not token-checked)
+    → Disagg_Y: disagg → pending_dis_gen_init (classified)
+    → Gen_13:  96+8 = 104 > 100 → break
+    → Disagg_Z: NEVER REACHED (after break point)
 
-  Second pass: processes pending_requests with remaining budget
-    → Ctx_C: 60+30=90 ≤ 100 → admitted
-    Result: scheduled = [Gen_A, Ctx_C]
+  batch_decrement_list([Gen_1..Gen_12]) → only 12 gen consume KV blocks
+                                          (Gen_13's blocks NOT consumed)
+
+  Second pass: processes pending against remaining budget + lighter blocks
+    → Disagg_Y: blocks ok (lighter state) → fitting_disagg
+    → Ctx_X: 96+4 = 100 ≤ 100, blocks ok → admitted
+    Result: scheduled = [Gen_1..Gen_12, Ctx_X]
+            fitting_disagg = [Disagg_Y]
 ```
 
-The fused path schedules [Gen_A, Ctx_C] (90/100 tokens) vs the old path's
-[Gen_A] (60/100 tokens). Gen_B is not scheduled in either path.
+Differences vs the old path:
+- Ctx_X admitted (100/100 tokens) vs dropped (96/100). Gen_13 not scheduled
+  in either path.
+- Disagg_Y evaluated against lighter block state (Gen_13's blocks not
+  consumed). May fit where the old path would have blocked it.
+- Disagg_Z deferred (after break point). Retried next iteration.
 
-**Example — disagg-init diverges in both directions (token_budget=100):**
-
-```
-Old two-pass pipeline:
-
-  Capacity first pass: no token budget
-    → Gen_A (50 tokens): → scheduled, decrement blocks
-    → Disagg_X:          → pending_dis_gen_init
-    → Gen_B (60 tokens): → scheduled, decrement blocks
-    → Disagg_Y:          → pending_dis_gen_init
-
-  batch_decrement_list([Gen_A, Gen_B]) → both consume KV blocks
-
-  Capacity second pass: evaluates Disagg_X, Disagg_Y against remaining
-    blocks (after Gen_A + Gen_B consumed)
-
-  Microbatch: Gen_A(50) ok, Gen_B(60) → 110>100 → break
-    Result: scheduled = [Gen_A], fitting_disagg = [Disagg_X, Disagg_Y]
-            (if both fit blocks)
-
-Fused single-pass pipeline:
-
-  First pass:
-    → Gen_A (50 tokens): admitted
-    → Disagg_X:          → pending_dis_gen_init
-    → Gen_B (60 tokens): 50+60=110>100 → break
-    → Disagg_Y:          NEVER REACHED
-
-  batch_decrement_list([Gen_A]) → only Gen_A consumes KV blocks
-
-  Second pass: evaluates Disagg_X against remaining blocks
-    (after only Gen_A consumed — lighter state)
-    Result: scheduled = [Gen_A], fitting_disagg = [Disagg_X]
-```
-
-Disagg_Y was deferred (fewer). Disagg_X was evaluated against a lighter
-block state (Gen_B's blocks not consumed), so it may fit where the old path
-would have blocked it (more). Both effects are benign — deferred requests
-retry next iteration, and extra admissions reflect genuinely available
-resources.
+All differences are benign — better utilization for context/disagg that fit,
+deferred requests retry next iteration. Extra context requires speculative
+decoding or beam search (needs token headroom from multi-token generation).
+Extra disagg can happen with any configuration — disagg bypasses token
+accounting and only needs the lighter KV/PEFT state.
 
 #### 4.1.2 `num_fitting_requests` semantics
 
 Now counts requests admitted by the fused capacity + token-budget path
-(`TokenBudgetTracker._num_fitting`), not just capacity-fitting. In
-`SimpleScheduler`, `num_fitting_requests` was `len(fitting_requests)` from
-the capacity pass only.
+(`TokenBudgetTracker._num_fitting`), which is **more accurate** than the old
+value. In `SimpleScheduler`, `num_fitting_requests` was
+`len(fitting_requests)` from the capacity pass only — it included requests
+that capacity admitted but microbatch would later drop for exceeding the
+token budget. The new count reflects requests that passed both KV-block
+capacity AND token-budget checks.
 
-Note: this count is computed before late pruning. It can overcount in two ways:
+Note: this count is still computed before late pruning, so it can overcount
+in two edge cases:
 
 1. **Chunking**: `_num_fitting` is incremented when `try_add_context()`
    accepts a request, but `finalize()` may later drop requests with
@@ -291,9 +289,6 @@ Note: this count is computed before late pruning. It can overcount in two ways:
 2. **Post-scheduler filters**: `schedule_active_requests()` passes
    `num_fitting_requests` through unchanged after `balance_adp_requests()`
    or `check_batch_waiting()` may have shrunk the context batch.
-
-The field therefore means "requests admitted by the fused capacity/token path
-before late pruning," not "final scheduled batch size."
 
 #### 4.1.3 `speculation_permanently_disabled`
 
@@ -407,13 +402,11 @@ Compare scheduling outputs between `SimpleScheduler` (default) and
 - `len(paused_requests)` (this policy does not pause)
 
 **GuaranteedNoEvict — expected to differ when token budget is the bottleneck:**
-- `len(context_requests)`: may have more entries — the second pass admits
-  context against the lighter resource state left by the first-pass break
-  (Section 4.1.1b)
-- `len(fitting_disagg_gen_init_requests)`: may have more entries — disagg
-  classified before the break is evaluated against a lighter state where the
-  failing generation did not consume KV/PEFT (Section 4.1.1c). Disagg after
-  the break is deferred (fewer).
+- `len(context_requests)`: may have more entries with speculative decoding or
+  beam search (needs token headroom from the lighter state) (Section 4.1.1b)
+- `len(fitting_disagg_gen_init_requests)`: may have more entries with any
+  configuration (disagg bypasses token accounting, only needs lighter KV/PEFT
+  state) (Section 4.1.1b). Requests after the break point are deferred (fewer).
 
 **MaxUtilization — must match:**
 - `len(context_requests)`, `len(generation_requests)` (single loop breaks,
@@ -423,7 +416,7 @@ Compare scheduling outputs between `SimpleScheduler` (default) and
 - `len(paused_requests)`: fewer — the fused path avoids wasted pause/backtrack
   (Section 4.1.1a)
 - `len(fitting_disagg_gen_init_requests)`: may have fewer entries — disagg
-  after the break point is deferred (Section 4.1.1c)
+  after the break point is deferred (Section 4.1.1b)
 
 **LoRA + MaxUtilization — expected to differ:**
 - `len(context_requests)`, `len(generation_requests)`: may differ due to
@@ -437,9 +430,15 @@ from tensorrt_llm.llmapi import LLM, SchedulerConfig
 llm = LLM(model, scheduler_config=SchedulerConfig(use_python_scheduler=True))
 ```
 
-### Profile with scheduler preset
+### Profile with trtllm-serve + scheduler preset
+```yaml
+# config.yaml
+scheduler_config:
+  use_python_scheduler: true
+```
+
 ```bash
 TLLM_LINE_PROFILER_PATH=./profile.txt \
 TLLM_LINE_PROFILER_PRESET=scheduler_hotpath \
-trtllm-bench --model <model> throughput --dataset <dataset>
+trtllm-serve <model> --config config.yaml
 ```

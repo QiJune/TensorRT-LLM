@@ -1329,24 +1329,23 @@ class UnifiedScheduler(RequestScheduler):
        admitted everything and microbatch dropped the excess afterward).
        Effects:
        a) paused_requests: fewer (MaxUtilization avoids wasted pauses)
-       b) context_requests: may have more entries (GuaranteedNoEvict
-          second pass admits context against the lighter state)
-       c) fitting_disagg_gen_init_requests: may differ in both directions
-          (deferred if after break, or extra if evaluated against lighter
-          state)
+       b) context_requests and fitting_disagg_gen_init_requests may have
+          more entries (GuaranteedNoEvict second pass admits against the
+          lighter state — same mechanism for both). Requests after the
+          break point are still deferred. Extra context requires spec
+          decode or beam search (needs token headroom). Extra disagg can
+          happen with any config (disagg bypasses token accounting,
+          only needs lighter KV/PEFT state).
        All differences result in equal or better utilization. The old
        behavior was an artifact of the two-pass generation-first ordering
        in microbatch, not a deliberate scheduling priority.
 
-    3. num_fitting_requests counts requests admitted by the fused capacity +
-       token-budget path (via TokenBudgetTracker._num_fitting), not just
-       capacity-fitting. In SimpleScheduler, num_fitting_requests was
-       len(fitting_requests) from the capacity pass only. Note: this count
-       is computed before late pruning — context chunking in finalize() may
-       drop requests with context_chunk_size == 0, and post-scheduler
-       filters (ADP balancing, batch waiting) may further shrink the context
-       batch, without updating this count. It therefore reflects "requests
-       admitted by the scheduler" rather than "final scheduled batch size."
+    3. num_fitting_requests is more accurate: counts requests admitted by
+       both KV-block capacity AND token budget (via
+       TokenBudgetTracker._num_fitting). In SimpleScheduler, it was
+       len(fitting_requests) from capacity only — including requests that
+       microbatch would later drop. Still computed before late pruning
+       (chunking and post-filters may reduce the final batch).
 
     4. Scheduling orchestration consolidated in scheduler (code organization):
        Validation, ADP routing, and drafter setup are orchestrated by
