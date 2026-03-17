@@ -125,9 +125,7 @@ use.
 
 ### 3.5 Profiling mypyc-Compiled Code
 
-mypyc-compiled functions lack `__code__`, so `line_profiler` cannot hook them. The host
-profiler automatically falls back to function-level timing wrappers for these targets.
-Use `TLLM_LINE_PROFILER_PRESET=scheduler_hotpath` to profile the scheduler hot path.
+mypyc-compiled functions lack `__code__`, so `line_profiler` cannot hook them.
 
 ## 4. Behavior Changes vs Main Branch
 
@@ -380,7 +378,7 @@ Measured with the host profiler.
 | `scheduler/setup_mypyc.py` | mypyc build script for compiling `unified_scheduler.py` to native C extension |
 | `scheduler/mypy_mypyc.ini` | mypy configuration for mypyc compilation (error suppressions for external types) |
 | `scripts/build_wheel.py` | Added `build_pyexecutor_scheduler()` for mypyc integration via `--mypyc` flag |
-| `tools/profiler/host_profile_tools/host_profiler.py` | Preset system (`scheduler_hotpath`) + timer fallback for mypyc-compiled functions |
+| `tools/profiler/host_profile_tools/host_profiler.py` | Added `TLLM_LINE_PROFILER_NO_DEFAULTS` env var to disable default profiler targets |
 
 ## 7. Validation
 
@@ -430,7 +428,7 @@ from tensorrt_llm.llmapi import LLM, SchedulerConfig
 llm = LLM(model, scheduler_config=SchedulerConfig(use_python_scheduler=True))
 ```
 
-### Profile with trtllm-serve + scheduler preset
+### Profile with trtllm-serve (no default profiler targets)
 ```yaml
 # config.yaml
 scheduler_config:
@@ -439,6 +437,7 @@ scheduler_config:
 
 ```bash
 TLLM_LINE_PROFILER_PATH=./profile.txt \
-TLLM_LINE_PROFILER_PRESET=scheduler_hotpath \
+TLLM_LINE_PROFILER_NO_DEFAULTS=1 \
+TLLM_LINE_PROFILER_FUNCTIONS="tensorrt_llm._torch.pyexecutor.scheduler.unified_scheduler.UnifiedScheduler.schedule_request" \
 trtllm-serve <model> --config config.yaml
 ```
