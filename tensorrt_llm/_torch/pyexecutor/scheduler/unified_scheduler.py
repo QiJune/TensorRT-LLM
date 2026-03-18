@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, List, Optional, Set
 
 from strenum import StrEnum
 
+from tensorrt_llm._utils import nvtx_range
 from tensorrt_llm.llmapi.llm_args import CapacitySchedulerPolicy
 from tensorrt_llm.logger import logger
 
@@ -1567,12 +1568,15 @@ class UnifiedScheduler(RequestScheduler):
         use schedule_active_requests() instead.
         """
         # 1. Fetch new requests (ADP allgather + pop + route + CP merge + validate)
-        (
-            validated_requests,
-            all_new_requests,
-            self._expected_num_active_requests,
-            validation_failures,
-        ) = self._fetch_new_requests(waiting_queue, active_requests, exclude_last_generation_logits)
+        with nvtx_range("_fetch_new_requests"):
+            (
+                validated_requests,
+                all_new_requests,
+                self._expected_num_active_requests,
+                validation_failures,
+            ) = self._fetch_new_requests(
+                waiting_queue, active_requests, exclude_last_generation_logits
+            )
 
         # 2. KV connector marking (mutates request objects, not the list)
         if kv_connector_manager:
@@ -1615,7 +1619,8 @@ class UnifiedScheduler(RequestScheduler):
             self._setup_drafter(all_requests)
 
         # 7. Run capacity + microbatch scheduling
-        result = self.schedule_active_requests(all_requests, inflight_req_ids)
+        with nvtx_range("_schedule"):
+            result = self.schedule_active_requests(all_requests, inflight_req_ids)
 
         return UnifiedScheduleStepOutput(
             scheduled_requests=result.scheduled_requests,

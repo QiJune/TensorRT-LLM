@@ -1756,7 +1756,8 @@ class PyExecutor:
                             < self.benchmark_req_queues_size):
                         time.sleep(1)
 
-        # 4. Schedule (handles pop, validate, pad, drafter, schedule)
+        # 4. Schedule — schedule_step contains NVTX markers for
+        #    _fetch_new_requests and _schedule, matching SimpleScheduler.
         result = self.scheduler.schedule_step(
             waiting_queue=self.waiting_queue,
             active_requests=self.active_requests,
@@ -1812,6 +1813,7 @@ class PyExecutor:
                                        result.fitting_disagg_gen_init_requests,
                                        result.num_fitting_requests, iter_stats)
 
+    @nvtx_range("_prepare_and_schedule_batch")
     def _prepare_and_schedule_batch(self):
         if isinstance(self.scheduler, UnifiedScheduler):
             return self._prepare_and_schedule_batch_unified()
