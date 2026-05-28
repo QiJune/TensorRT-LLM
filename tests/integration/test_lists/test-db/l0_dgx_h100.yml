@@ -352,6 +352,7 @@ l0_dgx_h100:
     - unittest/llmapi/test_async_llm.py -m "gpu4"
     - ray_orchestrator/RL/test_rl_perf_reproduce.py::test_rl_perf_reproduce[tp2_2instances]
     - ray_orchestrator/RL/test_rl_perf_reproduce.py::test_rl_perf_reproduce[tp1_4instances]
+    - examples/test_ray.py::test_ray_disaggregated_serving[tp2]
 # ------------- AutoDeploy Backend Stages ---------------
 - condition:
     ranges:
