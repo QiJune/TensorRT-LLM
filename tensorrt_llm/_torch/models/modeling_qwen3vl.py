@@ -19,7 +19,7 @@ from transformers.models.qwen3_vl.modeling_qwen3_vl import (
 )
 
 from tensorrt_llm._torch.models.modeling_multimodal_utils import _is_mm_disagg
-from tensorrt_llm.functional import PositionEmbeddingType
+from tensorrt_llm.functional_enums import PositionEmbeddingType
 from tensorrt_llm.mapping import Mapping
 
 from ..._utils import async_tensor_h2d

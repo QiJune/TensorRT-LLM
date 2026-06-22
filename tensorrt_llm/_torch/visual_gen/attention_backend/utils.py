@@ -24,7 +24,7 @@ from typing import Optional, Type
 
 import torch
 
-from tensorrt_llm.models.modeling_utils import QuantConfig
+from tensorrt_llm.quantization import QuantConfig
 from tensorrt_llm.visual_gen.args import AttentionConfig
 
 from .interface import AttentionBackend

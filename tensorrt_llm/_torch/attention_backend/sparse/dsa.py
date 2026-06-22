@@ -36,7 +36,7 @@ from tensorrt_llm.deep_gemm import (fp8_fp4_mqa_logits,
                                     get_paged_mqa_logits_metadata)
 from tensorrt_llm.logger import logger
 from tensorrt_llm.mapping import Mapping
-from tensorrt_llm.models.modeling_utils import QuantConfig
+from tensorrt_llm.quantization import QuantConfig
 
 from .params import SparseMetadataParams, SparseParams
 

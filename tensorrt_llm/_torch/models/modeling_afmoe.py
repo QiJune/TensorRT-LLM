@@ -34,7 +34,7 @@ from torch import nn
 from transformers import PretrainedConfig
 from transformers.models.auto.configuration_auto import CONFIG_MAPPING
 
-from tensorrt_llm.functional import PositionEmbeddingType
+from tensorrt_llm.functional_enums import PositionEmbeddingType
 
 from ...logger import logger
 from ..attention_backend import AttentionMetadata

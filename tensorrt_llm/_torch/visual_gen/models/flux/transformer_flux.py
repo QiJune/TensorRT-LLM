@@ -37,7 +37,7 @@ from tensorrt_llm._torch.visual_gen.models.flux.pos_embed_flux import FluxPosEmb
 from tensorrt_llm._torch.visual_gen.models.modeling import BaseDiffusionModel
 from tensorrt_llm._torch.visual_gen.quantization.loader import DynamicLinearWeightLoader
 from tensorrt_llm._torch.visual_gen.utils import SequenceSharder
-from tensorrt_llm.models.modeling_utils import QuantConfig
+from tensorrt_llm.quantization import QuantConfig
 
 # HF checkpoint key → our module attribute name
 _WEIGHT_KEY_REMAPS = [

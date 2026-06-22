@@ -44,7 +44,7 @@ from tensorrt_llm._torch.visual_gen.models.flux.transformer_flux import (
 from tensorrt_llm._torch.visual_gen.models.modeling import BaseDiffusionModel
 from tensorrt_llm._torch.visual_gen.quantization.loader import DynamicLinearWeightLoader
 from tensorrt_llm._torch.visual_gen.utils import SequenceSharder
-from tensorrt_llm.models.modeling_utils import QuantConfig
+from tensorrt_llm.quantization import QuantConfig
 
 # HF FLUX.2 uses Flux2FeedForward with linear_in/linear_out attribute names.
 # We use GatedMLP which uses gate_up_proj/down_proj. Remap at load time.

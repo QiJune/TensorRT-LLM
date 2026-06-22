@@ -21,21 +21,18 @@ from torch.cuda import device_count
 
 from tensorrt_llm import LLM as PyTorchLLM
 from tensorrt_llm import MultimodalEncoder
-from tensorrt_llm._tensorrt_engine import LLM
 from tensorrt_llm._utils import mpi_rank
 from tensorrt_llm.commands.utils import (collect_explicit_cli_keys,
                                          get_is_diffusion_model)
 from tensorrt_llm.executor.utils import LlmLauncherEnvs
 from tensorrt_llm.inputs.multimodal import MultimodalServerConfig
-from tensorrt_llm.llmapi import (BuildConfig, CapacitySchedulerPolicy,
-                                 DynamicBatchConfig, KvCacheConfig,
-                                 SchedulerConfig)
+from tensorrt_llm.llmapi import KvCacheConfig
 from tensorrt_llm.llmapi.disagg_utils import (DisaggClusterConfig,
                                               MetadataServerConfig, ServerRole,
                                               extract_disagg_cluster_config,
                                               parse_disagg_config_file,
                                               parse_metadata_server_config_file)
-from tensorrt_llm.llmapi.llm_args import TorchLlmArgs, TrtLlmArgs
+from tensorrt_llm.llmapi.llm_args import TorchLlmArgs
 from tensorrt_llm.llmapi.llm_utils import update_llm_args_with_extra_dict
 from tensorrt_llm.llmapi.mpi_session import find_free_ipc_addr
 from tensorrt_llm.llmapi.reasoning_parser import (ReasoningParserFactory,
@@ -155,9 +152,7 @@ def is_non_default_or_required(param_name, value, backend, explicit_cli_keys):
            for s in cli_derived_fields.get(param_name, ())):
         return True
 
-    if backend == "tensorrt":
-        llm_args_class = TrtLlmArgs
-    elif backend == "_autodeploy":
+    if backend == "_autodeploy":
         from tensorrt_llm._torch.auto_deploy.llm_args import \
             LlmArgs as AutoDeployLlmArgs
         llm_args_class = AutoDeployLlmArgs
@@ -182,13 +177,10 @@ def get_llm_args(
         tokenizer: Optional[str] = None,
         custom_tokenizer: Optional[str] = None,
         backend: str = "pytorch",
-        max_beam_width: int = BuildConfig.model_fields["max_beam_width"].
-    default,
-        max_batch_size: int = BuildConfig.model_fields["max_batch_size"].
-    default,
-        max_num_tokens: int = BuildConfig.model_fields["max_num_tokens"].
-    default,
-        max_seq_len: int = BuildConfig.model_fields["max_seq_len"].default,
+        max_beam_width: int = 1,
+        max_batch_size: int = 2048,
+        max_num_tokens: int = 8192,
+        max_seq_len: int = None,
         tensor_parallel_size: int = 1,
         pipeline_parallel_size: int = 1,
         context_parallel_size: int = 1,
@@ -246,18 +238,9 @@ def get_llm_args(
         "cp_config":
         cp_config,
         "build_config":
-        BuildConfig(max_batch_size=max_batch_size,
-                    max_num_tokens=max_num_tokens,
-                    max_beam_width=max_beam_width,
-                    max_seq_len=max_seq_len) if backend == "tensorrt" else None,
+        None,
         "scheduler_config":
-        SchedulerConfig(capacity_scheduler_policy=CapacitySchedulerPolicy.
-                        GUARANTEED_NO_EVICT,
-                        dynamic_batch_config=DynamicBatchConfig(
-                            enable_batch_size_tuning=True,
-                            enable_max_num_tokens_tuning=False,
-                            dynamic_batch_moving_average_window=128))
-        if backend == "tensorrt" else None,
+        None,
         "max_batch_size":
         max_batch_size,
         "max_beam_width":
@@ -374,9 +357,6 @@ def launch_server(
             # AutoDeploy does not support build_config
             llm_args.pop("build_config", None)
             llm = AutoDeployLLM(**llm_args)
-        elif backend == 'tensorrt' or backend == 'trt':
-            llm_args.pop("backend")
-            llm = LLM(**llm_args)
         else:
             raise click.BadParameter(
                 f"{backend} is not a known backend, check help for available options.",
@@ -440,9 +420,6 @@ def launch_grpc_server(host: str,
             from tensorrt_llm._torch.auto_deploy import LLM as AutoDeployLLM
             llm_args.pop("build_config", None)
             llm = AutoDeployLLM(**llm_args)
-        elif backend == "tensorrt" or backend == "trt":
-            llm_args.pop("backend")
-            llm = LLM(**llm_args)
         else:
             raise click.BadParameter(
                 f"{backend} is not a known backend, check help for available options.",
@@ -645,8 +622,7 @@ class ChoiceWithAlias(click.Choice):
               help=help_info_with_stability_tag("Port of the server.", "beta"))
 @click.option(
     "--backend",
-    type=ChoiceWithAlias(["pytorch", "tensorrt", "_autodeploy"],
-                         {"trt": "tensorrt"}),
+    type=click.Choice(["pytorch", "_autodeploy"]),
     default="pytorch",
     help=help_info_with_stability_tag(
         "The backend to use to serve the model. Default is pytorch backend.",
@@ -668,26 +644,26 @@ class ChoiceWithAlias(click.Choice):
               help=help_info_with_stability_tag("The logging level.", "beta"))
 @click.option("--max_beam_width",
               type=int,
-              default=BuildConfig.model_fields["max_beam_width"].default,
+              default=1,
               help=help_info_with_stability_tag(
                   "Maximum number of beams for beam search decoding.", "beta"))
 @click.option("--max_batch_size",
               type=int,
-              default=BuildConfig.model_fields["max_batch_size"].default,
+              default=2048,
               help=help_info_with_stability_tag(
                   "Maximum number of requests that the engine can schedule.",
                   "beta"))
 @click.option(
     "--max_num_tokens",
     type=int,
-    default=BuildConfig.model_fields["max_num_tokens"].default,
+    default=8192,
     help=help_info_with_stability_tag(
         "Maximum number of batched input tokens after padding is removed in each batch.",
         "beta"))
 @click.option(
     "--max_seq_len",
     type=int,
-    default=BuildConfig.model_fields["max_seq_len"].default,
+    default=None,
     help=help_info_with_stability_tag(
         "Maximum total length of one request, including prompt and outputs. "
         "If unspecified, the value is deduced from the model config.", "beta"))
@@ -1129,7 +1105,7 @@ def serve(
               help="The logging level.")
 @click.option("--max_batch_size",
               type=int,
-              default=BuildConfig.model_fields["max_batch_size"].default,
+              default=2048,
               help="Maximum number of requests that the engine can schedule.")
 @click.option(
     "--max_num_tokens",

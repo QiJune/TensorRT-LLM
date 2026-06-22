@@ -29,7 +29,7 @@ import torch
 from torch import nn
 from transformers import PretrainedConfig
 
-from tensorrt_llm.functional import AllReduceStrategy, PositionEmbeddingType
+from tensorrt_llm.functional_enums import AllReduceStrategy, PositionEmbeddingType
 from tensorrt_llm.mapping import Mapping
 
 from ..attention_backend import AttentionMetadata

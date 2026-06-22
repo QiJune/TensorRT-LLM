@@ -24,7 +24,7 @@ from tensorrt_llm._torch.models import modeling_utils
 from tensorrt_llm._torch.modules import attention as trtllm_attention
 from tensorrt_llm._torch.modules import mlp as trtllm_mlp
 from tensorrt_llm._utils import prefer_pinned
-from tensorrt_llm.models.modeling_utils import QuantConfig
+from tensorrt_llm.quantization import QuantConfig
 
 InputDimT = Union[int, Tuple[int, int]]
 

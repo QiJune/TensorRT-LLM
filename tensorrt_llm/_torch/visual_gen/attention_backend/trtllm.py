@@ -24,7 +24,7 @@ from typing import Optional, Union
 import torch
 
 from tensorrt_llm.mapping import Mapping
-from tensorrt_llm.models.modeling_utils import QuantConfig
+from tensorrt_llm.quantization import QuantConfig
 from tensorrt_llm.visual_gen.args import QuantAttentionConfig
 
 from ...attention_backend.interface import AttentionRuntimeFeatures, PredefinedAttentionMask

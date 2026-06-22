@@ -34,7 +34,7 @@ from torch._subclasses import FakeTensor
 from torch.fx import GraphModule, Node
 
 from tensorrt_llm.bindings.internal import thop
-from tensorrt_llm.functional import AttentionMaskType
+from tensorrt_llm.functional_enums import AttentionMaskType
 from tensorrt_llm.quantization import QuantMode
 
 from ..._compat import KvCacheConfig, get_sm_version, prefer_pinned

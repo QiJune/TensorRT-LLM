@@ -5,7 +5,7 @@ import torch
 import torch.nn.functional as F
 from torch.nn.parameter import Parameter
 
-from tensorrt_llm.functional import AllReduceParams
+from tensorrt_llm.functional_enums import AllReduceParams
 from tensorrt_llm.mapping import Mapping
 from tensorrt_llm.math_utils import ceil_div
 

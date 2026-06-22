@@ -39,7 +39,7 @@ from tensorrt_llm._torch.modules.linear import Linear, TensorParallelMode
 from tensorrt_llm._torch.modules.rms_norm import RMSNorm
 from tensorrt_llm._torch.speculative import SpecMetadata
 from tensorrt_llm._utils import nvtx_range
-from tensorrt_llm.functional import PositionEmbeddingType
+from tensorrt_llm.functional_enums import PositionEmbeddingType
 from tensorrt_llm.inputs import (BaseMultimodalDummyInputsBuilder,
                                  BaseMultimodalInputProcessor, ContentFormat,
                                  ExtraProcessedInputs,

@@ -7,7 +7,7 @@ from typing import Dict, List, Optional, Union
 
 import torch
 
-from tensorrt_llm.models.modeling_utils import QuantAlgo
+from tensorrt_llm.quantization.mode import QuantAlgo
 from tensorrt_llm.quantization.utils import fp4_utils
 
 from ...distributed import allgather

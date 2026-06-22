@@ -173,7 +173,6 @@ l0_dgx_h200:
   - test_e2e.py::test_trtllm_bench_llmapi_launch[trt_backend-llama-v3-llama3-8b]
   - examples/test_nemotron_nas.py::test_nemotron_nas_summary_2gpu[DeciLM-7B]
   - llmapi/test_llm_examples.py::test_llmapi_example_distributed_tp2
-  - unittest/trt/functional/test_allreduce_norm.py
   - examples/test_multimodal.py::test_llm_multimodal_general[Llama-3.2-11B-Vision-pp:1-tp:2-bfloat16-bs:1-cpp_e2e:False-nb:1]
   # ------------- TRT tests ---------------
   - examples/test_bert.py::test_llm_bert_general[compare_hf-enable_remove_input_padding-use_attention_plugin-enable_context_fmha-tp:2-pp:1-float16-BertForSequenceClassification-bert/bert-base-uncased-yelp-polarity]
@@ -203,4 +202,4 @@ l0_dgx_h200:
       backend: triton
   tests:
   # ------------- Triton tests ---------------
-  - triton_server/test_triton_llm.py::test_llmapi_backend[4-0-disableDecoupleMode-tensorrt_llm]
+  - triton_server/test_triton_llmapi.py::test_llmapi_backend[4-0-disableDecoupleMode-tensorrt_llm]

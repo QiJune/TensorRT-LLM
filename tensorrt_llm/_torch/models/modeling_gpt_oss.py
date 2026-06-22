@@ -7,7 +7,7 @@ from tqdm import tqdm
 from transformers import GptOssConfig
 
 from tensorrt_llm._utils import get_hf_rope_theta, get_sm_version
-from tensorrt_llm.functional import PositionEmbeddingType, RotaryScalingType
+from tensorrt_llm.functional_enums import PositionEmbeddingType, RotaryScalingType
 
 from ..attention_backend import AttentionMetadata
 from ..attention_backend.interface import (PositionalEmbeddingParams,

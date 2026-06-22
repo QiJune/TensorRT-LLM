@@ -30,8 +30,8 @@ from tensorrt_llm._torch.attention_backend.fmha import (
     Fmha, get_enabled_fmha_lib_classes)
 from tensorrt_llm._utils import get_sm_version, maybe_pin_memory, prefer_pinned
 from tensorrt_llm.bindings.internal import thop
-from tensorrt_llm.functional import AttentionMaskType
-from tensorrt_llm.models.modeling_utils import QuantConfig
+from tensorrt_llm.functional_enums import AttentionMaskType
+from tensorrt_llm.quantization import QuantConfig
 
 from ..utils import (compute_swizzled_sf_shape, get_global_attrs,
                      get_model_extra_attrs)

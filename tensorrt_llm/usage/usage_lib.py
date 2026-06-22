@@ -355,7 +355,7 @@ def _extract_trtllm_config(llm_args: Any) -> Dict[str, Any]:
     """Extract TRT-LLM configuration from LlmArgs.
 
     Args:
-        llm_args: The args object from BaseLLM (TrtLlmArgs, TorchLlmArgs, etc.)
+        llm_args: The args object from BaseLLM (TorchLlmArgs, etc.)
 
     Returns:
         Dict of config values, with None for unavailable fields.
@@ -461,7 +461,7 @@ def _collect_features(llm_args: Any) -> str:
     GXT event schema (``stringVariableLength``).
 
     Args:
-        llm_args: The args object from BaseLLM (TrtLlmArgs, TorchLlmArgs, etc.)
+        llm_args: The args object from BaseLLM (TorchLlmArgs, etc.)
                   May be None.
 
     Returns:
@@ -498,7 +498,7 @@ def _collect_features(llm_args: Any) -> str:
         # CUDA graphs: two different config paths depending on backend.
         # PyTorch backend: cuda_graph_config (TorchLlmArgs only).
         #   None = disabled; CudaGraphConfig() = enabled (default).
-        # TRT backend: extended_runtime_perf_knob_config.cuda_graph_mode (TrtLlmArgs only).
+        # (The legacy TensorRT backend cuda-graph config has been removed.)
         cuda_graph_config = getattr(llm_args, "cuda_graph_config", None)
         ext_config = getattr(llm_args, "extended_runtime_perf_knob_config", None)
         if cuda_graph_config is not None:

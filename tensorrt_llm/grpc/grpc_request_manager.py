@@ -56,7 +56,7 @@ class GrpcRequestManager:
         """Initialize the request manager.
 
         Args:
-            llm: The TensorRT-LLM LLM instance (tensorrt_llm.LLM or tensorrt_llm._tensorrt_engine.LLM)
+            llm: The TensorRT-LLM LLM instance (tensorrt_llm.LLM)
         """
         self.llm = llm
         # Track active requests: request_id -> GenerationResult

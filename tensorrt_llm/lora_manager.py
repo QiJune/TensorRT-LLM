@@ -18,7 +18,6 @@ import yaml
 from tensorrt_llm.bindings import internal as tb_internal
 
 from ._utils import pad_vocab_size, release_gc, str_dtype_to_torch, torch_to_numpy
-from .layers.linear import ColumnLinear
 from .lora_helper import (
     LoraConfig,
     get_default_trtllm_modules_to_hf_modules,
@@ -556,66 +555,12 @@ def load_hf_lora(
     lora_config.lora_target_modules.extend(missing_qkv_modules)
 
     if lora_loader.is_valid:
-        config = model.config
-        torch_dtype = str_dtype_to_torch(config.dtype)
-        # the lora checkpoint might finetune the embedding
-        if lora_loader.vocab_size != 0:
-            config.vocab_size = lora_loader.vocab_size
-        mapping = config.mapping
-        if mapping.is_first_pp_rank() and lora_loader.embed_tokens is not None:
-            weight = lora_loader.embed_tokens
-            if config.use_parallel_embedding:
-                weight = split_matrix_tp(
-                    weight,
-                    mapping.tp_size,
-                    mapping.tp_rank,
-                    dim=config.embedding_sharding_dim,
-                )
-            if model.transformer.vocab_embedding.weight.raw_value.shape != weight.shape:
-                model.transformer.vocab_embedding = model.transformer.vocab_embedding.__class__(
-                    num_embeddings=config.vocab_size,
-                    embedding_dim=config.hidden_size,
-                    dtype=config.dtype,
-                    tp_size=mapping.tp_size if config.use_parallel_embedding else 1,
-                    tp_group=mapping.tp_group if config.use_parallel_embedding else None,
-                    sharding_dim=config.embedding_sharding_dim,
-                    tp_rank=mapping.tp_rank,
-                )
-            model.transformer.vocab_embedding.weight.value = weight.to(torch_dtype)
-        if mapping.is_last_pp_rank() and lora_loader.lm_head is not None:
-            weight = lora_loader.lm_head
-            vocab_size = lora_loader.vocab_size
-            if vocab_size % mapping.tp_size != 0:
-                # padding
-                vocab_size_padded = pad_vocab_size(vocab_size, mapping.tp_size)
-                pad_width = vocab_size_padded - vocab_size
-
-                weight = torch.from_numpy(
-                    np.pad(
-                        torch_to_numpy(weight),
-                        ((0, pad_width), (0, 0)),
-                        "constant",
-                        constant_values=0,
-                    )
-                )
-            else:
-                vocab_size_padded = vocab_size
-            if model.lm_head.weight.raw_value.shape != weight.shape:
-                model.lm_head = ColumnLinear(
-                    config.hidden_size,
-                    vocab_size_padded,
-                    bias=False,
-                    dtype=config.dtype,
-                    tp_group=mapping.tp_group,
-                    tp_size=mapping.tp_size,
-                    gather_output=True,
-                )
-            model.lm_head.weight.value = split_matrix_tp(
-                weight,
-                mapping.tp_size,
-                mapping.tp_rank,
-                dim=0,
-            ).to(torch_dtype)
+        # This path mutated a legacy TensorRT ``PretrainedModel`` in place
+        # (e.g. rebuilding ``model.transformer.vocab_embedding`` and
+        # ``model.lm_head`` via ``ColumnLinear``). The TensorRT backend has been
+        # removed, so this model-construction path is no longer supported.
+        raise NotImplementedError(
+            "TensorRT LoRA model construction has been removed")
 
 
 def unpack_nemo_weights(nemo_archive_path: str) -> Tuple[Dict, Dict[str, torch.Tensor]]:

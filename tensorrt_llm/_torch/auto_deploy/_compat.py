@@ -170,7 +170,7 @@ else:
 # AllReduceStrategy  (used by sharding.py which is standalone)
 # ---------------------------------------------------------------------------
 if TRTLLM_AVAILABLE:
-    from tensorrt_llm.functional import AllReduceStrategy
+    from tensorrt_llm.functional_enums import AllReduceStrategy
 else:
 
     class AllReduceStrategy(IntEnum):

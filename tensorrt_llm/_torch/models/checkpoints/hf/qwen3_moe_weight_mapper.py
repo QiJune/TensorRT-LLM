@@ -6,14 +6,12 @@ from tensorrt_llm._torch.model_config import ModelConfig
 from tensorrt_llm._torch.models.checkpoints.hf.qwen2_moe_weight_mapper import \
     Qwen2MoeHfWeightMapper
 from tensorrt_llm._torch.models.modeling_utils import register_mapper
-from tensorrt_llm.models.modeling_utils import DecoderModelForCausalLM
 
 
 @register_mapper("HF", "Qwen3MoeForCausalLM")
 class Qwen3MoeHfWeightMapper(Qwen2MoeHfWeightMapper):
 
-    def init_model_and_config(self, model: Union[nn.Module,
-                                                 DecoderModelForCausalLM],
+    def init_model_and_config(self, model: Union[nn.Module, "PreTrainedModel"],
                               config: ModelConfig):
         super().init_model_and_config(model, config)
 

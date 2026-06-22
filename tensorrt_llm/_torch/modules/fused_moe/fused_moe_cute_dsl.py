@@ -21,7 +21,7 @@ import torch
 import torch.nn.functional as F
 
 from tensorrt_llm._utils import get_sm_version, is_sm_100f
-from tensorrt_llm.models.modeling_utils import QuantAlgo
+from tensorrt_llm.quantization.mode import QuantAlgo
 
 from ...autotuner import (AutoTuner, ConstraintSpec, DynamicTensorSpec,
                           OptimizationProfile, TunableRunner, TuningConfig)

@@ -4,7 +4,7 @@ import torch
 
 from tensorrt_llm.logger import logger
 
-from ...models.modeling_utils import QuantConfig
+from ...quantization import QuantConfig
 from ..flashinfer_utils import IS_FLASHINFER_AVAILABLE
 from .interface import AttentionBackend, MLAParams, PositionalEmbeddingParams
 from .sparse import (get_flashinfer_sparse_attn_attention_backend,

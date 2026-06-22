@@ -22,9 +22,8 @@ from .llm_args import (AttentionDpConfig, AutoDecodingConfig, BatchingType,
                        SADecodingConfig, SAEnhancerConfig,
                        SaveHiddenStatesDecodingConfig, SchedulerConfig,
                        SkipSoftmaxAttentionConfig, TorchCompileConfig,
-                       TorchLlmArgs, TrtLlmArgs, UserProvidedDecodingConfig)
-from .llm_utils import (BuildConfig, KvCacheRetentionConfig, QuantAlgo,
-                        QuantConfig)
+                       TorchLlmArgs, UserProvidedDecodingConfig)
+from .llm_utils import KvCacheRetentionConfig, QuantAlgo, QuantConfig
 from .mm_encoder import MultimodalEncoder
 from .mpi_session import MpiCommSession
 from .thinking_budget import (ThinkingBudgetLogitsProcessor,
@@ -53,7 +52,6 @@ __all__ = [
     'MTPDecodingConfig',
     'SchedulerConfig',
     'CapacitySchedulerPolicy',
-    'BuildConfig',
     'QuantConfig',
     'QuantAlgo',
     'CalibConfig',
@@ -75,7 +73,6 @@ __all__ = [
     'DraftTargetDecodingConfig',
     'LlmArgs',
     'TorchLlmArgs',
-    'TrtLlmArgs',
     'AutoDecodingConfig',
     'AttentionDpConfig',
     'LoRARequest',

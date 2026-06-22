@@ -1414,7 +1414,7 @@ class TritonFusedMoE(MoE):
             Tuple[bool, Optional[str]]: (can_implement, skip_reason)
         """
         from tensorrt_llm._utils import get_sm_version
-        from tensorrt_llm.models.modeling_utils import QuantAlgo
+        from tensorrt_llm.quantization.mode import QuantAlgo
 
         from .interface import _warn_and_return
 
