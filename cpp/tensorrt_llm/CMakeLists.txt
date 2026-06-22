@@ -145,7 +145,7 @@ add_subdirectory(kernels)
 add_subdirectory(layers)
 add_subdirectory(runtime)
 add_subdirectory(testing)
-add_subdirectory(executor_worker)
+# add_subdirectory(executor_worker)  # TensorRT-engine worker removed
 
 set(BATCH_MANAGER_TARGET tensorrt_llm_batch_manager_static)
 set(BATCH_MANAGER_TARGET_ARCH ${TARGET_ARCH})
@@ -309,4 +309,4 @@ if(BUILD_FLASH_MLA)
   add_subdirectory(flash_mla)
 endif()
 
-add_subdirectory(plugins)
+# add_subdirectory(plugins)  # TensorRT plugin layer removed

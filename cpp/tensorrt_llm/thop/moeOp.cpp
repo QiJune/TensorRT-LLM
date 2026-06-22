@@ -89,7 +89,7 @@ enum class MoeLoraRequestType : int32_t
 // ---------------------------------------------------------------------------
 inline void moeLoraDeviceRunImpl(::tensorrt_llm::kernels::cutlass_kernels::MoeLoraDevicePathModule const& mod,
     int64_t num_permuted_tokens, int64_t in_hidden_size, int64_t max_lora_rank, int64_t dtype_bytes,
-    int64_t splitk_slices, void const* input_base, void* output_base, nvinfer1::DataType data_type, cudaStream_t stream)
+    int64_t splitk_slices, void const* input_base, void* output_base, tensorrt_llm::DataType data_type, cudaStream_t stream)
 {
     TLLM_CHECK_WITH_INFO(mod.permuted_ranks_dev != nullptr,
         "Device-path LoRA module is missing permuted ranks buffer (forgot to populate device_path?).");
@@ -1259,15 +1259,15 @@ private:
         }
     }
 
-    // Map a torch dtype to the TRT-LLM nvinfer1::DataType expected by LoraImpl.
-    static nvinfer1::DataType loraTypeFromActDtype(c10::ScalarType dtype)
+    // Map a torch dtype to the TRT-LLM tensorrt_llm::DataType expected by LoraImpl.
+    static tensorrt_llm::DataType loraTypeFromActDtype(c10::ScalarType dtype)
     {
         switch (dtype)
         {
-        case c10::ScalarType::Half: return nvinfer1::DataType::kHALF;
-        case c10::ScalarType::Float: return nvinfer1::DataType::kFLOAT;
+        case c10::ScalarType::Half: return tensorrt_llm::DataType::kHALF;
+        case c10::ScalarType::Float: return tensorrt_llm::DataType::kFLOAT;
 #ifdef ENABLE_BF16
-        case c10::ScalarType::BFloat16: return nvinfer1::DataType::kBF16;
+        case c10::ScalarType::BFloat16: return tensorrt_llm::DataType::kBF16;
 #endif
         default: C10_THROW_ERROR_FORMATTED(Error, "MoE LoRA only supports fp16/bf16/fp32 activation dtype.");
         }
@@ -2073,7 +2073,7 @@ private:
 
     // Compute cuBLAS LoraImpl scratch size for the current call. Returns 0 when LoRA inactive.
     size_t computeLoraWorkspaceSize(LoraImplPtr const& fc1_impl, LoraImplPtr const& fc2_impl, int64_t num_tokens,
-        int64_t experts_per_token, int64_t num_seqs, nvinfer1::DataType lora_dtype) const
+        int64_t experts_per_token, int64_t num_seqs, tensorrt_llm::DataType lora_dtype) const
     {
         int64_t const num_lora_tokens = num_tokens * experts_per_token;
         // num_reqs upper-bounded by num_lora_tokens; mirrors plugin convention.

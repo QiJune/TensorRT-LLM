@@ -26,7 +26,7 @@
 #include "tensorrt_llm/runtime/utils/runtimeUtils.h"
 #include "tensorrt_llm/runtime/worldConfig.h"
 
-#include <NvInferRuntime.h>
+#include "tensorrt_llm/common/tllmDataType.h"
 
 namespace tensorrt_llm::runtime
 {

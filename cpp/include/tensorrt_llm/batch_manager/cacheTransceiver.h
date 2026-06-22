@@ -233,7 +233,7 @@ class CacheTransceiver : public BaseCacheTransceiver
 public:
     CacheTransceiver(kv_cache_manager::BaseKVCacheManager* cacheManager,
         executor::kv_cache::CacheState::ModelConfig const& cacheStateModelCfg, runtime::WorldConfig const& worldConfig,
-        std::vector<SizeType32> const& attentionLayerNumPerPP, nvinfer1::DataType dataType,
+        std::vector<SizeType32> const& attentionLayerNumPerPP, tensorrt_llm::DataType dataType,
         executor::kv_cache::CacheState::AttentionType attentionType
         = executor::kv_cache::CacheState::AttentionType::kDEFAULT,
         std::optional<executor::CacheTransceiverConfig> cacheTransceiverConfig = std::nullopt,
@@ -242,7 +242,7 @@ public:
 
     CacheTransceiver(kv_cache_manager::BaseKVCacheManager* cacheManager, std::vector<SizeType32> numKvHeadsPerLayer,
         SizeType32 sizePerHead, SizeType32 tokensPerBlock, runtime::WorldConfig const& worldConfig,
-        std::vector<SizeType32> const& attentionLayerNumPerPP, nvinfer1::DataType dataType,
+        std::vector<SizeType32> const& attentionLayerNumPerPP, tensorrt_llm::DataType dataType,
         executor::kv_cache::CacheState::AttentionType attentionType
         = executor::kv_cache::CacheState::AttentionType::kDEFAULT,
         std::optional<executor::CacheTransceiverConfig> cacheTransceiverConfig = std::nullopt,

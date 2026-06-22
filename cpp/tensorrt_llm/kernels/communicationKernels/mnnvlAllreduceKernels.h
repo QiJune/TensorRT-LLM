@@ -18,7 +18,7 @@
 
 #include "tensorrt_llm/common/config.h"
 #include "tensorrt_llm/kernels/communicationKernels/allReduceFusionKernels.h"
-#include <NvInferRuntime.h>
+#include "tensorrt_llm/common/tllmDataType.h"
 #include <cstdint>
 
 TRTLLM_NAMESPACE_BEGIN
@@ -41,7 +41,7 @@ struct AllReduceFusionParams
 
     int nRanks;               //!< Total number of participating ranks in the AllReduce operation
     int rank;                 //!< Current rank ID
-    nvinfer1::DataType dType; //!< Data type of the tensors (e.g., FP16, BF16, FP32)
+    tensorrt_llm::DataType dType; //!< Data type of the tensors (e.g., FP16, BF16, FP32)
     int numTokens;            //!< Number of tokens in the input tensor
     int tokenDim;             //!< Hidden Dimension
     void** bufferPtrsDev;     //!< Unicast Device pointers to communication buffers for each rank

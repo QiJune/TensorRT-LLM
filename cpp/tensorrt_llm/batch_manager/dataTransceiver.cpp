@@ -20,7 +20,6 @@
 #include "tensorrt_llm/batch_manager/cacheFormatter.h"
 #include "tensorrt_llm/batch_manager/common.h"
 #include "tensorrt_llm/batch_manager/kvCacheUtils.h"
-#include "tensorrt_llm/batch_manager/runtimeBuffers.h"
 #include "tensorrt_llm/common/envUtils.h"
 #include "tensorrt_llm/common/logger.h"
 #include "tensorrt_llm/common/tllmException.h"
@@ -735,8 +734,8 @@ private:
 
 public:
     void setRnnConfig(executor::kv_cache::CacheState::RnnModelConfig rnnModelConfig,
-        std::vector<SizeType32> rnnLayerNumPerPP, nvinfer1::DataType convStateDataType,
-        nvinfer1::DataType ssmStateDataType)
+        std::vector<SizeType32> rnnLayerNumPerPP, tensorrt_llm::DataType convStateDataType,
+        tensorrt_llm::DataType ssmStateDataType)
     {
         mCacheTransferLayer.setRnnConfig(rnnModelConfig, rnnLayerNumPerPP, convStateDataType, ssmStateDataType);
         mSelfState.setCacheState(mCacheTransferLayer.getCacheState());
@@ -1225,8 +1224,8 @@ private:
 
 public:
     void setRnnConfig(executor::kv_cache::CacheState::RnnModelConfig rnnModelConfig,
-        std::vector<SizeType32> rnnLayerNumPerPP, nvinfer1::DataType convStateDataType,
-        nvinfer1::DataType ssmStateDataType)
+        std::vector<SizeType32> rnnLayerNumPerPP, tensorrt_llm::DataType convStateDataType,
+        tensorrt_llm::DataType ssmStateDataType)
     {
         mCacheTransferLayer.setRnnConfig(rnnModelConfig, rnnLayerNumPerPP, convStateDataType, ssmStateDataType);
         mSelfState.setCacheState(mCacheTransferLayer.getCacheState());
@@ -1302,7 +1301,7 @@ void CacheSender::sendReadySignal(LlmRequest::RequestIdType requestId, bool isRe
 }
 
 void CacheSender::setRnnConfig(executor::kv_cache::CacheState::RnnModelConfig rnnModelConfig,
-    std::vector<SizeType32> rnnLayerNumPerPP, nvinfer1::DataType convStateDataType, nvinfer1::DataType ssmStateDataType)
+    std::vector<SizeType32> rnnLayerNumPerPP, tensorrt_llm::DataType convStateDataType, tensorrt_llm::DataType ssmStateDataType)
 {
     mImpl->setRnnConfig(std::move(rnnModelConfig), std::move(rnnLayerNumPerPP), convStateDataType, ssmStateDataType);
 }
@@ -1341,7 +1340,7 @@ bool CacheReceiver::receiveReadySignal(TransferSession& session)
 }
 
 void CacheReceiver::setRnnConfig(executor::kv_cache::CacheState::RnnModelConfig rnnModelConfig,
-    std::vector<SizeType32> rnnLayerNumPerPP, nvinfer1::DataType convStateDataType, nvinfer1::DataType ssmStateDataType)
+    std::vector<SizeType32> rnnLayerNumPerPP, tensorrt_llm::DataType convStateDataType, tensorrt_llm::DataType ssmStateDataType)
 {
     mImpl->setRnnConfig(std::move(rnnModelConfig), std::move(rnnLayerNumPerPP), convStateDataType, ssmStateDataType);
 }

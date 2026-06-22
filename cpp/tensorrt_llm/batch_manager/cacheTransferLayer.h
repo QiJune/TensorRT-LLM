@@ -79,8 +79,8 @@ public:
     /// @brief Update the RNN config on the internal CacheState.
     /// Used by CppMambaHybridCacheManager path where RNN config is set after construction.
     void setRnnConfig(executor::kv_cache::CacheState::RnnModelConfig rnnModelConfig,
-        std::vector<SizeType32> rnnLayerNumPerPP, nvinfer1::DataType convStateDataType,
-        nvinfer1::DataType ssmStateDataType);
+        std::vector<SizeType32> rnnLayerNumPerPP, tensorrt_llm::DataType convStateDataType,
+        tensorrt_llm::DataType ssmStateDataType);
 
     [[nodiscard]] kv_cache_manager::BaseKVCacheManager* getCacheManager() const noexcept;
 

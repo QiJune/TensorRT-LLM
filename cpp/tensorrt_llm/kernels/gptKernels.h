@@ -227,11 +227,11 @@ struct BuildDecoderInfoParams
     std::string toString() const
     {
         std::stringstream ss;
-        auto printTensor = [&ss](char const* name, void* ptr, nvinfer1::Dims shape)
+        auto printTensor = [&ss](char const* name, void* ptr, tensorrt_llm::Dims shape)
         {
             ss << name << ": ";
             if (ptr)
-                ss << *(runtime::ITensor::wrap((void*) ptr, nvinfer1::DataType::kINT32, shape));
+                ss << *(runtime::ITensor::wrap((void*) ptr, tensorrt_llm::DataType::kINT32, shape));
             else
                 ss << "nullptr";
             ss << std::endl;

@@ -65,7 +65,7 @@ size_t RnnCacheTransBufferManager::computeTransferBufferSize(
 RnnCacheTransBufferManager::RnnCacheTransBufferManager(
     RnnStateManager* rnnStateManager, std::optional<size_t> maxNumTokens)
     : BaseTransBufferManager(computeTransferBufferSize(rnnStateManager, maxNumTokens),
-        nvinfer1::DataType::kUINT8, // Use byte buffer for mixed dtypes
+        tensorrt_llm::DataType::kUINT8, // Use byte buffer for mixed dtypes
         maxNumTokens)
     , mRnnStateManager{rnnStateManager}
 {
@@ -141,7 +141,7 @@ size_t RnnCacheTransBufferManager::computeTransferBufferSizeFromPool(
 RnnCacheTransBufferManager::RnnCacheTransBufferManager(kv_cache_manager::BaseKVCacheManager* kvCacheManager,
     executor::kv_cache::CacheState const& cacheState, std::optional<size_t> maxNumTokens)
     : BaseTransBufferManager(computeTransferBufferSizeFromPool(kvCacheManager, cacheState, maxNumTokens),
-        nvinfer1::DataType::kUINT8, maxNumTokens)
+        tensorrt_llm::DataType::kUINT8, maxNumTokens)
     , mRnnStateManager{nullptr}
 {
     TLLM_CHECK(kvCacheManager != nullptr);

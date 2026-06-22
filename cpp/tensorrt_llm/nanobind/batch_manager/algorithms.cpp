@@ -23,7 +23,6 @@
 #include "tensorrt_llm/batch_manager/createNewDecoderRequests.h"
 #include "tensorrt_llm/batch_manager/kvCacheManager.h"
 #include "tensorrt_llm/batch_manager/llmRequest.h"
-#include "tensorrt_llm/batch_manager/logitsPostProcessor.h"
 #include "tensorrt_llm/batch_manager/medusaBuffers.h"
 #include "tensorrt_llm/batch_manager/microBatchScheduler.h"
 #include "tensorrt_llm/batch_manager/pauseRequests.h"
@@ -127,12 +126,6 @@ void tensorrt_llm::nanobind::batch_manager::algorithms::initBindings(nb::module_
             nb::call_guard<nb::gil_scoped_release>())
         .def("name", [](AllocateKvCache const&) { return AllocateKvCache::name; });
 
-    nb::class_<LogitsPostProcessor>(m, LogitsPostProcessor::name)
-        .def(nb::init<>())
-        .def("__call__", &LogitsPostProcessor::operator(), nb::arg("decoder_input_buffers"),
-            nb::arg("replicate_logits_post_processor"), nb::arg("world_config"), nb::arg("stream"),
-            nb::arg("logits_post_processor_batched") = std::nullopt)
-        .def("name", [](LogitsPostProcessor const&) { return LogitsPostProcessor::name; });
 
     nb::class_<CreateNewDecoderRequests>(m, CreateNewDecoderRequests::name)
         .def(nb::init<bool, bool, bool>(), nb::arg("speculative_decoding_fast_logits"),
@@ -141,7 +134,7 @@ void tensorrt_llm::nanobind::batch_manager::algorithms::initBindings(nb::module_
             "__call__",
             [](CreateNewDecoderRequests& self, tr::ModelConfig const& modelConfig, tr::WorldConfig const& worldConfig,
                 executor::DecodingConfig const& decodingConfig, RequestVector const& contextRequests,
-                nvinfer1::DataType logitsType, DecoderInputBuffers& inputBuffers,
+                tensorrt_llm::DataType logitsType, DecoderInputBuffers& inputBuffers,
                 runtime::decoder::DecoderState& decoderState, tensorrt_llm::runtime::CudaStream const& runtimeStream,
                 tensorrt_llm::runtime::CudaStream const& decoderStream, SizeType32 maxSequenceLength,
                 SizeType32 beamWidth)

@@ -795,15 +795,15 @@ void allreduce_fusion_op(AllReduceFusionParams const& params)
     }
 
 #define DISPATCH_DTYPE(NRanks)                                                                                         \
-    if (params.dtype == nvinfer1::DataType::kHALF)                                                                     \
+    if (params.dtype == tensorrt_llm::DataType::kHALF)                                                                     \
     {                                                                                                                  \
         DISPATCH_PATTERN(half, NRanks);                                                                                \
     }                                                                                                                  \
-    else if (params.dtype == nvinfer1::DataType::kBF16)                                                                \
+    else if (params.dtype == tensorrt_llm::DataType::kBF16)                                                                \
     {                                                                                                                  \
         DISPATCH_PATTERN(__nv_bfloat16, NRanks);                                                                       \
     }                                                                                                                  \
-    else if (params.dtype == nvinfer1::DataType::kFLOAT)                                                               \
+    else if (params.dtype == tensorrt_llm::DataType::kFLOAT)                                                               \
     {                                                                                                                  \
         DISPATCH_PATTERN(float, NRanks);                                                                               \
     }                                                                                                                  \

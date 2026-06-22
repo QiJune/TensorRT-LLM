@@ -83,7 +83,7 @@ private:
 
     TensorPtr mTemperature;
 
-    std::optional<nvinfer1::DataType> mDecoderDtype{std::nullopt};
+    std::optional<tensorrt_llm::DataType> mDecoderDtype{std::nullopt};
 };
 
 } // namespace tensorrt_llm::layers

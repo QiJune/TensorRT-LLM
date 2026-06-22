@@ -197,7 +197,7 @@ protected:
     /// @param dataType Data type for the buffers.
     /// @param maxNumTokens Optional max tokens for sizing.
     BaseTransBufferManager(
-        size_t transferBufferSize, nvinfer1::DataType dataType, std::optional<size_t> maxNumTokens = std::nullopt);
+        size_t transferBufferSize, tensorrt_llm::DataType dataType, std::optional<size_t> maxNumTokens = std::nullopt);
 
     struct ConcurrenceResource
     {
@@ -224,7 +224,7 @@ protected:
     bool mOnlyUseDynamicBuffer;
     bool mUseFabricMemory;
     size_t mNumberOfElements;
-    nvinfer1::DataType mDataType;
+    tensorrt_llm::DataType mDataType;
     ConcurrenceResource mConcurrenceSendResource;
     ConcurrenceResource mConcurrenceRecvResource;
     runtime::BufferManager mBufferManager;

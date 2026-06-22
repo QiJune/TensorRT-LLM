@@ -249,8 +249,8 @@ if(ENABLE_MULTI_DEVICE)
 endif()
 
 # TRT dependencies
-find_package(TensorRT 10 REQUIRED COMPONENTS OnnxParser)
-set(TRT_LIB TensorRT::NvInfer)
+# TensorRT dependency removed: the C++ tree no longer links the TensorRT library.
+set(TRT_LIB "")
 
 get_filename_component(TRT_LLM_ROOT_DIR ${CMAKE_CURRENT_SOURCE_DIR} PATH)
 
@@ -291,7 +291,6 @@ include_directories(
   ${CUDAToolkit_INCLUDE_DIRS}
   ${CUDAToolkit_INCLUDE_DIRS}/cccl
   ${CUDNN_ROOT_DIR}/include
-  $<TARGET_PROPERTY:TensorRT::NvInfer,INTERFACE_INCLUDE_DIRECTORIES>
   ${maybe_nvtx_includedir}
   ${CMAKE_BINARY_DIR}/_deps/cutlass-src/include
   ${CMAKE_BINARY_DIR}/_deps/cutlass-src/tools/util/include
@@ -683,6 +682,6 @@ if(MEASURE_BUILD_TIME)
 endif()
 
 set(BUILD_WHEEL_TARGETS
-    tensorrt_llm;nvinfer_plugin_tensorrt_llm
+    tensorrt_llm
     CACHE STRING "Targets used to build wheel")
 add_custom_target(build_wheel_targets DEPENDS ${BUILD_WHEEL_TARGETS})
