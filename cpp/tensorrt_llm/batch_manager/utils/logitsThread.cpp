@@ -124,7 +124,7 @@ void draftModelSendLogitsThread(int device, std::atomic<bool>* draftModelThreadS
 }
 
 void targetModelReceiveLogits(runtime::ITensor::SharedPtr& draftLogitsHost,
-    executor::SpeculativeDecodingFastLogitsInfo const& fastLogitsInfo, nvinfer1::DataType logitsDtype)
+    executor::SpeculativeDecodingFastLogitsInfo const& fastLogitsInfo, tensorrt_llm::DataType logitsDtype)
 {
 #if ENABLE_MULTI_DEVICE
     auto const& worldComm = tensorrt_llm::mpi::MpiComm::world();

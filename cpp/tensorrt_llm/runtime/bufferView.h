@@ -70,7 +70,7 @@ public:
         return mBuffer->getCapacity() - mOffset;
     }
 
-    [[nodiscard]] nvinfer1::DataType getDataType() const override
+    [[nodiscard]] tensorrt_llm::DataType getDataType() const override
     {
         return mBuffer->getDataType();
     }

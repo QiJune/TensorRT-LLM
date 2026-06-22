@@ -10,7 +10,7 @@ from triton_kernels.numerics import InFlexData
 from tensorrt_llm._torch.peft.lora.layer import LoraLayer
 from tensorrt_llm.mapping import Mapping
 
-from ...models.modeling_utils import QuantConfig
+from ...quantization import QuantConfig
 from .fused_moe.fused_moe_triton import (swizzle_weight_and_scale,
                                          update_weight_stride)
 from .linear import (Linear, LinearMethodBase, TensorParallelMode,

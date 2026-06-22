@@ -62,12 +62,12 @@ std::shared_ptr<MulticastBuffer> MulticastTensorView::lock() const
 ///////////////////////////////////////
 // MulticastTensorView ITensor methods
 ///////////////////////////////////////
-nvinfer1::Dims const& MulticastTensorView::getShape() const
+tensorrt_llm::Dims const& MulticastTensorView::getShape() const
 {
     return mDims;
 }
 
-void MulticastTensorView::reshape(nvinfer1::Dims const& dims)
+void MulticastTensorView::reshape(tensorrt_llm::Dims const& dims)
 {
     auto new_size = nonNegative(volume(dims));
     if (new_size > getCapacity())
@@ -102,7 +102,7 @@ std::size_t MulticastTensorView::getCapacity() const
     return lock()->getCapacity();
 }
 
-nvinfer1::DataType MulticastTensorView::getDataType() const
+tensorrt_llm::DataType MulticastTensorView::getDataType() const
 {
     return lock()->getDataType();
 }

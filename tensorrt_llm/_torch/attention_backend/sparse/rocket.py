@@ -24,7 +24,7 @@ from tensorrt_llm.bindings.executor import KvCacheConfig
 from tensorrt_llm.bindings.internal.batch_manager import \
     CacheType as CacheTypeCpp
 from tensorrt_llm.mapping import Mapping
-from tensorrt_llm.models.modeling_utils import QuantConfig
+from tensorrt_llm.quantization import QuantConfig
 
 if TYPE_CHECKING:
     from tensorrt_llm.llmapi.llm_args import (DecodingBaseConfig,

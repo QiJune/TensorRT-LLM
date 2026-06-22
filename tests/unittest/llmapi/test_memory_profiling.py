@@ -1,17 +1,32 @@
 import pytest
 import torch
 
+from dataclasses import dataclass
+from typing import Optional
+
 from tensorrt_llm._torch.pyexecutor.py_executor_creator import \
     create_py_executor
 from tensorrt_llm._torch.pyexecutor.resource_manager import ResourceManagerType
-from tensorrt_llm.llmapi import (BuildConfig, CapacitySchedulerPolicy,
-                                 DynamicBatchConfig, SchedulerConfig)
+from tensorrt_llm.llmapi import (CapacitySchedulerPolicy, DynamicBatchConfig,
+                                 SchedulerConfig)
 from tensorrt_llm.llmapi.llm_args import (CudaGraphConfig, KvCacheConfig,
                                           TorchLlmArgs)
 
 # isort: off
 from .test_llm import get_model_path
 # isort: on
+
+
+# The legacy TensorRT `BuildConfig` has been removed along with the TensorRT
+# backend. This PyTorch test only used it as a small holder for the
+# max_batch_size / max_num_tokens / max_beam_width / max_seq_len values that are
+# forwarded to the PyTorch executor, so a minimal stand-in is sufficient.
+@dataclass
+class BuildConfig:
+    max_batch_size: int = 2048
+    max_num_tokens: int = 8192
+    max_beam_width: int = 1
+    max_seq_len: Optional[int] = None
 
 pytestmark = pytest.mark.threadleak(enabled=False)
 

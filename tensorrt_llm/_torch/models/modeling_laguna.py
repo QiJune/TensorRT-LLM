@@ -21,7 +21,7 @@ import torch.nn.functional as F
 from torch import nn
 from transformers import PretrainedConfig
 
-from tensorrt_llm.functional import PositionEmbeddingType, RotaryScalingType
+from tensorrt_llm.functional_enums import PositionEmbeddingType, RotaryScalingType
 
 from ..attention_backend import AttentionMetadata
 from ..attention_backend.interface import (

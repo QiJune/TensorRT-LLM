@@ -22,7 +22,7 @@ import triton.language as tl
 import tensorrt_llm.quantization.utils.fp8_utils as fp8_utils
 from tensorrt_llm import deep_gemm
 from tensorrt_llm._utils import get_sm_version, nvtx_range
-from tensorrt_llm.models.modeling_utils import QuantAlgo
+from tensorrt_llm.quantization.mode import QuantAlgo
 
 from ...distributed import allgather
 from ...memory_buffer_utils import get_memory_buffers

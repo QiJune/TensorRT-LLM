@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from torch import Size, Tensor, nn
 from transformers import NemotronConfig
 
-from tensorrt_llm.functional import PositionEmbeddingType
+from tensorrt_llm.functional_enums import PositionEmbeddingType
 
 from ..attention_backend import AttentionMetadata
 from ..attention_backend.interface import PositionalEmbeddingParams, RopeParams

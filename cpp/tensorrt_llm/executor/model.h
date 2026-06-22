@@ -87,7 +87,7 @@ public:
     [[nodiscard]] virtual SizeType32 getMaxDraftLen() const = 0;
     [[nodiscard]] virtual SizeType32 getNumMicroBatches() const = 0;
     [[nodiscard]] virtual SizeType32 getOperatingBeamWidth() const = 0;
-    [[nodiscard]] virtual nvinfer1::DataType getLogitDataType() const = 0;
+    [[nodiscard]] virtual tensorrt_llm::DataType getLogitDataType() const = 0;
     [[nodiscard]] virtual runtime::WorldConfig const& getWorldConfig() const = 0;
     [[nodiscard]] virtual runtime::ModelConfig const& getModelConfig() const = 0;
     [[nodiscard]] virtual runtime::BufferManager const& getBufferManager() const = 0;
@@ -95,8 +95,8 @@ public:
     [[nodiscard]] virtual IterationType getIterCounter() const noexcept = 0;
     [[nodiscard]] virtual bool hasSpeculativeDecodingFastLogits() const noexcept = 0;
     [[nodiscard]] virtual bool getGatherGenerationLogits() const = 0;
-    [[nodiscard]] virtual nvinfer1::DataType getTensorDataType(std::string const& name) const = 0;
-    [[nodiscard]] virtual nvinfer1::Dims getTensorShape(std::string const& name) const = 0;
+    [[nodiscard]] virtual tensorrt_llm::DataType getTensorDataType(std::string const& name) const = 0;
+    [[nodiscard]] virtual tensorrt_llm::Dims getTensorShape(std::string const& name) const = 0;
 
     /// @brief Function that provides per iteration stats specific to a certain model
     /// @param stats The json object to write stats to

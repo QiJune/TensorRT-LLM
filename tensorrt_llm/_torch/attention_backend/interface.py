@@ -14,11 +14,11 @@ if TYPE_CHECKING:
     from ..speculative.spec_tree_manager import SpecTreeManager
 
 from tensorrt_llm._utils import get_hf_rope_theta, maybe_pin_memory
-from tensorrt_llm.functional import (AttentionMaskType, PositionEmbeddingType,
+from tensorrt_llm.functional_enums import (AttentionMaskType, PositionEmbeddingType,
                                      RopeEmbeddingUtils, RotaryScalingType)
 from tensorrt_llm.logger import logger
 from tensorrt_llm.mapping import Mapping
-from tensorrt_llm.models.modeling_utils import QuantConfig
+from tensorrt_llm.quantization import QuantConfig
 
 from ..memory_buffer_utils import Buffers
 from ..metadata import KVCacheParams

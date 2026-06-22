@@ -17,8 +17,6 @@ import os
 import sys
 from typing import Dict, Optional
 
-import tensorrt as trt
-
 try:
     from polygraphy.logger import G_LOGGER
 except ImportError:
@@ -75,7 +73,6 @@ _MODULE_ABBREVIATIONS = {
     "flash_mla": "flashmla",
     "quantization": "quantize",
     "scaffolding": "scaffold",
-    "_tensorrt_engine": "trt_engn",
     "visual_gen": "vis_gen",
     "__pycache__": "pycache",
     "tokenizer": "tokenizr",
@@ -186,7 +183,11 @@ class Logger(metaclass=Singleton):
             min_severity = self.DEFAULT_LEVEL
 
         self._min_severity = min_severity
-        self._trt_logger = trt.Logger(severity_map[min_severity][0])
+        # Do not create a TensorRT logger at construction; the logger object is
+        # instantiated at module import and importing tensorrt must not be
+        # required. The TRT logger is created lazily via the ``trt_logger``
+        # property if and when something actually needs it.
+        self._trt_logger = None
         self._logger = logging.getLogger(self.PREFIX)
         self._logger.propagate = False
         handler = logging.StreamHandler(stream=sys.stdout)
@@ -269,7 +270,10 @@ class Logger(metaclass=Singleton):
             raise AttributeError(f"No such severity: {severity}")
 
     @property
-    def trt_logger(self) -> trt.ILogger:
+    def trt_logger(self) -> "trt.ILogger":
+        if self._trt_logger is None:
+            import tensorrt as trt
+            self._trt_logger = trt.Logger(severity_map[self._min_severity][0])
         return self._trt_logger
 
     def log(self, severity, *msg):
@@ -338,20 +342,24 @@ class Logger(metaclass=Singleton):
             )
             return
         self._min_severity = min_severity
-        self._trt_logger.min_severity = severity_map[min_severity][0]
+        if self._trt_logger is not None:
+            self._trt_logger.min_severity = severity_map[min_severity][0]
         self._logger.setLevel(severity_map[min_severity][1])
         if self._polygraphy_logger is not None:
             self._polygraphy_logger.module_severity = severity_map[min_severity][2]
 
 
 severity_map = {
-    "internal_error": [trt.Logger.INTERNAL_ERROR, logging.CRITICAL],
-    "error": [trt.Logger.ERROR, logging.ERROR],
-    "warning": [trt.Logger.WARNING, logging.WARNING],
-    "info": [trt.Logger.INFO, logging.INFO],
-    "verbose": [trt.Logger.VERBOSE, logging.DEBUG],
-    "debug": [trt.Logger.VERBOSE, logging.DEBUG],
-    "trace": [trt.Logger.VERBOSE, logging.DEBUG],
+    # The first element is the TensorRT severity integer
+    # (INTERNAL_ERROR=0, ERROR=1, WARNING=2, INFO=3, VERBOSE=4) so that this
+    # module imports without requiring the ``tensorrt`` package.
+    "internal_error": [0, logging.CRITICAL],
+    "error": [1, logging.ERROR],
+    "warning": [2, logging.WARNING],
+    "info": [3, logging.INFO],
+    "verbose": [4, logging.DEBUG],
+    "debug": [4, logging.DEBUG],
+    "trace": [4, logging.DEBUG],
 }
 
 if G_LOGGER is not None:

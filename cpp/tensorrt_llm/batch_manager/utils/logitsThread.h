@@ -46,6 +46,6 @@ void draftModelSendLogitsThread(int device, std::atomic<bool>* draftModelThreadS
     std::mutex* draftRequestsMtx);
 
 void targetModelReceiveLogits(runtime::ITensor::SharedPtr& draftLogitsHost,
-    executor::SpeculativeDecodingFastLogitsInfo const& fastLogitsInfo, nvinfer1::DataType logitsDtype);
+    executor::SpeculativeDecodingFastLogitsInfo const& fastLogitsInfo, tensorrt_llm::DataType logitsDtype);
 
 } // namespace tensorrt_llm::batch_manager::utils

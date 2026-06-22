@@ -13,7 +13,6 @@ import filelock
 from pydantic import Field, model_validator
 
 import tensorrt_llm
-from tensorrt_llm.builder import BuildConfig
 from tensorrt_llm.llmapi.utils import (StrictBaseModel, enable_llm_debug,
                                        print_colored)
 from tensorrt_llm.logger import logger
@@ -87,24 +86,19 @@ class BuildCache:
         return 0
 
     def get_engine_building_cache_stage(self,
-                                        build_config: BuildConfig,
+                                        build_config,
                                         model_path: Optional[Path] = None,
                                         force_rebuild: bool = False,
                                         **kwargs) -> 'CachedStage':
         '''
         Get the build step for engine building.
+
+        This relied on the legacy TensorRT ``BuildConfig`` for cache-key
+        hashing. The TensorRT backend has been removed, so engine-building
+        cache staging is no longer supported.
         '''
-        build_config_str = json.dumps(self.prune_build_config_for_cache_key(
-            build_config.model_dump(mode="json")),
-                                      sort_keys=True)
-
-        kwargs_str = json.dumps(kwargs, sort_keys=True)
-
-        return CachedStage(parent=self,
-                           kind=CacheRecord.Kind.Engine,
-                           cache_root=self.cache_root,
-                           force_rebuild=force_rebuild,
-                           inputs=[build_config_str, model_path, kwargs_str])
+        raise NotImplementedError(
+            "TensorRT engine-building cache staging has been removed")
 
     def prune_caches(self, has_incoming_record: bool = False):
         '''

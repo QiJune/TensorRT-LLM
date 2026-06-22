@@ -626,8 +626,8 @@ kv_cache::CacheState Serialization::deserializeCacheState(std::istream& is)
     auto hasRnnConfig = su::deserialize<bool>(is);
     std::optional<CacheState::RnnModelConfig> rnnModelConfig;
     std::vector<SizeType32> rnnLayerNumPerPP;
-    nvinfer1::DataType convStateDataType{nvinfer1::DataType::kFLOAT};
-    nvinfer1::DataType ssmStateDataType{nvinfer1::DataType::kFLOAT};
+    tensorrt_llm::DataType convStateDataType{tensorrt_llm::DataType::kFLOAT};
+    tensorrt_llm::DataType ssmStateDataType{tensorrt_llm::DataType::kFLOAT};
     if (hasRnnConfig)
     {
         CacheState::RnnModelConfig rnnCfg;
@@ -641,8 +641,8 @@ kv_cache::CacheState Serialization::deserializeCacheState(std::istream& is)
         rnnCfg.mNumHeads = su::deserialize<decltype(CacheState::RnnModelConfig::mNumHeads)>(is);
         rnnCfg.mConvSectionLayout
             = static_cast<CacheState::RnnModelConfig::ConvSectionLayout>(su::deserialize<SizeType32>(is));
-        convStateDataType = su::deserialize<nvinfer1::DataType>(is);
-        ssmStateDataType = su::deserialize<nvinfer1::DataType>(is);
+        convStateDataType = su::deserialize<tensorrt_llm::DataType>(is);
+        ssmStateDataType = su::deserialize<tensorrt_llm::DataType>(is);
         rnnLayerNumPerPP = su::deserialize<std::vector<SizeType32>>(is);
         rnnModelConfig = std::move(rnnCfg);
     }

@@ -15,11 +15,12 @@ from tensorrt_llm._utils import mpi_comm, mpi_disabled
 from tensorrt_llm.bindings import internal as _tllm_internal
 from tensorrt_llm.bindings.internal.runtime import McastGPUBuffer
 from tensorrt_llm.bindings.internal.thop import BufferKind
-from tensorrt_llm.functional import (AllReduceFusionOp, AllReduceParams,
+from tensorrt_llm.functional_enums import (AllReduceFusionOp, AllReduceParams,
                                      AllReduceStrategy, MoEAllReduceParams)
 from tensorrt_llm.logger import logger
 from tensorrt_llm.mapping import Mapping
-from tensorrt_llm.plugin.plugin import CustomAllReduceHelper
+from tensorrt_llm._torch.distributed.allreduce_helper import \
+    CustomAllReduceHelper
 
 # Feature flag: GEMM→NCCL-window zero-copy (writes GEMM output directly into
 # the window buffer so the allreduce needs no extra copy).  On by default

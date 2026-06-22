@@ -17,7 +17,7 @@
 
 #pragma once
 
-#include "NvInfer.h"
+#include "tensorrt_llm/common/tllmDataType.h"
 #include "tensorrt_llm/runtime/common.h"
 #include "tensorrt_llm/runtime/modelConfig.h"
 #include "tensorrt_llm/runtime/speculativeDecodingMode.h"
@@ -50,7 +50,7 @@ enum class OutputContentType
 class ModelSpec
 {
 public:
-    ModelSpec(std::string const& inputFile, nvinfer1::DataType dtype,
+    ModelSpec(std::string const& inputFile, tensorrt_llm::DataType dtype,
         std::shared_ptr<ModelSpec> otherModelSpecToCompare = nullptr)
         : mInputFile{std::move(inputFile)}
         , mDataType{dtype}
@@ -294,14 +294,14 @@ public:
 
     static ModelSpec getDefaultModelSpec()
     {
-        static ModelSpec modelSpec{"input_tokens.npy", nvinfer1::DataType::kHALF};
+        static ModelSpec modelSpec{"input_tokens.npy", tensorrt_llm::DataType::kHALF};
         modelSpec.useGptAttentionPlugin().setKVCacheType(KVCacheType::kPAGED).usePackedInput();
 
         return modelSpec;
     }
 
     std::string mInputFile;
-    nvinfer1::DataType mDataType;
+    tensorrt_llm::DataType mDataType;
 
     bool mUseGptAttentionPlugin{false};
     bool mUsePackedInput{false};

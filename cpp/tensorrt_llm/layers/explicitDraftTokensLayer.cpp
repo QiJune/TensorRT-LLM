@@ -93,15 +93,15 @@ void ExplicitDraftTokensLayer<T>::setup(SizeType32 batchSize, SizeType32 beamWid
         batchSlots, getLimitsPenalty(DecodingPenaltyType::Temperature), "temperature penalty");
 
     // Dispatch context buffer fill
-    if (mDecoderDtype == nvinfer1::DataType::kFLOAT)
+    if (mDecoderDtype == tensorrt_llm::DataType::kFLOAT)
     {
         fillContextBuffers<float>(batchSize, batchSlots, *setupParams, workspace);
     }
-    else if (mDecoderDtype == nvinfer1::DataType::kHALF)
+    else if (mDecoderDtype == tensorrt_llm::DataType::kHALF)
     {
         fillContextBuffers<half>(batchSize, batchSlots, *setupParams, workspace);
     }
-    else if (mDecoderDtype == nvinfer1::DataType::kBF16)
+    else if (mDecoderDtype == tensorrt_llm::DataType::kBF16)
     {
         fillContextBuffers<__nv_bfloat16>(batchSize, batchSlots, *setupParams, workspace);
     }
@@ -126,15 +126,15 @@ void ExplicitDraftTokensLayer<T>::forwardAsync(std::shared_ptr<BaseDecodingOutpu
     convertPackedMask(*outputs, *inputs, workspace);
 
     // Slice output ids, pos ids, next draft tokens.
-    if (mDecoderDtype == nvinfer1::DataType::kFLOAT)
+    if (mDecoderDtype == tensorrt_llm::DataType::kFLOAT)
     {
         splitInputDataToBatchSlots<float>(*outputs, *inputs, workspace);
     }
-    else if (mDecoderDtype == nvinfer1::DataType::kHALF)
+    else if (mDecoderDtype == tensorrt_llm::DataType::kHALF)
     {
         splitInputDataToBatchSlots<half>(*outputs, *inputs, workspace);
     }
-    else if (mDecoderDtype == nvinfer1::DataType::kBF16)
+    else if (mDecoderDtype == tensorrt_llm::DataType::kBF16)
     {
         splitInputDataToBatchSlots<__nv_bfloat16>(*outputs, *inputs, workspace);
     }

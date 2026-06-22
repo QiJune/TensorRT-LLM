@@ -18,7 +18,7 @@ from typing import Optional, Tuple, Union
 import torch
 
 from tensorrt_llm._utils import get_sm_version, nvtx_range
-from tensorrt_llm.models.modeling_utils import QuantAlgo
+from tensorrt_llm.quantization.mode import QuantAlgo
 
 from ...utils import ActivationType, Fp4QuantizedTensor
 from .fused_moe_cute_dsl import CuteDslFusedMoE

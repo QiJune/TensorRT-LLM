@@ -27,7 +27,6 @@ import torch
 import transformers
 
 from tensorrt_llm import LLM as LLM_torch
-from tensorrt_llm._tensorrt_engine import LLM
 from tensorrt_llm.bindings import executor as tllm
 from tensorrt_llm.executor import (GenerationExecutorWorker, GenerationRequest,
                                    GenerationResult, GenerationResultBase,
@@ -38,10 +37,10 @@ from tensorrt_llm.llmapi import (BuildCacheConfig, EagleDecodingConfig,
                                  KvCacheRetentionConfig,
                                  LookaheadDecodingConfig, MedusaDecodingConfig,
                                  RequestOutput)
-from tensorrt_llm.llmapi import TrtLlmArgs as LlmArgs
+from tensorrt_llm.llmapi import LlmArgs
 from tensorrt_llm.llmapi.llm_args import (DynamicBatchConfig, PeftCacheConfig,
                                           SchedulerConfig)
-from tensorrt_llm.llmapi.llm_utils import (BuildConfig, QuantAlgo, QuantConfig,
+from tensorrt_llm.llmapi.llm_utils import (QuantAlgo, QuantConfig,
                                            _ParallelConfig)
 from tensorrt_llm.llmapi.tokenizer import (TokenizerBase, TransformersTokenizer,
                                            load_hf_tokenizer)
@@ -66,6 +65,24 @@ from utils.llm_data import llm_models_root
 from utils.util import force_ampere, similar, skip_gpu_memory_less_than_40gb, skip_pre_hopper, skip_single_gpu, altered_env
 
 # isort: on
+
+
+# The legacy TensorRT backend has been removed. The TensorRT-engine LLM
+# (`tensorrt_llm._tensorrt_engine.LLM`) and `BuildConfig` no longer exist.
+# These placeholders keep this module importable so that the PyTorch test
+# harness helpers it still exports (e.g. ``get_model_path``, ``llm_test_harness``,
+# ``llama_model_path``) remain usable. Any TensorRT-backend test that actually
+# instantiates these will fail with a clear error instead of an import error.
+class _RemovedTrtBackend:
+
+    def __init__(self, *args, **kwargs):
+        raise RuntimeError(
+            "The TensorRT backend has been removed; this TensorRT-only test "
+            "is no longer supported. Use the PyTorch backend instead.")
+
+
+LLM = _RemovedTrtBackend
+BuildConfig = _RemovedTrtBackend
 
 # The unittests are based on the tiny-llama, which is fast to build and run.
 # There are other tests based on llama-7B model, such as the end-to-end tests in test_e2e.py, and parallel tests in

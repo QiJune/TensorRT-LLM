@@ -5,8 +5,8 @@ import flashinfer
 import numpy as np
 import torch
 
-from tensorrt_llm.functional import AttentionMaskType
-from tensorrt_llm.models.modeling_utils import QuantConfig
+from tensorrt_llm.functional_enums import AttentionMaskType
+from tensorrt_llm.quantization import QuantConfig
 
 from ..distributed import allgather
 from .flashinfer import FlashInferAttentionMetadata, PlanParams

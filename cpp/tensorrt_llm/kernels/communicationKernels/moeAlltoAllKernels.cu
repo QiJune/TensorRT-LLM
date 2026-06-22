@@ -129,25 +129,25 @@ using tensorrt_llm::common::launchWithPdlWhenEnabled;
 #define SWITCH_DTYPE(dtype, TYPE, ...)                                                                                 \
     switch (dtype)                                                                                                     \
     {                                                                                                                  \
-    case nvinfer1::DataType::kHALF:                                                                                    \
+    case tensorrt_llm::DataType::kHALF:                                                                                    \
     {                                                                                                                  \
         using TYPE = half;                                                                                             \
         __VA_ARGS__;                                                                                                   \
         break;                                                                                                         \
     }                                                                                                                  \
-    case nvinfer1::DataType::kBF16:                                                                                    \
+    case tensorrt_llm::DataType::kBF16:                                                                                    \
     {                                                                                                                  \
         using TYPE = __nv_bfloat16;                                                                                    \
         __VA_ARGS__;                                                                                                   \
         break;                                                                                                         \
     }                                                                                                                  \
-    case nvinfer1::DataType::kFLOAT:                                                                                   \
+    case tensorrt_llm::DataType::kFLOAT:                                                                                   \
     {                                                                                                                  \
         using TYPE = float;                                                                                            \
         __VA_ARGS__;                                                                                                   \
         break;                                                                                                         \
     }                                                                                                                  \
-    case nvinfer1::DataType::kFP8:                                                                                     \
+    case tensorrt_llm::DataType::kFP8:                                                                                     \
     {                                                                                                                  \
         using TYPE = __nv_fp8_e4m3;                                                                                    \
         __VA_ARGS__;                                                                                                   \
@@ -1318,7 +1318,7 @@ void moe_a2a_combine_launch(MoeA2ACombineParams const& params)
 
     // When use_low_precision is set the recv buffers contain FP8 data regardless of params.dtype,
     // so dispatch the FP8 accumulation kernel in that case.
-    auto const effective_dtype = params.use_low_precision ? nvinfer1::DataType::kFP8 : params.dtype;
+    auto const effective_dtype = params.use_low_precision ? tensorrt_llm::DataType::kFP8 : params.dtype;
 
     // Launch appropriate kernel with compact macros
     SWITCH_DTYPE(effective_dtype, TKernelType, {

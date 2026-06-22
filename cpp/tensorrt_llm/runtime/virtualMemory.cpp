@@ -141,8 +141,8 @@ void OffloadConfigurator::teardown(CUmemGenericAllocationHandle, bool destructin
     {
         switch (mBackType)
         {
-        case MemoryType::kCPU: mBackedStorage = BufferManager::cpu(mSize, nvinfer1::DataType::kINT8); break;
-        case MemoryType::kPINNED: mBackedStorage = BufferManager::pinned(mSize, nvinfer1::DataType::kINT8); break;
+        case MemoryType::kCPU: mBackedStorage = BufferManager::cpu(mSize, tensorrt_llm::DataType::kINT8); break;
+        case MemoryType::kPINNED: mBackedStorage = BufferManager::pinned(mSize, tensorrt_llm::DataType::kINT8); break;
         default: TLLM_THROW("Unknown memory type: %d", static_cast<int32_t>(mBackType));
         }
     }

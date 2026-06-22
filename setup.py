@@ -116,15 +116,13 @@ if constraints_file.exists():
 
 if on_windows:
     package_data = [
-        'libs/th_common.dll', 'libs/tensorrt_llm.dll',
-        'libs/nvinfer_plugin_tensorrt_llm.dll', 'bindings.*.pyd', "include/**/*"
+        'libs/th_common.dll', 'libs/tensorrt_llm.dll', 'bindings.*.pyd',
+        "include/**/*"
     ]
 else:
     package_data = [
-        'bin/executorWorker',
         'libs/libtensorrt_llm.so',
         'libs/libth_common.so',
-        'libs/libnvinfer_plugin_tensorrt_llm.so',
         'libs/libtensorrt_llm_ucx_wrapper.so',
         'libs/libdecoder_attention_0.so',
         'libs/libtensorrt_llm_nixl_wrapper.so',
@@ -438,9 +436,6 @@ setup(
     license_files=get_license(),
     entry_points={
         'console_scripts': [
-            'trtllm-build=tensorrt_llm.commands.build:main',
-            'trtllm-prune=tensorrt_llm.commands.prune:main',
-            'trtllm-refit=tensorrt_llm.commands.refit:main',
             'trtllm-bench=tensorrt_llm.commands.bench:main',
             'trtllm-serve=tensorrt_llm.commands.serve:main',
             'trtllm-eval=tensorrt_llm.commands.eval:main'

@@ -44,7 +44,7 @@ void initBindings(nb::module_& m)
         .value("CUM_LOG_PROBS", OutputContentType::kCUM_LOG_PROBS, "Cumulative Log");
 
     nb::class_<ModelSpec>(m, "ModelSpec")
-        .def(nb::init<std::string const&, nvinfer1::DataType>())
+        .def(nb::init<std::string const&, tensorrt_llm::DataType>())
         .def("use_gpt_plugin", &ModelSpec::useGptAttentionPlugin, nb::rv_policy::reference_internal)
         .def("use_packed_input", &ModelSpec::usePackedInput, nb::rv_policy::reference_internal)
         .def("set_kv_cache_type", &ModelSpec::setKVCacheType, nb::rv_policy::reference_internal)

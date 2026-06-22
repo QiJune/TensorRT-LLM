@@ -14,7 +14,7 @@ from tensorrt_llm._torch.attention_backend.interface import (
     PredefinedAttentionMask,
     RopeParams,
 )
-from tensorrt_llm.functional import PositionEmbeddingType
+from tensorrt_llm.functional_enums import PositionEmbeddingType
 
 from ..model_config import ModelConfig
 from ..modules.attention import Attention

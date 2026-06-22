@@ -16,10 +16,7 @@ import time
 from functools import partial
 from typing import Literal, Optional, Tuple, Union
 
-# isort: off
 import torch
-import tensorrt as trt
-# isort: on
 
 try:
     import psutil
@@ -33,7 +30,7 @@ import traceback
 
 from tensorrt_llm.logger import logger
 
-from ._common import _is_building
+from ._utils import _is_building
 
 if psutil is None:
     logger.warning(
@@ -219,6 +216,10 @@ def check_gpt_mem_usage(
     num_layers,
 ) -> int:
     # Get the amount of memory
+    # ``tensorrt`` is imported lazily here because this is a legacy
+    # TensorRT-engine memory estimator; importing the module must not require
+    # the ``tensorrt`` package.
+    import tensorrt as trt
     runtime = trt.Runtime(logger.trt_logger)
     # 1. TensorRT engine activation memory
     activation_size = 0

@@ -42,7 +42,7 @@ import torch
 from torch import nn
 from transformers import PretrainedConfig
 
-from tensorrt_llm.functional import PositionEmbeddingType, RotaryScalingType
+from tensorrt_llm.functional_enums import PositionEmbeddingType, RotaryScalingType
 
 from ..attention_backend import AttentionMetadata
 from ..attention_backend.interface import (
@@ -928,7 +928,7 @@ def _copy_model_config_with_quant(model_config: ModelConfig, quant_config: objec
 
 def _model_config_without_quant(model_config: ModelConfig) -> ModelConfig:
     """Shallow copy with a no-op quant config (for bf16 paths like attention)."""
-    from tensorrt_llm.models.modeling_utils import QuantConfig
+    from tensorrt_llm.quantization import QuantConfig
 
     return _copy_model_config_with_quant(model_config, QuantConfig())
 
@@ -1406,7 +1406,7 @@ def strip_language_model_prefix_from_exclude_modules(exclude_modules):
 
 def _model_config_keep_kv_quant(model_config: ModelConfig) -> ModelConfig:
     """Strip weight quant but preserve ``kv_cache_quant_algo`` for attention."""
-    from tensorrt_llm.models.modeling_utils import QuantConfig
+    from tensorrt_llm.quantization import QuantConfig
 
     src_kv = getattr(getattr(model_config, "quant_config", None), "kv_cache_quant_algo", None)
     return _copy_model_config_with_quant(model_config, QuantConfig(kv_cache_quant_algo=src_kv))

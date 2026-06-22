@@ -118,7 +118,7 @@ void tb::CacheTransceiverBindings::initBindings(nb::module_& m)
 
     nb::class_<tb::CacheTransceiver, tb::BaseCacheTransceiver>(m, "CacheTransceiver")
         .def(nb::init<tb::kv_cache_manager::BaseKVCacheManager*, std::vector<SizeType32>, SizeType32, SizeType32,
-                 runtime::WorldConfig, std::vector<SizeType32>, nvinfer1::DataType,
+                 runtime::WorldConfig, std::vector<SizeType32>, tensorrt_llm::DataType,
                  executor::kv_cache::CacheState::AttentionType, std::optional<executor::CacheTransceiverConfig>,
                  tb::rnn_state_manager::RnnStateManager*, std::vector<SizeType32>>(),
             nb::arg("cache_manager"), nb::arg("num_kv_heads_per_layer"), nb::arg("size_per_head"),

@@ -33,7 +33,7 @@ from tensorrt_llm._torch.utils import ActivationType, relu2
 from tensorrt_llm._utils import get_sm_version
 from tensorrt_llm.logger import logger
 from tensorrt_llm.lora_helper import LoraConfig
-from tensorrt_llm.models.modeling_utils import QuantAlgo  # noqa: E402
+from tensorrt_llm.quantization.mode import QuantAlgo  # noqa: E402
 
 from ..attention_backend import AttentionMetadata
 from ..distributed import AllReduce, AllReduceFusionOp, AllReduceParams
@@ -1236,7 +1236,7 @@ class NemotronHMTP(nn.Module):
         moe_backend only supports fp8/fp4 quantization, we need to override
         the quant_config for the MTP layer.
         """
-        from tensorrt_llm.models.modeling_utils import QuantConfig
+        from tensorrt_llm.quantization import QuantConfig
 
         quant_config = model_config.quant_config
         # MTP layers are always unquantized, force quant_algo=None

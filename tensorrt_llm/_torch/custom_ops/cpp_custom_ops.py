@@ -27,7 +27,7 @@ def _register_fake():
         eps: float,
         trigger_completion_at_end: bool,
     ) -> List[torch.Tensor]:
-        from tensorrt_llm.functional import AllReduceFusionOp
+        from tensorrt_llm.functional_enums import AllReduceFusionOp
         if op == int(AllReduceFusionOp.NONE):
             return [torch.empty_like(input)]
         elif op == int(AllReduceFusionOp.RESIDUAL_RMS_NORM):
@@ -89,7 +89,7 @@ def _register_fake():
           rmsnorm_fusion,
           scale=None,
           fusion_op: int = 0):
-        from tensorrt_llm.functional import AllReduceFusionOp
+        from tensorrt_llm.functional_enums import AllReduceFusionOp
         op = AllReduceFusionOp(fusion_op)
         if op == AllReduceFusionOp.NONE and rmsnorm_fusion:
             op = AllReduceFusionOp.RESIDUAL_RMS_NORM

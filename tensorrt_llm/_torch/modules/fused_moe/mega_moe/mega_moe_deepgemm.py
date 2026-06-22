@@ -29,7 +29,7 @@ import torch.distributed as dist
 
 from tensorrt_llm._utils import get_sm_version, is_sm_100f
 from tensorrt_llm.logger import logger
-from tensorrt_llm.models.modeling_utils import QuantAlgo
+from tensorrt_llm.quantization.mode import QuantAlgo
 
 from ....model_config import ModelConfig
 from ....utils import ActivationType, AuxStreamType

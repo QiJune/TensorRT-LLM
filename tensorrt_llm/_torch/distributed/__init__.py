@@ -1,4 +1,4 @@
-from tensorrt_llm.functional import AllReduceFusionOp
+from tensorrt_llm.functional_enums import AllReduceFusionOp
 
 from .communicator import Distributed, MPIDist, TorchDist
 from .moe_alltoall import MoeAlltoAll

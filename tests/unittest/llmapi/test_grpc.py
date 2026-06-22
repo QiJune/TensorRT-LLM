@@ -24,7 +24,6 @@ import pytest
 import torch
 from PIL import Image
 
-from tensorrt_llm._tensorrt_engine import LLM
 from tensorrt_llm.grpc import trtllm_service_pb2 as pb2
 from tensorrt_llm.grpc.grpc_request_manager import (
     GrpcRequestManager,
@@ -825,6 +824,8 @@ def grpc_vlm_service():
     Shared across all tests in this module.
     """
     model_path = get_model_path(vlm_model_name)
+    # The legacy TensorRT backend has been removed.
+    from tensorrt_llm._tensorrt_engine import LLM
     llm = LLM(
         model=model_path,
         kv_cache_config=KvCacheConfig(free_gpu_memory_fraction=0.6),

@@ -23,7 +23,7 @@ import torch
 from torch import nn
 
 from tensorrt_llm.logger import logger
-from tensorrt_llm.models.modeling_utils import QuantAlgo
+from tensorrt_llm.quantization.mode import QuantAlgo
 
 from ...distributed.ops import reducescatter
 
@@ -363,7 +363,7 @@ class MoE(nn.Module):
                 strategy=model_config.allreduce_strategy,
                 dtype=self.dtype)
         elif self.enable_dummy_allreduce:
-            from tensorrt_llm.functional import AllReduceStrategy
+            from tensorrt_llm.functional_enums import AllReduceStrategy
             self.all_reduce = AllReduce(mapping=self.mapping,
                                         strategy=AllReduceStrategy.NCCL,
                                         dtype=self.dtype)
@@ -607,7 +607,7 @@ class MoE(nn.Module):
 
         # Setup AllReduce for dynamic routing if needed
         if self._using_dynamic_load_balancer():
-            from tensorrt_llm.functional import AllReduceStrategy
+            from tensorrt_llm.functional_enums import AllReduceStrategy
 
             from ...distributed import AllReduce
             self.allreduce = AllReduce(mapping=model_config.mapping,

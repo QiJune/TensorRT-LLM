@@ -49,7 +49,7 @@ from tensorrt_llm._torch.auto_deploy.utils.quantization_utils import (
     fp4_global_scale,
     modelopt_fp4_scale_to_cutlass_fp4_scale,
 )
-from tensorrt_llm.functional import AllReduceStrategy
+from tensorrt_llm.functional_enums import AllReduceStrategy
 
 
 class GQA_Block(nn.Module):

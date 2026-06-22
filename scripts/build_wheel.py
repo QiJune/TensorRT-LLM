@@ -486,7 +486,7 @@ def main(*,
          job_count: int = None,
          extra_cmake_vars: Sequence[str] = tuple(),
          extra_make_targets: str = "",
-         trt_root: str = '/usr/local/tensorrt',
+         trt_root: str = None,
          nccl_root: str = None,
          nixl_root: str = None,
          mooncake_root: str = None,
@@ -537,20 +537,6 @@ def main(*,
                                          project_dir / requirements_filename,
                                          no_venv)
 
-    # Ensure base TRT is installed (check inside the venv)
-    try:
-        check_output([str(venv_python), "-m", "pip", "show", "tensorrt"])
-    except CalledProcessError:
-        error_msg = "TensorRT was not installed properly."
-        if on_windows:
-            error_msg += (
-                " Please download the TensorRT zip file manually,"
-                " install it and relaunch build_wheel.py."
-                " See https://docs.nvidia.com/deeplearning/tensorrt/install-guide/index.html#installing-zip for more details."
-            )
-        else:
-            error_msg += f" Please install tensorrt into the venv using \"`{venv_python}` -m pip install tensorrt\" and relaunch build_wheel.py"
-        raise RuntimeError(error_msg)
 
     if cuda_architectures is not None:
         if "70-real" in cuda_architectures:

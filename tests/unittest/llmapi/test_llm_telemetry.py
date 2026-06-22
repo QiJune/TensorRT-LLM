@@ -25,12 +25,22 @@ from unittest.mock import patch
 import pytest
 
 from tensorrt_llm import LLM as LLM_torch
-from tensorrt_llm._tensorrt_engine import LLM
 from tensorrt_llm.llmapi import KvCacheConfig, llm_args
 from tensorrt_llm.usage import usage_lib
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)) + "/..")
 from utils.llm_data import llm_models_root  # noqa: E402
+
+
+# The legacy TensorRT backend (`tensorrt_llm._tensorrt_engine.LLM`) has been
+# removed. This placeholder keeps the module importable; TensorRT-only tests
+# will fail with a clear error if invoked.
+class LLM:
+
+    def __init__(self, *args, **kwargs):
+        raise RuntimeError(
+            "The TensorRT backend has been removed; this TensorRT-only test "
+            "is no longer supported. Use the PyTorch backend instead.")
 
 pytestmark = pytest.mark.threadleak(enabled=False)
 

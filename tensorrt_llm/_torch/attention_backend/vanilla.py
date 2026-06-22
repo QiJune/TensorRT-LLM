@@ -4,7 +4,7 @@ from typing import Optional
 import torch
 import torch.nn.functional as F
 
-from tensorrt_llm.models.modeling_utils import QuantConfig
+from tensorrt_llm.quantization import QuantConfig
 
 try:
     from transformers.modeling_attn_mask_utils import AttentionMaskConverter

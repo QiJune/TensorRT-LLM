@@ -66,7 +66,7 @@ from tensorrt_llm._torch.attention_backend.interface import (
     RopeParams,
 )
 from tensorrt_llm.bindings.internal import thop
-from tensorrt_llm.functional import AttentionMaskType
+from tensorrt_llm.functional_enums import AttentionMaskType
 from tensorrt_llm.quantization import QuantMode
 
 from ..._compat import KvCacheConfig, prefer_pinned

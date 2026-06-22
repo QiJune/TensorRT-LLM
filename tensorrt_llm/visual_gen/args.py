@@ -28,7 +28,7 @@ from pydantic import model_validator
 
 from tensorrt_llm.llmapi.llm_args import Field
 from tensorrt_llm.llmapi.utils import StrictBaseModel, set_api_status
-from tensorrt_llm.models.modeling_utils import QuantConfig
+from tensorrt_llm.quantization import QuantConfig
 
 from .sparse_attention import SkipSoftmaxAttentionConfig
 

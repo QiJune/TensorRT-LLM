@@ -22,7 +22,7 @@ Cross-cutting sub-configs live in this sub-package only.
 ``QuantConfig`` is re-exported for convenience.
 """
 
-from tensorrt_llm.models.modeling_utils import QuantConfig
+from tensorrt_llm.quantization import QuantConfig
 
 from .args import (
     AttentionConfig,

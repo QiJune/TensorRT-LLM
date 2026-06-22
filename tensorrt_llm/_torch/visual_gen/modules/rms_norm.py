@@ -19,7 +19,7 @@ import torch
 from torch import nn
 
 from tensorrt_llm._torch.distributed import AllReduce
-from tensorrt_llm.functional import AllReduceStrategy
+from tensorrt_llm.functional_enums import AllReduceStrategy
 from tensorrt_llm.mapping import Mapping
 
 

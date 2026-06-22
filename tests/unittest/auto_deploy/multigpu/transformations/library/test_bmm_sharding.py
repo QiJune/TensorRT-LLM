@@ -30,7 +30,7 @@ from tensorrt_llm._torch.auto_deploy.transform.library.sharding import (
 )
 from tensorrt_llm._torch.auto_deploy.transform.optimizer import InferenceOptimizer
 from tensorrt_llm._torch.auto_deploy.utils.node_utils import is_op
-from tensorrt_llm.functional import AllReduceStrategy
+from tensorrt_llm.functional_enums import AllReduceStrategy
 
 
 class BMM(nn.Module):

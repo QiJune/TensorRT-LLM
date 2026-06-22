@@ -5,7 +5,7 @@ import torch
 from torch import nn
 from transformers import Qwen3Config
 
-from tensorrt_llm.functional import PositionEmbeddingType
+from tensorrt_llm.functional_enums import PositionEmbeddingType
 from tensorrt_llm.mapping import Mapping
 
 from ..attention_backend import AttentionMetadata

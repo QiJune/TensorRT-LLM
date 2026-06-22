@@ -17,11 +17,11 @@ from tensorrt_llm._torch.custom_ops.torch_custom_ops import BufferKind
 from tensorrt_llm._torch.peft.lora.layer import LoraLayer
 from tensorrt_llm._utils import is_device_integrated, mpi_disabled
 from tensorrt_llm.bindings import ipc_nvls_supported
-from tensorrt_llm.functional import (AllReduceFusionOp, AllReduceParams,
+from tensorrt_llm.functional_enums import (AllReduceFusionOp, AllReduceParams,
                                      AllReduceStrategy)
 from tensorrt_llm.logger import logger
 from tensorrt_llm.mapping import Mapping
-from tensorrt_llm.quantization.functional import \
+from tensorrt_llm.quantization.preprocessing import \
     preprocess_weights_for_mixed_gemm
 from tensorrt_llm.quantization.mode import QuantAlgo
 from tensorrt_llm.quantization.utils.fp8_utils import (
@@ -29,7 +29,7 @@ from tensorrt_llm.quantization.utils.fp8_utils import (
     transform_sf_into_required_layout)
 
 from ..._utils import get_sm_version, is_sm_100f
-from ...models.modeling_utils import QuantConfig
+from ...quantization import QuantConfig
 from ..utils import (Fp4QuantizedTensor, get_model_extra_attrs,
                      replace_parameter_and_save_metadata, unswizzle_sf)
 

@@ -38,7 +38,7 @@ function(add_gtest test_name test_src)
                         ${ARGN})
   add_executable(${test_name} ${test_src})
 
-  target_link_libraries(${test_name} PUBLIC gmock_main TensorRT::OnnxParser)
+  target_link_libraries(${test_name} PUBLIC gmock_main)
   if(NOT ARGS_NO_GTEST_MAIN)
     target_link_libraries(${test_name} PUBLIC gtest_main)
   endif()

@@ -7,23 +7,11 @@ from typing import Dict, List, Tuple, Union
 
 import yaml
 
-from tensorrt_llm._torch.pyexecutor.model_loader import \
-    validate_and_set_kv_cache_quant
-from tensorrt_llm.bench.build.build import (get_benchmark_engine_settings,
-                                            get_model_config)
-from tensorrt_llm.bench.build.dataclasses import (NemotronHybridConfig,
-                                                  Qwen3HybridConfig)
 from tensorrt_llm.bench.dataclasses.general import (DatasetMetadata,
                                                     InferenceRequest)
 from tensorrt_llm.logger import logger
-from tensorrt_llm.quantization.mode import QuantAlgo
 
-_KV_CACHE_MAP = {
-    QuantAlgo.FP8.value: "fp8",
-    QuantAlgo.NVFP4.value: "fp8",
-}
-
-ALL_SUPPORTED_BACKENDS = ["pytorch", "_autodeploy", "tensorrt"]
+ALL_SUPPORTED_BACKENDS = ["pytorch", "_autodeploy"]
 
 
 def get_settings_from_engine(
@@ -116,53 +104,10 @@ def get_settings(params: dict, dataset_metadata: DatasetMetadata, model: str,
         max_batch_size, max_num_tokens = params.get(
             "max_batch_size"), params.get("max_num_tokens")
     else:
-        model_config = get_model_config(model, model_path)
-
-        if isinstance(model_config,
-                      (NemotronHybridConfig, Qwen3HybridConfig
-                       )) and mamba_ssm_cache_dtype not in (None, "auto"):
-            model_config.set_mamba_ssm_cache_dtype(mamba_ssm_cache_dtype)
-
-        from tensorrt_llm._torch.model_config import ModelConfig
-        model = model_path or model
-        tllm_model_config = ModelConfig.from_pretrained(model,
-                                                        trust_remote_code=True)
-
-        if (kv_cache_dtype is None
-                and tllm_model_config.quant_config.kv_cache_quant_algo is None):
-            kv_cache_dtype = _KV_CACHE_MAP.get(
-                tllm_model_config.quant_config.quant_algo, "auto")
-
-        validate_and_set_kv_cache_quant(tllm_model_config, kv_cache_dtype)
-
-        max_batch_size, max_num_tokens = get_benchmark_engine_settings(
-            model_config,
-            tllm_model_config.quant_config,
-            params.get("tp"),
-            params.get("pp"),
-            dataset_metadata.avg_isl,
-            dataset_metadata.avg_osl,
-            params.get("kv_cache_free_gpu_mem_fraction"),
-            enable_attention_dp=enable_attention_dp,
-        )
-
-        logger.info(
-            f"Max batch size and max num tokens not provided. "
-            f"Using heuristics or pre-defined settings: max_batch_size={max_batch_size}, max_num_tokens={max_num_tokens}."
-        )
-
-        # If chunked prefill is disabled, we need to ensure that the max_num_tokens is at least the max_isl
-        if not enable_chunked_prefill:
-            logger.warning(
-                f"Chunked prefill is disabled, but max_num_tokens ({max_num_tokens}) is less than the max ISL ({dataset_metadata.max_isl}). "
-                f"Forcing max_num_tokens to {dataset_metadata.max_isl + max_batch_size}."
-            )
-            max_num_tokens = max(max_num_tokens,
-                                 dataset_metadata.max_isl + max_batch_size)
-        else:
-            # TODO: Figure out how to handle chunked block size.
-            # Expecting this to be the max of chunk block and max_num_tokens.
-            pass
+        raise ValueError(
+            "Both --max_batch_size and --max_num_tokens must be provided. "
+            "Automatic heuristic tuning of these values was part of the "
+            "removed TensorRT engine-build path and is no longer available.")
 
     cuda_graph_config = {
         "enable_padding": True,

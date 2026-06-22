@@ -54,7 +54,7 @@ FtDynamicDecode<T>::FtDynamicDecode(size_t const maxBatchSize, size_t const maxB
     auto bufferManager = std::make_shared<tensorrt_llm::runtime::BufferManager>(cudaStreamPtr);
 
     mFinishedSum = bufferManager->pinnedPool(
-        tr::ITensor::makeShape({static_cast<int32_t>(maxBatchSize)}), nvinfer1::DataType::kINT32);
+        tr::ITensor::makeShape({static_cast<int32_t>(maxBatchSize)}), tensorrt_llm::DataType::kINT32);
     mDynamicDecodeLayer
         = std::make_shared<tl::DynamicDecodeLayer<T>>(tle::DecodingMode::Auto(), decodingDomain, bufferManager);
     mBatchSlots = tr::getDefaultBatchSlots(maxBatchSize);

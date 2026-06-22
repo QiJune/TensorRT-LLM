@@ -39,7 +39,7 @@ public:
     using BufferPtr = IBuffer::SharedPtr;
 
     DecodingLayerWorkspace(std::shared_ptr<BufferManager> bufferManager, layers::DecoderDomain const& decoderDomain,
-        nvinfer1::DataType logitsType, size_t workspaceBufferSizeInBytes);
+        tensorrt_llm::DataType logitsType, size_t workspaceBufferSizeInBytes);
 
     DecodingLayerWorkspace() = delete;
 
@@ -71,7 +71,7 @@ public:
     [[nodiscard]] TensorPtr getDeviceRuntimeLogits() const;
 
     ///@brief Gets a tensor with the given shape and type at the start of the device workspace.
-    TensorPtr getWorkspaceAsDeviceTensor(ITensor::Shape shape, nvinfer1::DataType type);
+    TensorPtr getWorkspaceAsDeviceTensor(ITensor::Shape shape, tensorrt_llm::DataType type);
 
     /// @brief A convenience function to copy the content of a standard vector to a device workspace.
     template <typename T, typename Alloc>
@@ -112,7 +112,7 @@ public:
     {
         size_t lastTensorOffset = 0;
         auto alignedSizeCalculator
-            = [&lastTensorOffset](std::pair<ITensor::Shape, nvinfer1::DataType> const& tensorDescriptor)
+            = [&lastTensorOffset](std::pair<ITensor::Shape, tensorrt_llm::DataType> const& tensorDescriptor)
         {
             auto const& [shape, type] = tensorDescriptor;
             auto const sizeInBytes = ITensor::volume(shape) * tensorrt_llm::common::getDTypeSize(type);

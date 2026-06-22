@@ -51,7 +51,7 @@ public:
 
     //! @brief Setup the decoder before calling `forward()`
     virtual void setup(executor::DecodingMode const& mode, SizeType32 maxNumSequences, SizeType32 maxBeamWidth,
-        nvinfer1::DataType dtype, ModelConfig const& modelConfig, WorldConfig const& worldConfig)
+        tensorrt_llm::DataType dtype, ModelConfig const& modelConfig, WorldConfig const& worldConfig)
         = 0;
 
     //! @brief Disable Lookahead decoding.
