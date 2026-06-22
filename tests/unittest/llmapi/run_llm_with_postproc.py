@@ -6,7 +6,6 @@ from typing import Optional
 
 import click
 
-from tensorrt_llm._tensorrt_engine import LLM
 from tensorrt_llm.executor.postproc_worker import PostprocParams
 from tensorrt_llm.llmapi import KvCacheConfig, SamplingParams
 from tensorrt_llm.llmapi.utils import print_colored
@@ -32,6 +31,8 @@ def main(model_dir: str, tp_size: int, engine_dir: Optional[str], n: int,
 
     print_colored("Enabled OAI postprocessing\n", "yellow")
 
+    # The legacy TensorRT backend has been removed.
+    from tensorrt_llm._tensorrt_engine import LLM
     llm = LLM(model_dir,
               tensor_parallel_size=tp_size,
               kv_cache_config=KvCacheConfig(free_gpu_memory_fraction=0.4),

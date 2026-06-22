@@ -11,7 +11,7 @@ except ModuleNotFoundError:
     from tensorrt_llm import ray_stub as ray
 
 from tensorrt_llm._torch.distributed.communicator import TorchDist
-from tensorrt_llm.functional import AllReduceFusionOp, AllReduceStrategy
+from tensorrt_llm.functional_enums import AllReduceFusionOp, AllReduceStrategy
 from tensorrt_llm.mapping import Mapping
 
 

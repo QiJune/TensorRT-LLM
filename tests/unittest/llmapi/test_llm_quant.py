@@ -4,7 +4,6 @@ from pathlib import Path
 
 import pytest
 
-from tensorrt_llm._tensorrt_engine import LLM
 from tensorrt_llm._torch.model_config import ModelConfig
 from tensorrt_llm.llmapi import KvCacheConfig, SamplingParams
 from tensorrt_llm.llmapi.llm_utils import CalibConfig, QuantAlgo, QuantConfig
@@ -13,6 +12,18 @@ from tensorrt_llm.llmapi.llm_utils import CalibConfig, QuantAlgo, QuantConfig
 from .test_llm import cnn_dailymail_path, llama_model_path, get_model_path
 from utils.util import skip_blackwell, skip_pre_blackwell, skip_pre_hopper
 # isort: on
+
+
+# The legacy TensorRT backend (`tensorrt_llm._tensorrt_engine.LLM`) has been
+# removed. This placeholder keeps the module importable so the backend-agnostic
+# quant-config tests in this file still collect/run; the few TensorRT-only
+# end-to-end quantization tests will fail with a clear error if invoked.
+class LLM:
+
+    def __init__(self, *args, **kwargs):
+        raise RuntimeError(
+            "The TensorRT backend has been removed; this TensorRT-only test "
+            "is no longer supported. Use the PyTorch backend instead.")
 
 
 @skip_blackwell

@@ -16,16 +16,14 @@ from utils.util import force_ampere
 import tensorrt_llm.bindings.executor as tle
 import tensorrt_llm.llmapi.llm_args as llm_args_mod
 from tensorrt_llm import LLM as TorchLLM
-from tensorrt_llm._tensorrt_engine import LLM
 from tensorrt_llm._torch.auto_deploy.llm_args import \
     LlmArgs as AutoDeployLlmArgs
 from tensorrt_llm._torch.model_config import ModelConfig
 from tensorrt_llm._torch.models.modeling_llama import LlamaForCausalLM
 from tensorrt_llm._torch.virtual_memory import RestoreMode
-from tensorrt_llm.builder import LoraConfig
 from tensorrt_llm.commands.serve import get_llm_args, is_non_default_or_required
-from tensorrt_llm.llmapi import (BuildConfig, CapacitySchedulerPolicy,
-                                 SchedulerConfig)
+from tensorrt_llm.llmapi import CapacitySchedulerPolicy, SchedulerConfig
+from tensorrt_llm.lora_helper import LoraConfig
 # fmt: off
 from tensorrt_llm.llmapi.llm_args import (BaseLlmArgs, CacheTransceiverConfig,
                                           CalibConfig, ContextChunkingPolicy,
@@ -45,7 +43,7 @@ from tensorrt_llm.llmapi.llm_args import (BaseLlmArgs, CacheTransceiverConfig,
                                           SkipSoftmaxAttentionConfig,
                                           SleepConfig, SpeculativeConfig,
                                           StrictBaseModel, TorchCompileConfig,
-                                          TorchLlmArgs, TrtLlmArgs,
+                                          TorchLlmArgs,
                                           UserProvidedDecodingConfig,
                                           update_llm_args_with_extra_dict)
 # fmt: on
@@ -53,9 +51,26 @@ from tensorrt_llm.llmapi.llm_utils import apply_model_defaults_to_llm_args
 from tensorrt_llm.llmapi.mm_encoder import MultimodalEncoder
 from tensorrt_llm.llmapi.utils import print_traceback_on_error
 from tensorrt_llm.models.modeling_utils import LayerQuantConfig, QuantConfig
-from tensorrt_llm.plugin import PluginConfig
 
 from .test_llm import llama_model_path
+
+
+# The legacy TensorRT backend has been removed: `tensorrt_llm._tensorrt_engine.LLM`,
+# the TensorRT-only `TrtLlmArgs`, `BuildConfig` and `PluginConfig` no longer exist.
+# These placeholders keep this (mostly PyTorch/AutoDeploy) test module importable.
+# TensorRT-only tests that actually instantiate these will fail with a clear error.
+class _RemovedTrtBackend:
+
+    def __init__(self, *args, **kwargs):
+        raise RuntimeError(
+            "The TensorRT backend has been removed; this TensorRT-only test "
+            "is no longer supported. Use the PyTorch backend instead.")
+
+
+LLM = _RemovedTrtBackend
+TrtLlmArgs = _RemovedTrtBackend
+BuildConfig = _RemovedTrtBackend
+PluginConfig = _RemovedTrtBackend
 
 
 def test_LookaheadDecodingConfig():

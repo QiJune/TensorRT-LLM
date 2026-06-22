@@ -5,7 +5,7 @@ from tensorrt_llm._torch.attention_backend.interface import (RopeParams,
                                                              RotaryScalingType)
 from tensorrt_llm._torch.modules.rotary_embedding import (MRotaryEmbedding,
                                                           RotaryEmbedding)
-from tensorrt_llm.functional import RopeEmbeddingUtils
+from tensorrt_llm.functional_enums import RopeEmbeddingUtils
 
 
 class TestRotaryEmbedding:

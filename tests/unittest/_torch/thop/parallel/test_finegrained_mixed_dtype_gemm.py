@@ -3,6 +3,7 @@ import torch
 from utils.util import woq_assert_near_eq, woq_groupwise_gt_matmul
 
 import tensorrt_llm
+import tensorrt_llm.quantization.preprocessing
 from tensorrt_llm._torch.custom_ops.torch_custom_ops import \
     FinegrainedMixedDtypeGemm
 from tensorrt_llm._utils import get_sm_version
@@ -88,7 +89,7 @@ def test_matmul_activation_int4_input(m, n, k, group_size, activation_dtype,
     unpacker = torch.ops.trtllm.unpack_int4_packed_tensor_to_int8
     ref_q_weight = unpacker(unprocessed_weight.cpu()).contiguous().cuda()
 
-    cuda_q_weight = tensorrt_llm.quantization.functional.preprocess_weights_for_mixed_gemm(
+    cuda_q_weight = tensorrt_llm.quantization.preprocessing.preprocess_weights_for_mixed_gemm(
         unprocessed_weight.cpu(), torch.quint4x2,
         activation_type).cuda().contiguous()
 

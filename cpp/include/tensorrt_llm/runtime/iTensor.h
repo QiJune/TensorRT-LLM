@@ -33,10 +33,6 @@
 #include <string>
 #include <type_traits>
 
-namespace nvinfer1
-{
-class IExecutionContext;
-}
 
 namespace tensorrt_llm::runtime
 {

@@ -2,7 +2,7 @@ import pytest
 import torch
 from torch.nn.parameter import Parameter
 
-import tensorrt_llm.quantization.functional
+import tensorrt_llm.quantization.preprocessing
 from tensorrt_llm._torch.autotuner import autotune
 from tensorrt_llm._torch.custom_ops.torch_custom_ops import \
     FinegrainedMixedDtypeGemm
@@ -69,7 +69,7 @@ def test_w4a8_linear(dtype, weights_dtype, has_zero=False):
 
     linear_w4a8 = linear_w4a8.cuda()
 
-    preprocessor = tensorrt_llm.quantization.functional.preprocess_weights_for_mixed_gemm
+    preprocessor = tensorrt_llm.quantization.preprocessing.preprocess_weights_for_mixed_gemm
     w = preprocessor(
         w.to(torch.int8).contiguous().cpu(), torch.quint4x2,
         torch.float8_e4m3fn).cuda().contiguous()

@@ -5,7 +5,6 @@ from typing import Optional
 import click
 
 from tensorrt_llm import LLM as TorchLLM
-from tensorrt_llm._tensorrt_engine import LLM
 from tensorrt_llm.llmapi import KvCacheConfig, SamplingParams
 
 
@@ -27,6 +26,8 @@ def main(model_dir: str, tp_size: int, engine_dir: Optional[str], n: int,
             tensor_parallel_size=tp_size,
             kv_cache_config=KvCacheConfig(free_gpu_memory_fraction=0.4))
     else:
+        # The legacy TensorRT backend has been removed.
+        from tensorrt_llm._tensorrt_engine import LLM
         llm = LLM(model_dir,
                   tensor_parallel_size=tp_size,
                   kv_cache_config=KvCacheConfig(free_gpu_memory_fraction=0.4))

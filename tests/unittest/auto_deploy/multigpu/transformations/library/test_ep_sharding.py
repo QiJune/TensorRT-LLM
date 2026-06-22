@@ -34,7 +34,7 @@ from tensorrt_llm._torch.auto_deploy.transform.optimizer import InferenceOptimiz
 from tensorrt_llm._torch.auto_deploy.utils._graph import lint, recompile
 from tensorrt_llm._torch.auto_deploy.utils.dist_config import DistConfig
 from tensorrt_llm._torch.auto_deploy.utils.node_utils import is_op
-from tensorrt_llm.functional import AllReduceStrategy
+from tensorrt_llm.functional_enums import AllReduceStrategy
 
 
 def _run_ep_shard_job(

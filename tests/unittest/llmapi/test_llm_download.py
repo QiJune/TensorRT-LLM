@@ -1,10 +1,20 @@
-from tensorrt_llm._tensorrt_engine import LLM
 from tensorrt_llm.llmapi.utils import (download_hf_model,
                                        download_hf_pretrained_config)
 
 # isort: off
 from .test_llm import llama_model_path
 # isort: on
+
+
+# The legacy TensorRT backend (`tensorrt_llm._tensorrt_engine.LLM`) has been
+# removed. This placeholder keeps the module importable so the backend-agnostic
+# download tests still collect/run; TensorRT-only tests fail clearly if invoked.
+class LLM:
+
+    def __init__(self, *args, **kwargs):
+        raise RuntimeError(
+            "The TensorRT backend has been removed; this TensorRT-only test "
+            "is no longer supported. Use the PyTorch backend instead.")
 
 prompts = ["A B C"]
 
