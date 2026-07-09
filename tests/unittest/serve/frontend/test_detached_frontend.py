@@ -240,6 +240,62 @@ class TestFrontendModelContext:
         with pytest.raises(ValueError, match="tokenizer source"):
             context.build_tokenizer()
 
+    def test_model_type_and_tokenizer_options_from_handshake(self):
+        from tensorrt_llm.serve.frontend.model_context import FrontendModelContext
+
+        context = FrontendModelContext.from_handshake(
+            {
+                "model": "m",
+                "tokenizer_dir": "/models/m",
+                "model_type": "gpt_oss",
+                "trust_remote_code": True,
+                "tokenizer_mode": "slow",
+            }
+        )
+        assert context.model_type == "gpt_oss"
+        assert context.is_harmony_model is True
+        assert context.trust_remote_code is True
+        assert context.tokenizer_mode == "slow"
+
+    def test_build_tokenizer_forwards_engine_options(self, monkeypatch):
+        """build_tokenizer forwards the engine's tokenizer options.
+
+        It must load with the engine's trust_remote_code and fast/slow mode,
+        or token ids can diverge from the engine.
+        """
+        from tensorrt_llm.serve.frontend.model_context import FrontendModelContext
+
+        captured = {}
+
+        class FakeAutoTokenizer:
+            @staticmethod
+            def from_pretrained(path, **kwargs):
+                captured["path"] = path
+                captured.update(kwargs)
+                return object()
+
+        import transformers
+
+        monkeypatch.setattr(transformers, "AutoTokenizer", FakeAutoTokenizer)
+        context = FrontendModelContext.from_handshake(
+            {
+                "model": "m",
+                "tokenizer_dir": "/models/m",
+                "trust_remote_code": True,
+                "tokenizer_mode": "slow",
+            }
+        )
+        context.build_tokenizer()
+        assert captured["path"] == "/models/m"
+        assert captured["trust_remote_code"] is True
+        assert captured["use_fast"] is False
+
+    def test_non_harmony_model_not_flagged(self):
+        from tensorrt_llm.serve.frontend.model_context import FrontendModelContext
+
+        context = FrontendModelContext.from_handshake({"model": "m", "model_type": "llama"})
+        assert context.is_harmony_model is False
+
 
 class TestLightweightTemplates:
     def test_light_template_matches_full_pipeline_for_text(self):

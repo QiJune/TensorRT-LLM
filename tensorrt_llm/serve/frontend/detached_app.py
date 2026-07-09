@@ -85,6 +85,26 @@ class DetachedFrontend:
         self.model_context = FrontendModelContext.from_handshake(
             self.client.model_context, self.client.capabilities
         )
+        # Harmony (gpt_oss) chat is served by the in-process Harmony adapter,
+        # which the co-located server routes to while disabling this generic
+        # pipeline. The detached frontend has no Harmony adapter, so it must
+        # fail fast rather than prompt/format such models through the wrong
+        # chat path. Mirrors the server's DISABLE_HARMONY_ADAPTER gate.
+        import os
+
+        if self.model_context.is_harmony_model and os.getenv("DISABLE_HARMONY_ADAPTER", "0") != "1":
+            self.client.shutdown()
+            raise EngineClientError(
+                EngineError(
+                    code=_Code.UNSUPPORTED_CAPABILITY,
+                    message=(
+                        f"model {self.model_context.model!r} uses the Harmony "
+                        "(gpt_oss) chat format, which requires the in-process "
+                        "Harmony adapter and cannot be served by the detached "
+                        "frontend"
+                    ),
+                )
+            )
         if tokenizer is None:
             tokenizer = self.model_context.build_tokenizer()
         processor = FrontendProcessor(

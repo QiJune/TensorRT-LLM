@@ -39,6 +39,13 @@ class FrontendModelContext:
         return_perf_metrics: Whether the engine collects per-request
             performance metrics.
         stream_interval: Streaming detokenization interval.
+        model_type: HF ``model_type`` of the served model (e.g. ``gpt_oss``),
+            so the frontend can detect chat paths it cannot serve (Harmony).
+        trust_remote_code: Whether the engine loaded the tokenizer with
+            ``trust_remote_code``; the frontend must match to load the same
+            tokenizer and produce identical token ids.
+        tokenizer_mode: Engine tokenizer mode (``auto``/``slow``); controls
+            fast-vs-slow tokenizer selection.
         capabilities: The engine's advertised capability set.
     """
 
@@ -48,6 +55,9 @@ class FrontendModelContext:
     reasoning_parser: Optional[str] = None
     return_perf_metrics: bool = False
     stream_interval: int = 1
+    model_type: Optional[str] = None
+    trust_remote_code: bool = False
+    tokenizer_mode: str = "auto"
     capabilities: Optional[dict] = None
 
     @classmethod
@@ -61,11 +71,23 @@ class FrontendModelContext:
             reasoning_parser=model_context.get("reasoning_parser"),
             return_perf_metrics=bool(model_context.get("return_perf_metrics", False)),
             stream_interval=int(model_context.get("stream_interval") or 1),
+            model_type=model_context.get("model_type"),
+            trust_remote_code=bool(model_context.get("trust_remote_code", False)),
+            tokenizer_mode=model_context.get("tokenizer_mode") or "auto",
             capabilities=capabilities,
         )
 
+    @property
+    def is_harmony_model(self) -> bool:
+        """Whether the served model uses the Harmony chat format (gpt_oss)."""
+        return self.model_type == "gpt_oss"
+
     def build_tokenizer(self) -> Any:
-        """Load the frontend tokenizer from the context alone (no runtime)."""
+        """Load the frontend tokenizer from the context alone (no runtime).
+
+        Mirrors the engine's tokenizer init (``trust_remote_code`` and
+        fast/slow mode) so the frontend produces identical token ids.
+        """
         if self.tokenizer_dir is None:
             raise ValueError(
                 "the engine handshake advertised no tokenizer source; the detached "
@@ -73,4 +95,8 @@ class FrontendModelContext:
             )
         from transformers import AutoTokenizer
 
-        return AutoTokenizer.from_pretrained(self.tokenizer_dir)
+        return AutoTokenizer.from_pretrained(
+            self.tokenizer_dir,
+            trust_remote_code=self.trust_remote_code,
+            use_fast=self.tokenizer_mode != "slow",
+        )

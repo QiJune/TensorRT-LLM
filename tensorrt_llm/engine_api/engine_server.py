@@ -279,6 +279,11 @@ def build_runtime_backend_factory(
             "reasoning_parser": getattr(llm.args, "reasoning_parser", None),
             "return_perf_metrics": bool(getattr(llm.args, "return_perf_metrics", False)),
             "stream_interval": getattr(llm.args, "stream_interval", 1),
+            # So the detached frontend can detect chat paths it cannot serve
+            # (Harmony/gpt_oss) and load a tokenizer matching the engine's.
+            "model_type": getattr(getattr(llm, "_hf_model_config", None), "model_type", None),
+            "trust_remote_code": bool(getattr(llm.args, "trust_remote_code", False)),
+            "tokenizer_mode": getattr(llm.args, "tokenizer_mode", "auto"),
         }
         return _LlmOwningBackend(adapter, llm), model_context
 

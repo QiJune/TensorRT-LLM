@@ -93,6 +93,27 @@ class TestDetachedEngineErrorResponse:
             frontend.shutdown()
             server.shutdown()
 
+    def test_harmony_model_rejected_at_construction(self):
+        """A Harmony (gpt_oss) model is rejected at construction.
+
+        The detached frontend has no Harmony adapter and would otherwise
+        prompt through the wrong chat path, so it must fail fast.
+        """
+        engine = FakeEngine()
+        server = EngineSocketServer(
+            engine,
+            endpoint=f"ipc:///tmp/runtime_control_{uuid.uuid4().hex}.sock",
+            model_context={"model": "gpt-oss-20b", "tokenizer_dir": None, "model_type": "gpt_oss"},
+        )
+        server.start()
+        try:
+            with pytest.raises(EngineClientError) as excinfo:
+                DetachedFrontend(server.endpoint, tokenizer=MinimalTokenizer())
+            assert excinfo.value.error.code is EngineErrorCode.UNSUPPORTED_CAPABILITY
+            assert "Harmony" in excinfo.value.error.message
+        finally:
+            server.shutdown()
+
     def test_malformed_request_becomes_bad_request_not_500(self):
         """Malformed requests become a structured 4xx, not a 500.
 
