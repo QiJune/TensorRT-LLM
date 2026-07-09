@@ -88,7 +88,7 @@ def flood_script(count: int) -> ScriptFn:
             yield EngineEvent(
                 request_id=request.request_id,
                 event_index=index,
-                token_ids=list(range(64)),
+                token_ids=list(range(2048)),
                 prompt_token_ids=list(request.prompt_token_ids) if index == 0 else None,
                 terminal_kind=TerminalKind.FINISHED if is_last else None,
                 finish_reason="length" if is_last else None,

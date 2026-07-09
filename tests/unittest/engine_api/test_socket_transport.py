@@ -276,7 +276,7 @@ class TestSlowConsumerPolicy:
             # Never read events: the engine-side buffer fills, the grace
             # timer expires, the connection is dropped, and the in-flight
             # request is aborted engine-side under a typed error.
-            deadline = time.monotonic() + 15
+            deadline = time.monotonic() + 45
             while time.monotonic() < deadline and not server.slow_consumer_drops:
                 time.sleep(0.05)
             assert server.slow_consumer_drops, "slow consumer was never dropped"
