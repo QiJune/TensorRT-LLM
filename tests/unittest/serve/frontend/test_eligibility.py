@@ -129,6 +129,12 @@ class TestRequestPredicate:
     def test_multi_prompt_ineligible(self):
         assert not check_request(SamplingParams(end_id=2), endpoint="completions", num_prompts=3)
 
+    def test_return_perf_metrics_ineligible(self):
+        decision = check_request(
+            SamplingParams(end_id=2, return_perf_metrics=True), endpoint="chat"
+        )
+        assert not decision and "return_perf_metrics" in decision.reason
+
 
 VOCAB_TEXT = {5: "Hello", 6: " world"}
 
@@ -756,26 +762,43 @@ class TestLlmApiRouting:
         assert client.submitted[0].sampling.logprobs_mode == "processed"
         assert client.submitted[0].sampling.exclude_input_from_output is False
 
-    def test_return_perf_metrics_from_normalized_params_reaches_engine(self, client):
-        """Normalized sampling-param defaults reach the engine request.
-
-        LLM.generate_async applies LLM-level defaults (e.g.
-        return_perf_metrics) before the pipeline handles the request; the
-        pipeline must carry the normalized value through.
-        """
-        pipeline = LlmApiEnginePipeline(client, FrontendProcessor(FakeTokenizer()))
-        # Simulates the post-_prepare_sampling_params state where the LLM
-        # applied its return_perf_metrics default.
-        result = pipeline.try_generate_async(
-            "hello world", SamplingParams(end_id=2, return_perf_metrics=True)
-        )
-        assert result is not None
-        assert client.submitted[0].sampling.return_perf_metrics is True
-
     def test_unmapped_kwargs_fall_back(self, client):
         pipeline = LlmApiEnginePipeline(client, FrontendProcessor(FakeTokenizer()))
         result = pipeline.try_generate_async(
             "hello", SamplingParams(end_id=2), kv_cache_retention_config=object()
+        )
+        assert result is None
+        assert client.submitted == []
+
+    def test_bare_prompt_dict_eligible(self, client):
+        pipeline = LlmApiEnginePipeline(client, FrontendProcessor(FakeTokenizer()))
+        result = pipeline.try_generate_async({"prompt": "hello world"}, SamplingParams(end_id=2))
+        assert result is not None
+        assert len(client.submitted) == 1
+
+    def test_unsupported_prompt_dict_keys_fall_back(self, client):
+        """Unsupported prompt-dict fields fall back, not silently dropped.
+
+        A token-id dict carrying encoder ids, star-attention query, etc. must
+        fall back instead of being submitted as a plain decoder prompt.
+        """
+        pipeline = LlmApiEnginePipeline(client, FrontendProcessor(FakeTokenizer()))
+        for extra in (
+            {"encoder_input_token_ids": [4, 5]},
+            {"query_token_ids": [9]},
+            {"multi_modal_data": {"image": []}},
+            {"mm_processor_kwargs": {}},
+        ):
+            result = pipeline.try_generate_async(
+                {"prompt_token_ids": [1, 2, 3], **extra}, SamplingParams(end_id=2)
+            )
+            assert result is None, f"should fall back for {extra}"
+        assert client.submitted == []
+
+    def test_per_request_return_perf_metrics_falls_back(self, client):
+        pipeline = LlmApiEnginePipeline(client, FrontendProcessor(FakeTokenizer()))
+        result = pipeline.try_generate_async(
+            "hello world", SamplingParams(end_id=2, return_perf_metrics=True)
         )
         assert result is None
         assert client.submitted == []

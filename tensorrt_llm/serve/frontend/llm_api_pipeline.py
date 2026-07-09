@@ -36,6 +36,11 @@ from tensorrt_llm.serve.frontend.response_assembler import FrontendResponseAssem
 
 __all__ = ["EnginePipelineRequestOutput", "LlmApiEnginePipeline"]
 
+# The only prompt-dict keys the pipeline maps to a plain decoder prompt. Any
+# other key (multimodal, encoder/decoder ids, star-attention query, multi-item
+# scoring, ...) makes the request ineligible so it is not silently dropped.
+_SUPPORTED_PROMPT_KEYS = frozenset({"prompt", "prompt_token_ids"})
+
 
 class EnginePipelineRequestOutput:
     """Request-output view over the engine-client pipeline.
@@ -225,7 +230,13 @@ def _normalize_text_inputs(inputs: Any) -> Optional[Union[str, list[int]]]:
     if isinstance(inputs, list) and inputs and isinstance(inputs[0], int):
         return inputs
     if isinstance(inputs, dict):
-        if any(key in inputs for key in ("multi_modal_data", "multi_modal_embeddings", "query")):
+        # Reject any dict carrying a field the pipeline does not map —
+        # multimodal data/uuids, mm processor kwargs, star-attention
+        # query_token_ids, multi-item scoring, encoder/decoder input ids, etc.
+        # The historical _preprocess handles or raises for these, so silently
+        # dropping the extra payload and submitting a plain decoder prompt
+        # would change behavior. Only a bare text/token prompt is eligible.
+        if set(inputs.keys()) - _SUPPORTED_PROMPT_KEYS:
             return None
         if "prompt" in inputs and isinstance(inputs["prompt"], str):
             return inputs["prompt"]

@@ -131,6 +131,12 @@ def check_sampling_params(sampling_params: Any) -> EligibilityResult:
         return _ineligible("additional model outputs are served by the in-process path")
     if getattr(sampling_params, "lookahead_config", None) is not None:
         return _ineligible("lookahead decoding config is served by the in-process path")
+    if getattr(sampling_params, "return_perf_metrics", False):
+        # The pipeline's EngineRequest/output carry no arrival_time or
+        # RequestOutput.metrics_dict, so a request that explicitly asks for
+        # perf metrics must take the in-process path (mirrors the
+        # deployment-level return_perf_metrics fallback).
+        return _ineligible("return_perf_metrics is served by the in-process path")
     return _ELIGIBLE
 
 
