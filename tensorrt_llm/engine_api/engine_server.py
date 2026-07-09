@@ -180,10 +180,27 @@ class EngineServer:
             self._socket.set_readiness(ReadinessState.UNHEALTHY)
             logger.error(f"engine backend initialization failed: {e}")
             return
-        self._backend = backend
-        self._socket.set_backend(backend)
-        self._socket.set_model_context(model_context)
-        self._socket.set_readiness(ReadinessState.READY)
+        # shutdown() may have run while the factory was still constructing the
+        # backend; at that point _backend was still None, so shutdown skipped
+        # backend cleanup. Decide under the lock whether to install or tear
+        # down the late backend so we never leave a live LLM/executor behind
+        # (or flip readiness back to READY after shutdown).
+        with self._shutdown_lock:
+            if self._shut_down:
+                late_backend = backend
+            else:
+                self._backend = backend
+                self._socket.set_backend(backend)
+                self._socket.set_model_context(model_context)
+                self._socket.set_readiness(ReadinessState.READY)
+                late_backend = None
+        if late_backend is not None:
+            logger.warning(
+                "engine backend finished initializing after shutdown; "
+                "tearing it down instead of installing it"
+            )
+            late_backend.shutdown()
+            return
         logger.info(f"engine server ready on {self.endpoint}")
 
     def wait_ready(self, timeout: Optional[float] = None) -> bool:

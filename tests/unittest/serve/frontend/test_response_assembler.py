@@ -207,6 +207,30 @@ class TestStopHandling:
         assert output.stop_reason == " STOP"
         assert output.text == "Hello"
 
+    def test_stop_sequence_trim_also_trims_logprobs(self):
+        """Trimming stop tokens trims logprobs to match.
+
+        Otherwise the OpenAI formatter's len(token_ids) == len(logprobs)
+        assertion fails.
+        """
+        assembler = make_assembler(
+            stop_strings=[" STOP"], stop_sequence_token_ids=[[4]], detokenize=False
+        )
+        assembler.consume(
+            event(
+                event_index=0,
+                token_ids=[1, 4],
+                logprobs=[-0.1, -0.2],
+                terminal_kind=TerminalKind.FINISHED,
+                finish_reason="stop",
+                stop_kind="stop_sequence",
+            )
+        )
+        output = assembler.view.outputs[0]
+        assert output.token_ids == [1]
+        assert output.logprobs == [-0.1]
+        assert len(output.logprobs) == len(output.token_ids)
+
     def test_runtime_stop_token_id_attribution(self):
         assembler = make_assembler(stop_token_ids=[8])
         assembler.consume(

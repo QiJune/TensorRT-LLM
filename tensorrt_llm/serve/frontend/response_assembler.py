@@ -274,6 +274,13 @@ class FrontendResponseAssembler:
                         output.stop_reason = stop_reason
                         if not self._config.include_stop_str_in_output:
                             output.token_ids = output.token_ids[: -len(stop_ids)]
+                            # Keep logprobs aligned with the trimmed tokens, or
+                            # the OpenAI formatter's len(token_ids) ==
+                            # len(logprobs) assertion fails. (The historical
+                            # result path leaves logprobs untrimmed and crashes
+                            # this same assert — see queued old-path follow-up.)
+                            if output.logprobs:
+                                output.logprobs = output.logprobs[: len(output.token_ids)]
                         break
                 else:
                     raise ProtocolViolationError(

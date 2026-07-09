@@ -90,6 +90,34 @@ class TestLifecycle:
             release.set()
             server.shutdown()
 
+    def test_backend_finishing_after_shutdown_is_torn_down(self):
+        """A backend finishing after shutdown is torn down, not installed.
+
+        If the factory returns after shutdown, the late backend must be shut
+        down and readiness must not flip back to READY.
+        """
+        release = threading.Event()
+        engine = FakeEngine()
+
+        def slow_factory():
+            release.wait(timeout=30)
+            return engine, {"model": "fake", "tokenizer_dir": "/fake"}
+
+        server = EngineServer(slow_factory)
+        server.start(wait=False)
+        try:
+            # Shut down while the factory is still blocked in construction.
+            server.shutdown()
+            # Now let the factory finish; _initialize must tear the backend down.
+            release.set()
+            server._init_thread.join(timeout=30)
+            assert engine.shutdown_called is True
+            assert server.readiness is ReadinessState.SHUTTING_DOWN
+            assert server._backend is None
+        finally:
+            release.set()
+            server.shutdown()
+
     def test_backend_init_failure_marks_unhealthy_and_raises(self):
         def broken_factory():
             raise RuntimeError("model weights missing")

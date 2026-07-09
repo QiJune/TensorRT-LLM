@@ -150,6 +150,7 @@ class FakeEngine(EngineClient):
         self.submitted: list[EngineRequest] = []
         self.aborted_request_ids: list[str] = []
         self.healthy = True
+        self.shutdown_called = False
         self.stats: list[dict[str, Any]] = [{"iter": 1, "num_active_requests": 0}]
         self.kv_events: list[dict[str, Any]] = [{"event_id": 0, "data": {"type": "created"}}]
 
@@ -192,4 +193,4 @@ class FakeEngine(EngineClient):
         return list(self.kv_events)
 
     def shutdown(self) -> None:
-        pass
+        self.shutdown_called = True
