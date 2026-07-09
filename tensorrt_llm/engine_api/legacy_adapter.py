@@ -303,7 +303,11 @@ class _ResponseNormalizer:
             raw_logprobs = list(result.log_probs[source_index])
         logprobs = None
         if raw_logprobs is not None:
-            if cumulative:
+            if not token_ids:
+                # No new tokens this event: emit no logprobs (an empty delta),
+                # never the whole cumulative list (raw_logprobs[-0:] == all).
+                logprobs = []
+            elif cumulative:
                 # Beam: token_ids is the full prefix; keep the aligned prefix.
                 logprobs = _plain_logprobs(raw_logprobs[: len(token_ids)])
             elif len(raw_logprobs) > len(token_ids):

@@ -340,6 +340,36 @@ class TestEventNormalization:
             )
         assert [e.logprobs for e in events] == [[-0.1], [-0.2], [-0.3]]
 
+    def test_empty_token_delta_yields_empty_logprobs(self, adapter, executor):
+        """An empty token delta yields an empty logprob delta.
+
+        An event with no new tokens but a cumulative log_probs list must
+        emit an empty logprob delta, not the whole cumulative list
+        (raw_logprobs[-0:] would return everything).
+        """
+        handle = adapter.submit(make_request(logprobs=0, logprobs_simple_format=True))
+        rid = submitted_id(executor)
+        executor.push(rid, FakeResponse(rid, FakeResult([[5]], log_probs=[[-0.1]])))
+        # Empty token delta, but the runtime still carries cumulative logprobs.
+        executor.push(rid, FakeResponse(rid, FakeResult([[]], log_probs=[[-0.1]])))
+        executor.push(
+            rid,
+            FakeResponse(
+                rid,
+                FakeResult(
+                    [[6]],
+                    log_probs=[[-0.1, -0.2]],
+                    finish_reasons=[FakeFinishReason("LENGTH")],
+                    is_final=True,
+                ),
+            ),
+        )
+        events = list(handle.events())
+        for e in events:
+            assert len(e.logprobs) == len(e.token_ids)
+        assert events[1].token_ids == []
+        assert events[1].logprobs == []
+
     def test_prompt_logprobs_from_response_wrapper_first_event_only(self, adapter, executor):
         handle = adapter.submit(make_request(prompt_logprobs=0))
         rid = submitted_id(executor)

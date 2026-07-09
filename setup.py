@@ -444,11 +444,11 @@ setup(
             'trtllm-bench=tensorrt_llm.commands.bench:main',
             'trtllm-serve=tensorrt_llm.commands.serve:main',
             'trtllm-serve-engine=tensorrt_llm.commands.serve_engine:main',
-            'trtllm-serve-frontend=tensorrt_llm.commands.serve_frontend:main',
             'trtllm-eval=tensorrt_llm.commands.eval:main'
         ],
     },
-    scripts=['tensorrt_llm/llmapi/trtllm-llmapi-launch'],
+    scripts=['tensorrt_llm/llmapi/trtllm-llmapi-launch',
+             'tensorrt_llm/commands/trtllm-serve-frontend'],
     extras_require={
         "devel": devel_deps,
         # MX remains prototype-only and is intentionally not declared as an

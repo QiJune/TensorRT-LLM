@@ -13,15 +13,24 @@
 # limitations under the License.
 """Detached OpenAI-compatible frontend: serve HTTP against a remote engine.
 
-This entrypoint never loads the GPU runtime: it forces the lightweight
-import mode before any ``tensorrt_llm`` import, connects to an engine
-started with ``trtllm-serve-engine``, and serves chat/completions over the
-boundary protocol.
+Launched via the ``trtllm-serve-frontend`` script, which exports
+``TLLM_LIGHTWEIGHT_IMPORT=1`` **before** the Python interpreter enters the
+``tensorrt_llm`` import path — importing this module runs
+``tensorrt_llm/__init__.py``, which loads torch and the C++ runtime unless
+the flag is already set. The launcher guarantees the detached frontend
+never loads the GPU runtime; run this module directly only via that script
+(``python -m tensorrt_llm.commands.serve_frontend`` requires the flag to be
+exported beforehand).
+
+It connects to an engine started with ``trtllm-serve-engine`` and serves
+chat/completions over the boundary protocol.
 """
 
 import os
 
-# Must be set before any tensorrt_llm import in this process.
+# Defense-in-depth: the launcher already exports this before Python starts.
+# If tensorrt_llm was somehow imported heavy already, this cannot undo it —
+# always launch via the trtllm-serve-frontend script.
 os.environ.setdefault("TLLM_LIGHTWEIGHT_IMPORT", "1")
 
 import click  # noqa: E402

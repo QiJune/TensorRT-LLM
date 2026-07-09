@@ -174,6 +174,26 @@ class TestProcessLevelSmoke:
             server.shutdown()
 
 
+class TestFrontendLauncher:
+    """The lightweight flag must be established before the tensorrt_llm import."""
+
+    def test_launcher_exports_flag_before_python(self):
+        launcher = REPO_ROOT / "tensorrt_llm" / "commands" / "trtllm-serve-frontend"
+        assert launcher.exists(), "the detached-frontend launcher script is missing"
+        text = launcher.read_text()
+        export_pos = text.index("export TLLM_LIGHTWEIGHT_IMPORT=1")
+        python_pos = text.index("python3 -m tensorrt_llm.commands.serve_frontend")
+        # The env export must precede the python invocation.
+        assert export_pos < python_pos
+
+    def test_frontend_not_registered_as_heavy_console_script(self):
+        setup_text = (REPO_ROOT / "setup.py").read_text()
+        # The console-script entry (which imports the package before the flag
+        # is set) must not exist; the bash launcher replaces it.
+        assert "trtllm-serve-frontend=tensorrt_llm.commands.serve_frontend:main" not in setup_text
+        assert "tensorrt_llm/commands/trtllm-serve-frontend" in setup_text
+
+
 class TestFrontendModelContext:
     def test_built_from_handshake(self):
         from tensorrt_llm.serve.frontend.model_context import FrontendModelContext
