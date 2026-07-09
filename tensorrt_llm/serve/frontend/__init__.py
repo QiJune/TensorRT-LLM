@@ -20,6 +20,7 @@ functions selected per endpoint — they are never request payload and never
 cross to the engine.
 """
 
+from tensorrt_llm.serve.frontend.request_processor import FrontendProcessor, ProcessedInput
 from tensorrt_llm.serve.frontend.response_assembler import (
     AssembledRequestView,
     AssembledSequenceOutput,
@@ -29,5 +30,7 @@ from tensorrt_llm.serve.frontend.response_assembler import (
 __all__ = [
     "AssembledRequestView",
     "AssembledSequenceOutput",
+    "FrontendProcessor",
     "FrontendResponseAssembler",
+    "ProcessedInput",
 ]
