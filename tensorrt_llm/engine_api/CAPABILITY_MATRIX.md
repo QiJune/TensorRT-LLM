@@ -65,6 +65,8 @@ Per-request half of the predicate (`check_request` / `check_sampling_params`).
 | LoRA / prompt adapter | co-located fallback | headless reject | — | FUT-9 |
 | Lookahead / speculative per-request config | co-located fallback | headless reject | — | FUT-9 |
 | `disaggregated_params` on a request | co-located fallback | headless reject | adapter passes disagg metadata through opaquely for the old path | FUT-3 |
+| Chat `conversation_params` (multi-turn routing) | co-located fallback | headless reject | not mapped to the engine request; served in-process | FUT-9 |
+| Chat `agent_hierarchy` (hierarchy-aware scheduling) | co-located fallback | headless reject | not mapped to the engine request; served in-process | FUT-9 |
 | KV retention / scheduling / conversation params, `_postproc_params` (LLM API kwargs) | co-located fallback | n/a | — | FUT-9 |
 | Post-processor hook (`post_processor_hook` configured) | pipeline never constructed — deployment-level fallback: the hook runs at the in-process detokenization chokepoint, so the in-process path serves everything | not offered | — | FUT-10 |
 
