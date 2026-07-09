@@ -541,6 +541,97 @@ class TestOpenAIRouting:
         assert asyncio.run(pipeline.try_chat(request)) is None
         assert client.submitted == []
 
+    def test_streaming_disconnect_aborts_engine_handle(self, client):
+        """A cancelled streaming generator aborts the engine handle.
+
+        If the HTTP client disconnects mid-stream, the cancelled generator
+        must abort the engine handle so it stops consuming resources.
+        """
+
+        class InfiniteHandle(RequestHandle):
+            def __init__(self, request):
+                self._request = request
+                self.aborted = False
+
+            @property
+            def request_id(self):
+                return self._request.request_id
+
+            def events(self):
+                raise NotImplementedError
+
+            async def aevents(self):
+                index = 0
+                while True:
+                    yield EngineEvent(
+                        request_id=self._request.request_id,
+                        event_index=index,
+                        token_ids=[5],
+                        prompt_token_ids=list(self._request.prompt_token_ids)
+                        if index == 0
+                        else None,
+                    )
+                    index += 1
+
+            def abort(self):
+                self.aborted = True
+
+        handles = []
+
+        class InfiniteClient(FakeEngineClient):
+            def submit(self, request):
+                self.submitted.append(request)
+                handle = InfiniteHandle(request)
+                handles.append(handle)
+                return handle
+
+        pipeline = make_pipeline(InfiniteClient())
+        request = CompletionRequest(
+            model="test-model", prompt="hi there", max_tokens=8, stream=True
+        )
+
+        async def drive():
+            response = await pipeline.try_completion(request)
+            gen = response.body_iterator
+            # Consume one chunk, then simulate the client disconnecting.
+            await gen.__anext__()
+            await gen.aclose()
+
+        asyncio.run(drive())
+        assert handles and handles[0].aborted
+
+    def test_conversation_params_chat_falls_back(self, client):
+        pipeline = make_pipeline(client)
+        request = ChatCompletionRequest(
+            model="test-model",
+            messages=[{"role": "user", "content": "hi"}],
+            conversation_params={"conversation_id": "conv-1"},
+        )
+        assert asyncio.run(pipeline.try_chat(request)) is None
+        assert client.submitted == []
+
+    def test_agent_hierarchy_chat_falls_back(self, client):
+        pipeline = make_pipeline(client)
+        request = ChatCompletionRequest(
+            model="test-model",
+            messages=[{"role": "user", "content": "hi"}],
+            agent_hierarchy=[("agent", 1)],
+        )
+        assert asyncio.run(pipeline.try_chat(request)) is None
+        assert client.submitted == []
+
+    def test_trace_headers_reach_engine_request(self, client):
+        pipeline = make_pipeline(client)
+        request = ChatCompletionRequest(
+            model="test-model", messages=[{"role": "user", "content": "hi"}], max_tokens=4
+        )
+        raw_request = SimpleNamespace(
+            headers={"traceparent": "00-abc-def-01", "x-other": "ignored"}
+        )
+        response = asyncio.run(pipeline.try_chat(request, raw_request))
+        assert response is not None
+        assert client.submitted[0].trace_context == {"traceparent": "00-abc-def-01"}
+
 
 class TestLlmApiRouting:
     def test_eligible_text_request_served(self, client):
@@ -572,6 +663,22 @@ class TestLlmApiRouting:
         )
         assert result is not None
         assert client.submitted[0].sampling.prompt_ignore_length == 3
+
+    def test_logprobs_mode_and_exclude_input_reach_engine_request(self, client):
+        from tensorrt_llm.sampling_params import LogprobMode
+
+        pipeline = LlmApiEnginePipeline(client, FrontendProcessor(FakeTokenizer()))
+        result = pipeline.try_generate_async(
+            "hello world",
+            SamplingParams(
+                end_id=2,
+                logprobs_mode=LogprobMode.PROCESSED,
+                exclude_input_from_output=False,
+            ),
+        )
+        assert result is not None
+        assert client.submitted[0].sampling.logprobs_mode == "processed"
+        assert client.submitted[0].sampling.exclude_input_from_output is False
 
     def test_return_perf_metrics_from_normalized_params_reaches_engine(self, client):
         """Normalized sampling-param defaults reach the engine request.

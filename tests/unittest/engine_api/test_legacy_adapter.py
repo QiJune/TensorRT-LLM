@@ -167,6 +167,14 @@ class TestSubmission:
         params = executor.submitted[-1].sampling_params
         assert params._get_stop_words() == [[42], [7, 8], [9]]
 
+    def test_logprobs_mode_and_exclude_input_reconstructed(self, adapter, executor):
+        from tensorrt_llm.sampling_params import LogprobMode
+
+        adapter.submit(make_request(logprobs_mode="processed", exclude_input_from_output=False))
+        params = executor.submitted[-1].sampling_params
+        assert params.logprobs_mode is LogprobMode.PROCESSED
+        assert params.exclude_input_from_output is False
+
     def test_duplicate_request_id_rejected(self, adapter):
         adapter.submit(make_request())
         with pytest.raises(EngineClientError) as excinfo:

@@ -286,6 +286,10 @@ class RuntimeSamplingConfig:
     logprobs_simple_format: bool = False
     prompt_logprobs_simple_format: bool = False
     return_perf_metrics: bool = False
+    # Logprob computation mode ("raw" / "processed"), carried as the enum's
+    # string value so it stays plain data on the wire.
+    logprobs_mode: Optional[str] = None
+    exclude_input_from_output: bool = True
 
     SIDE_CHANNEL_FIELDS: ClassVar[frozenset[str]] = frozenset()
 

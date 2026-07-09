@@ -102,6 +102,25 @@ def _parse_text_conversation(messages: list) -> list[dict[str, Any]]:
     return conversation
 
 
+# W3C distributed-tracing headers (mirrors tracing.TRACE_HEADERS; inlined so
+# the detached frontend stays import-light — llmapi.tracing pulls torch).
+_TRACE_HEADER_NAMES = ("traceparent", "tracestate")
+
+
+def _extract_trace_context(raw_request: Any) -> Optional[dict]:
+    """Extract distributed-tracing headers from the HTTP request, if any.
+
+    The engine forwards these opaquely; a request carrying trace headers keeps
+    its distributed-tracing propagation on the engine-client path.
+    """
+    headers = getattr(raw_request, "headers", None)
+    if not headers:
+        return None
+    lower_map = {k.lower(): v for k, v in headers.items()}
+    extracted = {h: lower_map[h] for h in _TRACE_HEADER_NAMES if h in lower_map}
+    return extracted or None
+
+
 def _normalize_single_prompt(prompt: Any) -> Optional[Union[str, list[int]]]:
     """Return the single prompt of a completions request, or None if batched."""
     if isinstance(prompt, str):
@@ -216,6 +235,21 @@ class OpenAIServingPipeline:
                 )
                 if strict_guided is not None:
                     sampling_params.guided_decoding = strict_guided
+        # Routing metadata the pipeline does not map to the engine request:
+        # served by the in-process path so multi-turn routing and
+        # hierarchy-aware scheduling are not silently dropped.
+        if getattr(request, "conversation_params", None) is not None:
+            return self._handle_ineligible(
+                EligibilityResult(False, "conversation_params are served by the in-process path"),
+                "chat",
+            )
+        if getattr(request, "agent_hierarchy", None) is not None:
+            return self._handle_ineligible(
+                EligibilityResult(
+                    False, "agent_hierarchy scheduling is served by the in-process path"
+                ),
+                "chat",
+            )
         decision = check_request(
             sampling_params,
             endpoint="chat",
@@ -280,6 +314,7 @@ class OpenAIServingPipeline:
 
         cache_salt = getattr(request, "cache_salt", None)
         priority = getattr(request, "priority", DEFAULT_REQUEST_PRIORITY)
+        trace_context = _extract_trace_context(raw_request)
         if request.stream:
             return StreamingResponse(
                 self._stream(
@@ -288,11 +323,16 @@ class OpenAIServingPipeline:
                     format_chat_stream_chunks,
                     cache_salt=cache_salt,
                     priority=priority,
+                    trace_context=trace_context,
                 ),
                 media_type="text/event-stream",
             )
         view = await self._collect(
-            processed, streaming=False, cache_salt=cache_salt, priority=priority
+            processed,
+            streaming=False,
+            cache_salt=cache_salt,
+            priority=priority,
+            trace_context=trace_context,
         )
         return format_chat_response(view, params)
 
@@ -329,6 +369,7 @@ class OpenAIServingPipeline:
 
         cache_salt = getattr(request, "cache_salt", None)
         priority = getattr(request, "priority", DEFAULT_REQUEST_PRIORITY)
+        trace_context = _extract_trace_context(raw_request)
         if request.stream:
             return StreamingResponse(
                 self._stream(
@@ -337,11 +378,16 @@ class OpenAIServingPipeline:
                     format_completion_stream_chunks,
                     cache_salt=cache_salt,
                     priority=priority,
+                    trace_context=trace_context,
                 ),
                 media_type="text/event-stream",
             )
         view = await self._collect(
-            processed, streaming=False, cache_salt=cache_salt, priority=priority
+            processed,
+            streaming=False,
+            cache_salt=cache_salt,
+            priority=priority,
+            trace_context=trace_context,
         )
         return format_completion_response(view, params)
 
@@ -354,6 +400,7 @@ class OpenAIServingPipeline:
         *,
         cache_salt: Optional[str] = None,
         priority: float = DEFAULT_REQUEST_PRIORITY,
+        trace_context: Optional[dict] = None,
     ):
         request_id = uuid.uuid4().hex
         engine_request = EngineRequest(
@@ -363,6 +410,7 @@ class OpenAIServingPipeline:
             streaming=streaming,
             cache_salt=cache_salt,
             priority=priority,
+            trace_context=dict(trace_context) if trace_context else None,
         )
         handle = self._client.submit(engine_request)
         assembler = _make_assembler(
@@ -381,9 +429,14 @@ class OpenAIServingPipeline:
         *,
         cache_salt: Optional[str] = None,
         priority: float = DEFAULT_REQUEST_PRIORITY,
+        trace_context: Optional[dict] = None,
     ):
         handle, assembler = self._submit(
-            processed, streaming, cache_salt=cache_salt, priority=priority
+            processed,
+            streaming,
+            cache_salt=cache_salt,
+            priority=priority,
+            trace_context=trace_context,
         )
         async for event in handle.aevents():
             assembler.consume(event)
@@ -400,11 +453,16 @@ class OpenAIServingPipeline:
         *,
         cache_salt: Optional[str] = None,
         priority: float = DEFAULT_REQUEST_PRIORITY,
+        trace_context: Optional[dict] = None,
     ) -> AsyncGenerator[str, None]:
+        handle, assembler = self._submit(
+            processed,
+            streaming=True,
+            cache_salt=cache_salt,
+            priority=priority,
+            trace_context=trace_context,
+        )
         try:
-            handle, assembler = self._submit(
-                processed, streaming=True, cache_salt=cache_salt, priority=priority
-            )
             async for event in handle.aevents():
                 assembler.consume(event)
                 if assembler.error is not None:
@@ -431,6 +489,12 @@ class OpenAIServingPipeline:
             )
             yield f"data: {error_data}\n\n"
             yield "data: [DONE]\n\n"
+        finally:
+            # If the HTTP client disconnected mid-stream the generator is
+            # cancelled (BaseException, not caught above); abort the engine
+            # request so it stops consuming GPU/KV resources.
+            if not assembler.done:
+                handle.abort()
 
 
 def _make_assembler(

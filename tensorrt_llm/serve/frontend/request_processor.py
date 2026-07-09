@@ -292,6 +292,8 @@ class FrontendProcessor:
             logprobs_simple_format=params.logprobs_simple_format,
             prompt_logprobs_simple_format=params.prompt_logprobs_simple_format,
             return_perf_metrics=params.return_perf_metrics,
+            logprobs_mode=str(params.logprobs_mode) if params.logprobs_mode is not None else None,
+            exclude_input_from_output=params.exclude_input_from_output,
         )
         output_config = FrontendOutputConfig(
             detokenize=params.detokenize,

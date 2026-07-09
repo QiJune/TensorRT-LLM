@@ -117,8 +117,13 @@ def _to_sampling_params(request: EngineRequest) -> SamplingParams:
         logprobs_simple_format=cfg.logprobs_simple_format,
         prompt_logprobs_simple_format=cfg.prompt_logprobs_simple_format,
         return_perf_metrics=cfg.return_perf_metrics,
+        exclude_input_from_output=cfg.exclude_input_from_output,
         detokenize=False,
     )
+    if cfg.logprobs_mode is not None:
+        from tensorrt_llm.sampling_params import LogprobMode
+
+        params.logprobs_mode = LogprobMode(cfg.logprobs_mode)
     if cfg.stop_sequence_token_ids:
         # Placeholder markers keep `_get_stop_words()` emitting the
         # pre-tokenized sequences; the marker strings themselves are never
