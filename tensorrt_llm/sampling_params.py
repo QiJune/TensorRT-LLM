@@ -12,8 +12,6 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-from __future__ import annotations
-
 import json
 import os
 from abc import ABC, abstractmethod
@@ -27,10 +25,28 @@ from tensorrt_llm.logger import logger
 
 if os.environ.get("TLLM_LIGHTWEIGHT_IMPORT", "0") == "1":
     # Lightweight import mode (detached serving frontend): torch and the C++
-    # bindings stay engine-side. Annotations are deferred (future import) and
-    # the guarded code paths using these modules never run frontend-side.
-    torch = None
-    tllme = None
+    # bindings stay engine-side. Stub types stand in for the
+    # annotation-position references; the code paths that would use the real
+    # modules never run frontend-side.
+    class _TorchStub:
+        class Tensor:
+            pass
+
+    class _TllmeStub:
+        class SamplingConfig:
+            pass
+
+        class OutputConfig:
+            pass
+
+        class GuidedDecodingParams:
+            pass
+
+        class LookaheadDecodingConfig:
+            pass
+
+    torch = _TorchStub
+    tllme = _TllmeStub
 else:
     import torch
 
