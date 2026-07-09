@@ -15,6 +15,7 @@
 
 import asyncio
 import copy
+import json
 
 import pytest
 from oracle_harness import (
@@ -82,6 +83,61 @@ def test_openai_parity_headless(fixture: OracleFixture):
     old_output = run_old_path_openai(fixture)
     new_output = asyncio.run(run_new_path_openai(fixture, headless_client_factory(fixture)))
     assert_openai_equal(old_output, new_output, fixture.streaming)
+
+
+class TestStreamingMultiSequenceParity:
+    """The historical path re-emits prior deltas and terminal chunks for
+    untouched sequences on interleaved n>1 streaming (its diff cursors only
+    advance for the sequence named by each response, and its formatter keeps
+    finish state per call, not per request). The exact-equality gate (DEC-4)
+    mandates reproducing that behavior bug-for-bug, so the pipeline does.
+
+    These tests pin BOTH facts: the equality, and the duplicated shape in
+    the OLD path's own output — so an upstream fix to the historical
+    behavior fails here and forces a deliberate lockstep update of the
+    pipeline (tracked as a queued side issue in the loop's goal tracker).
+    """
+
+    @staticmethod
+    def _content_stream(chunks):
+        decoded = []
+        for chunk in chunks:
+            payload = json.loads(chunk[len("data: ") :].strip())
+            for choice in payload.get("choices") or []:
+                delta = choice.get("delta") or {}
+                decoded.append(
+                    (
+                        choice["index"],
+                        delta.get("content") or choice.get("text"),
+                        choice.get("finish_reason"),
+                    )
+                )
+        return decoded
+
+    def test_chat_n2_interleaved_duplication_is_shared_by_both_paths(self):
+        fixture = next(f for f in OPENAI_FIXTURES if f.name == "chat_stream_n2")
+        old_output = run_old_path_openai(fixture)
+        new_output = asyncio.run(run_new_path_openai(fixture))
+        assert_openai_equal(old_output, new_output, streaming=True)
+
+        stream = self._content_stream(old_output)
+        # The duplication signature of the historical path: choice 0's
+        # "Hello" delta re-emitted when sequence 1's event arrives, and
+        # choice 0's terminal re-emitted alongside sequence 1's terminal.
+        content_events = [item for item in stream if item[1]]
+        assert content_events.count((0, "Hello", None)) == 2, (
+            "the historical path no longer duplicates untouched-sequence "
+            "deltas on n>1 streaming — update the pipeline in lockstep and "
+            "refresh this pin"
+        )
+        terminals = [item for item in stream if item[2] is not None]
+        assert len([t for t in terminals if t[0] == 0]) == 2
+
+    def test_completion_n2_interleaved_parity(self):
+        fixture = next(f for f in OPENAI_FIXTURES if f.name == "completion_stream_n2")
+        old_output = run_old_path_openai(fixture)
+        new_output = asyncio.run(run_new_path_openai(fixture))
+        assert_openai_equal(old_output, new_output, streaming=True)
 
 
 class TestHarnessSelfChecks:

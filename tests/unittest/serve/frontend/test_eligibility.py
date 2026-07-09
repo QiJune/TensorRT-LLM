@@ -67,7 +67,8 @@ class TestDeploymentPredicate:
 
     def test_post_processor_hook_disables_pipeline(self):
         """The hook runs at the in-process detok chokepoint; the pipeline must
-        never bypass it, so a configured hook disables the pipeline entirely."""
+        never bypass it, so a configured hook disables the pipeline entirely.
+        """
         decision = check_deployment(deployment_args(post_processor_hook="my_pkg.my_hook"))
         assert not decision and "post_processor_hook" in decision.reason
 
@@ -289,7 +290,8 @@ class TestOpenAIRouting:
 
     def test_strict_tools_synthesize_guided_decoding_and_fall_back(self, client):
         """A strict tool becomes guided decoding pre-eligibility, so the
-        request must never cross the seam this loop."""
+        request must never cross the seam this loop.
+        """
         from tensorrt_llm.serve.tool_parser.tool_parser_factory import ToolParserFactory
 
         class _Info:
@@ -347,7 +349,8 @@ class TestOpenAIRouting:
     def test_raw_special_tokens_parser_mutation_applied_before_split(self, client):
         """Non-strict tools with a raw-special-tokens parser stay eligible,
         and the historical skip_special_tokens=False mutation reaches the
-        frontend output config."""
+        frontend output config.
+        """
         from tensorrt_llm.serve.tool_parser.tool_parser_factory import ToolParserFactory
 
         class RawTokensParser:

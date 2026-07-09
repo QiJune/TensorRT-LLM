@@ -70,6 +70,10 @@ VOCAB = {
     109: " User:",
     110: " ST",
     111: "OP",
+    112: "<call>",
+    113: "get_weather",
+    114: '{"city": "SF"}',
+    115: "</call>",
 }
 REVERSE_VOCAB = {text: token_id for token_id, text in VOCAB.items()}
 
@@ -115,6 +119,62 @@ class OracleModelConfig:
     model_type = "llama"
 
 
+class OracleToolParser:
+    """Deterministic streaming tool parser shared by both paths.
+
+    Emits exactly one tool call once the full ``<call>NAME{json}</call>``
+    marker has streamed through; marker fragments are suppressed from the
+    visible stream deterministically.
+    """
+
+    needs_raw_special_tokens = False
+
+    def __init__(self) -> None:
+        self._buffer = ""
+        self._emitted = False
+
+    def supports_structural_tag(self):
+        return False
+
+    def _extract(self):
+        from tensorrt_llm.serve.tool_parser.core_types import ToolCallItem
+
+        start = self._buffer.index("<call>")
+        end = self._buffer.index("</call>")
+        inner = self._buffer[start + len("<call>") : end]
+        name, _, arguments = inner.partition("{")
+        return ToolCallItem(tool_index=0, name=name, parameters="{" + arguments)
+
+    def parse_streaming_increment(self, text, tools):
+        from types import SimpleNamespace
+
+        self._buffer += text
+        if not self._emitted and "</call>" in self._buffer:
+            self._emitted = True
+            return SimpleNamespace(normal_text="", calls=[self._extract()])
+        normal = "" if "<call>" in self._buffer and not self._emitted else text
+        return SimpleNamespace(normal_text=normal, calls=[])
+
+    def detect_and_parse(self, text, tools):
+        from types import SimpleNamespace
+
+        self._buffer = text
+        if "</call>" in text:
+            visible = text[: text.index("<call>")]
+            return SimpleNamespace(normal_text=visible, calls=[self._extract()])
+        return SimpleNamespace(normal_text=text, calls=[])
+
+
+def _register_oracle_tool_parser() -> str:
+    from tensorrt_llm.serve.tool_parser.tool_parser_factory import ToolParserFactory
+
+    ToolParserFactory.parsers.setdefault("oracle_test_parser", OracleToolParser)
+    return "oracle_test_parser"
+
+
+ORACLE_TOOL_PARSER = _register_oracle_tool_parser()
+
+
 # --- fixture model ---------------------------------------------------------
 
 
@@ -140,6 +200,7 @@ class OracleFixture:
     request_kwargs: dict
     steps: list[StepSpec]
     model: str = "oracle-model"
+    tool_parser: Optional[str] = None
 
     def __post_init__(self):
         self.request_kwargs.setdefault("model", self.model)
@@ -240,6 +301,7 @@ def run_old_path_openai(fixture: OracleFixture):
         sampling_params = request.to_sampling_params(backend="pytorch")
         prompt, conversation = _chat_prompt_and_conversation(request, tokenizer)
         args = ChatPostprocArgs.from_request(request)
+        args.tool_parser = fixture.tool_parser
         role = "assistant" if request.add_generation_prompt else request.messages[-1]["role"]
         if (
             conversation
@@ -331,6 +393,7 @@ async def run_new_path_openai(fixture: OracleFixture, client_factory: Optional[C
             processor,
             model_label=fixture.model,
             mode=PipelineDeploymentMode.COLOCATED,
+            tool_parser=fixture.tool_parser,
         )
         request = build_request_model(fixture)
         if fixture.endpoint == "chat":
@@ -428,6 +491,16 @@ def headless_client_factory(fixture: OracleFixture) -> Callable:
 # --- normalization + comparison ---------------------------------------------
 
 
+def _normalize_tool_call_ids(payload: dict) -> None:
+    """Tool-call ids are random identity metadata; pin them for comparison."""
+    for choice in payload.get("choices") or []:
+        for container_key in ("delta", "message"):
+            container = choice.get(container_key) or {}
+            for tool_call in container.get("tool_calls") or []:
+                if isinstance(tool_call, dict) and tool_call.get("id") is not None:
+                    tool_call["id"] = "TOOL_CALL_ID"
+
+
 def _normalized_sse(chunks: list[str]) -> list[dict]:
     normalized = []
     for chunk in chunks:
@@ -435,6 +508,7 @@ def _normalized_sse(chunks: list[str]) -> list[dict]:
         payload = json.loads(chunk[len("data: ") :].strip())
         payload["id"] = "ID"
         payload["created"] = 0
+        _normalize_tool_call_ids(payload)
         normalized.append(payload)
     return normalized
 
@@ -443,6 +517,7 @@ def _normalized_body(response) -> dict:
     payload = response.model_dump()
     payload["id"] = "ID"
     payload["created"] = 0
+    _normalize_tool_call_ids(payload)
     return payload
 
 
@@ -623,6 +698,79 @@ OPENAI_FIXTURES: list[OracleFixture] = [
         steps=[
             StepSpec([101]),
             StepSpec([102], finish="END_ID", is_final=True),
+        ],
+    ),
+    OracleFixture(
+        name="chat_stream_tool_parser_stop_logprobs",
+        endpoint="chat",
+        streaming=True,
+        request_kwargs={
+            "messages": CHAT_MESSAGES,
+            "max_tokens": 16,
+            "logprobs": True,
+            "top_logprobs": 1,
+            "stop": ["<STOP>"],
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ],
+        },
+        tool_parser="oracle_test_parser",
+        steps=[
+            StepSpec([101], logprobs=[{101: Logprob(-0.25, rank=1)}]),
+            StepSpec([112], logprobs=[{112: Logprob(-0.5, rank=1)}]),
+            StepSpec([113], logprobs=[{113: Logprob(-0.75, rank=1)}]),
+            StepSpec([114], logprobs=[{114: Logprob(-1.0, rank=1)}]),
+            StepSpec(
+                [115],
+                logprobs=[{115: Logprob(-1.25, rank=1)}],
+                finish="END_ID",
+                is_final=True,
+            ),
+        ],
+    ),
+    OracleFixture(
+        name="chat_nonstream_tool_parser",
+        endpoint="chat",
+        streaming=False,
+        request_kwargs={
+            "messages": CHAT_MESSAGES,
+            "max_tokens": 16,
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "parameters": {"type": "object", "properties": {}},
+                    },
+                }
+            ],
+        },
+        tool_parser="oracle_test_parser",
+        steps=[
+            StepSpec([101, 112, 113, 114, 115], finish="END_ID", is_final=True),
+        ],
+    ),
+    OracleFixture(
+        name="completion_stream_n2",
+        endpoint="completions",
+        streaming=True,
+        request_kwargs={
+            "prompt": "hello there",
+            "max_tokens": 8,
+            "n": 2,
+            "temperature": 0.8,
+        },
+        steps=[
+            StepSpec([101], sequence_index=0),
+            StepSpec([105], sequence_index=1),
+            StepSpec([102], sequence_index=0, finish="LENGTH"),
+            StepSpec([106], sequence_index=1, finish="LENGTH", is_final=True),
         ],
     ),
     OracleFixture(

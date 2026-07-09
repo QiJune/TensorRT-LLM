@@ -105,7 +105,8 @@ class TestControlEndpointsDetached:
 class TestDetachedFrontendLifecycle:
     def test_frontend_constructed_during_initialization_serves_after_ready(self):
         """A DetachedFrontend created while the engine initializes must wait
-        for readiness and then serve — no reconstruction."""
+        for readiness and then serve — no reconstruction.
+        """
         import threading
 
         from tensorrt_llm.engine_api.engine_server import EngineServer
@@ -145,9 +146,9 @@ class TestDetachedFrontendLifecycle:
             server.shutdown()
 
     def test_frontend_fails_typed_when_engine_never_becomes_ready(self):
-        from tensorrt_llm.engine_api.engine_server import EngineServer
-
         import threading
+
+        from tensorrt_llm.engine_api.engine_server import EngineServer
 
         release = threading.Event()
 
