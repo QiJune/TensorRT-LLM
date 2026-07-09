@@ -61,6 +61,7 @@ def make_assembler(
     num_sequences=1,
     num_returns=1,
     detokenize=True,
+    use_beam_search=False,
     **config_overrides,
 ) -> FrontendResponseAssembler:
     config = FrontendOutputConfig(detokenize=detokenize, **config_overrides)
@@ -69,6 +70,7 @@ def make_assembler(
         config,
         num_sequences=num_sequences,
         num_returns=num_returns,
+        use_beam_search=use_beam_search,
         streaming=streaming,
         tokenizer=FakeTokenizer() if detokenize else None,
     )
@@ -136,6 +138,34 @@ class TestStreamingAssembly:
         assert output.logprobs == [-0.1, -0.2]
         assert output.logprobs_diff == [-0.2]
         assert output.cumulative_logprob == -0.3
+
+    def test_cumulative_beam_logprobs_replace_not_append(self):
+        """Cumulative (beam) events replace logprobs, not append.
+
+        The token list replaces the prefix, so logprobs must replace too —
+        otherwise logprobs outgrows token_ids and the OpenAI logprob
+        formatter's length assertion fails.
+        """
+        assembler = make_assembler(
+            num_sequences=1, num_returns=1, use_beam_search=True, detokenize=False
+        )
+        assembler.consume(
+            event(event_index=0, token_ids=[1, 2], cumulative=True, logprobs=[-0.1, -0.2])
+        )
+        assembler.consume(
+            event(
+                event_index=1,
+                token_ids=[1, 2, 3],
+                cumulative=True,
+                logprobs=[-0.1, -0.2, -0.3],
+                terminal_kind=TerminalKind.FINISHED,
+                finish_reason="length",
+            )
+        )
+        output = assembler.view.outputs[0]
+        assert output.token_ids == [1, 2, 3]
+        assert output.logprobs == [-0.1, -0.2, -0.3]
+        assert len(output.logprobs) == len(output.token_ids)
 
 
 class TestStopHandling:

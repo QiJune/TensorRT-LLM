@@ -327,6 +327,45 @@ class TestEventNormalization:
         assert events[0].prompt_logprobs == [-0.5, -0.6, -0.7]
         assert events[1].prompt_logprobs is None
 
+    def test_cached_prompt_logprobs_on_every_response_first_event_only(self, adapter, executor):
+        """Cached prompt logprobs attach only to a sequence's first event.
+
+        The PyTorch worker returns cached prompt logprobs on every response;
+        the adapter must attach them only to the first event so the ordering
+        checker does not reject event_index > 0.
+        """
+        handle = adapter.submit(make_request(prompt_logprobs=0))
+        rid = submitted_id(executor)
+        prompt_lp = LogProbsResult(prompt=[-0.5, -0.6, -0.7], generation=None)
+        # Cached prompt logprobs ride along on every response, including the
+        # second and the terminal.
+        executor.push(
+            rid, ResponseWrapper(FakeResponse(rid, FakeResult([[5]])), logprobs=prompt_lp)
+        )
+        executor.push(
+            rid, ResponseWrapper(FakeResponse(rid, FakeResult([[6]])), logprobs=prompt_lp)
+        )
+        executor.push(
+            rid,
+            ResponseWrapper(
+                FakeResponse(
+                    rid,
+                    FakeResult([[7]], finish_reasons=[FakeFinishReason("LENGTH")], is_final=True),
+                ),
+                logprobs=prompt_lp,
+            ),
+        )
+        events = list(handle.events())
+        # The whole stream must satisfy the ordering contract (this is what
+        # the socket client enforces).
+        checker = EventOrderingChecker()
+        for event in events:
+            checker.observe(event)
+        assert events[0].prompt_logprobs == [-0.5, -0.6, -0.7]
+        assert events[0].prompt_token_ids == [1, 2, 3]
+        assert all(e.prompt_logprobs is None for e in events[1:])
+        assert all(e.prompt_token_ids is None for e in events[1:])
+
     def test_disaggregated_metadata_opaque_passthrough(self, adapter, executor):
         handle = adapter.submit(make_request(streaming=False))
         rid = submitted_id(executor)

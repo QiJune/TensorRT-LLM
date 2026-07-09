@@ -138,7 +138,6 @@ class _ResponseNormalizer:
         self._request = request
         self._event_index: dict[int, int] = {}
         self._terminated: set[int] = set()
-        self._prompt_echo_sent = False
         self._finished = False
 
     @property
@@ -150,12 +149,6 @@ class _ResponseNormalizer:
         self._event_index[sequence_index] = index + 1
         return index
 
-    def _first_event_metadata(self) -> dict[str, Any]:
-        if self._prompt_echo_sent:
-            return {}
-        self._prompt_echo_sent = True
-        return {"prompt_token_ids": list(self._request.prompt_token_ids)}
-
     def _terminal_error_event(self, message: str, code: EngineErrorCode) -> list[EngineEvent]:
         self._finished = True
         events = []
@@ -164,14 +157,23 @@ class _ResponseNormalizer:
         open_sequences = (set(self._event_index) or {0}) - self._terminated
         for sequence_index in sorted(open_sequences):
             self._terminated.add(sequence_index)
+            event_index = self._next_index(sequence_index)
+            # Prompt echo only on a sequence's first event (event_index 0);
+            # an error terminating an already-streaming sequence must not
+            # carry prompt metadata.
+            metadata = (
+                {"prompt_token_ids": list(self._request.prompt_token_ids)}
+                if event_index == 0
+                else {}
+            )
             events.append(
                 EngineEvent(
                     request_id=self._request.request_id,
                     sequence_index=sequence_index,
-                    event_index=self._next_index(sequence_index),
+                    event_index=event_index,
                     terminal_kind=TerminalKind.ERROR,
                     error=error,
-                    **self._first_event_metadata(),
+                    **metadata,
                 )
             )
         return events
@@ -298,10 +300,17 @@ class _ResponseNormalizer:
         if getattr(result, "cum_log_probs", None):
             cumulative_logprob = result.cum_log_probs[source_index]
 
-        metadata = self._first_event_metadata()
-        if logprobs_result is not None and logprobs_result.prompt is not None:
-            metadata.setdefault("prompt_token_ids", list(self._request.prompt_token_ids))
-            metadata["prompt_logprobs"] = _plain_logprobs(logprobs_result.prompt)
+        event_index = self._next_index(sequence_index)
+        # Prompt metadata is first-event-only per sequence. The worker
+        # returns cached prompt logprobs on every response, so attaching them
+        # (and the prompt-token echo) on later events would violate the
+        # ordering contract (EventOrderingChecker rejects prompt metadata on
+        # event_index > 0).
+        metadata: dict[str, Any] = {}
+        if event_index == 0:
+            metadata["prompt_token_ids"] = list(self._request.prompt_token_ids)
+            if logprobs_result is not None and logprobs_result.prompt is not None:
+                metadata["prompt_logprobs"] = _plain_logprobs(logprobs_result.prompt)
 
         metrics: dict[str, float] = {}
         if perf_metrics:
@@ -314,7 +323,7 @@ class _ResponseNormalizer:
         return EngineEvent(
             request_id=self._request.request_id,
             sequence_index=sequence_index,
-            event_index=self._next_index(sequence_index),
+            event_index=event_index,
             token_ids=token_ids,
             cumulative=cumulative,
             logprobs=logprobs,

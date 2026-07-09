@@ -234,7 +234,13 @@ class FrontendResponseAssembler:
             output.prompt_logprobs = event.prompt_logprobs
         if event.logprobs is not None:
             output._last_logprobs_len = len(output.logprobs)
-            output.logprobs = output.logprobs + list(event.logprobs)
+            if event.cumulative:
+                # Beam search: the token list replaced the prefix, so the
+                # logprobs must replace it too — appending would leave
+                # output.logprobs longer than output.token_ids.
+                output.logprobs = list(event.logprobs)
+            else:
+                output.logprobs = output.logprobs + list(event.logprobs)
 
         if event.metrics:
             cached = event.metrics.get("cached_tokens")

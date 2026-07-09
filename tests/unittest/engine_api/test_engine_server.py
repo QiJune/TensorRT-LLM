@@ -190,8 +190,10 @@ class TestLifecycle:
 
 class TestReadinessRefresh:
     def test_same_client_becomes_ready_after_engine_initializes(self):
-        """A client created during initialization must serve after readiness
-        flips, without being recreated (submit refreshes the handshake)."""
+        """A client created during init must serve after readiness flips.
+
+        No reconstruction: submit refreshes the handshake.
+        """
         release = threading.Event()
         engine = FakeEngine()
 
@@ -247,8 +249,10 @@ class TestReadinessRefresh:
 
 class TestFailFast:
     def test_runtime_factory_fails_fast_before_model_construction(self):
-        """Unsupported configs must raise before any runtime import or LLM
-        construction (the factory is never even built)."""
+        """Unsupported configs raise before any runtime import or LLM build.
+
+        The factory call itself raises; construction is never reached.
+        """
         from tensorrt_llm.engine_api.engine_server import build_runtime_backend_factory
 
         with pytest.raises(ValueError, match="num_postprocess_workers=2"):
