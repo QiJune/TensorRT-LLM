@@ -365,6 +365,18 @@ def format_chat_stream_chunks(view: AssembledRequestView, params: ChatFormatterP
         return data
 
     res: List[str] = []
+    # DEC-4 bug-for-bug parity: `finish_reason_sent` is intentionally a
+    # per-call local, exactly like the historical postprocessor
+    # (serve/postprocess_handlers.py chat_stream_post_processor,
+    # `finish_reason_sent = [False] * args.num_choices`). For interleaved
+    # n>1 streaming the runtime sends one sequence per response
+    # (executor/result.py _handle_response -> _handle_sequence updates only
+    # that sequence's diff cursor), so an already-finished choice re-emits
+    # its terminal chunk and unchanged choices re-emit their last delta.
+    # The oracle pins this (TestStreamingMultiSequenceParity, chat_stream_n2).
+    # Persisting this state across calls would diverge flag-on from the
+    # byte-identical flag-off output; the de-duplication is a lockstep fix to
+    # BOTH this formatter and the historical postprocessor in a follow-up loop.
     finish_reason_sent = [False] * params.num_choices
     prompt_tokens = params.num_prompt_tokens
     ctx_usage = _ctx_usage_for_view(params, view)
@@ -599,6 +611,16 @@ def format_completion_stream_chunks(
         include_usage = False
         include_continuous_usage = False
 
+    # DEC-4 bug-for-bug parity: like the historical
+    # completion_stream_post_processor, this iterates every choice on every
+    # engine event and emits its current diff/terminal without persisting
+    # per-choice sent-state. For interleaved n>1 streaming (one sequence per
+    # response, executor/result.py:_handle_sequence) unchanged choices
+    # re-emit their last delta and finished choices re-emit their terminal.
+    # completion_stream_n2 pins this exact shape; skipping unchanged choices
+    # would diverge from the byte-identical flag-off output. De-duplication is
+    # a lockstep fix to both formatters and the historical postprocessors in a
+    # follow-up loop.
     for output in view.outputs:
         delta_text = output.text_diff
         if params.echo and params.first_iteration:
