@@ -479,6 +479,7 @@ class _SocketRequestHandle(RequestHandle):
         self._finished = False
         self._expected_terminals = max(expected_terminals, 1)
         self._seen_terminals = 0
+        self._aborted = False
 
     @property
     def request_id(self) -> str:
@@ -501,20 +502,37 @@ class _SocketRequestHandle(RequestHandle):
                     self._finished = True
         return item
 
-    def events(self) -> Iterator[EngineEvent]:
-        while not self._finished:
-            yield self._next_item()
+    def _cleanup(self) -> None:
+        # Runs when the generator closes — the consumer broke on the terminal
+        # event or stopped early (client disconnect cancels at ``yield``).
+        # Abort a still-running request (over the socket) before forgetting
+        # its state so a long-running frontend does not leak per-request
+        # bookkeeping.
+        self._do_abort()
         self._client._forget(self._request_id)
+
+    def _do_abort(self) -> None:
+        if self._aborted or self._finished:
+            return
+        self._aborted = True
+        self._client.abort(self._request_id)
+
+    def events(self) -> Iterator[EngineEvent]:
+        try:
+            while not self._finished:
+                yield self._next_item()
+        finally:
+            self._cleanup()
 
     async def aevents(self) -> AsyncIterator[EngineEvent]:
-        while not self._finished:
-            yield await asyncio.to_thread(self._next_item)
-        self._client._forget(self._request_id)
+        try:
+            while not self._finished:
+                yield await asyncio.to_thread(self._next_item)
+        finally:
+            self._cleanup()
 
     def abort(self) -> None:
-        if self._finished:
-            return  # idempotent no-op after the terminal event
-        self._client.abort(self._request_id)
+        self._do_abort()
 
 
 class SocketEngineClient(EngineClient):

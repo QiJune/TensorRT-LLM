@@ -438,6 +438,9 @@ class OpenAIServingPipeline:
             priority=priority,
             trace_context=trace_context,
         )
+        # The handle aborts the engine request and forgets its bookkeeping in
+        # its own generator ``finally`` when this loop stops early (terminal
+        # event, or the awaiting coroutine cancelled by a client disconnect).
         async for event in handle.aevents():
             assembler.consume(event)
             if assembler.done:
@@ -489,12 +492,9 @@ class OpenAIServingPipeline:
             )
             yield f"data: {error_data}\n\n"
             yield "data: [DONE]\n\n"
-        finally:
-            # If the HTTP client disconnected mid-stream the generator is
-            # cancelled (BaseException, not caught above); abort the engine
-            # request so it stops consuming GPU/KV resources.
-            if not assembler.done:
-                handle.abort()
+        # On client disconnect the surrounding StreamingResponse cancels this
+        # generator; closing it cascades to ``handle.aevents()``, whose own
+        # ``finally`` aborts the still-running engine request and forgets it.
 
 
 def _make_assembler(

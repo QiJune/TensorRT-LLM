@@ -103,8 +103,11 @@ def _to_sampling_params(request: EngineRequest) -> SamplingParams:
         presence_penalty=cfg.presence_penalty,
         frequency_penalty=cfg.frequency_penalty,
         repetition_penalty=cfg.repetition_penalty,
-        length_penalty=cfg.length_penalty if cfg.length_penalty is not None else 1.0,
-        early_stopping=cfg.early_stopping if cfg.early_stopping is not None else 1,
+        # Pass None through: SamplingParams documents None as "use the C++
+        # runtime default" (length_penalty 0.f, early_stopping 1). Coercing
+        # to 1.0/1 here would rank beams differently from the in-process path.
+        length_penalty=cfg.length_penalty,
+        early_stopping=cfg.early_stopping,
         no_repeat_ngram_size=cfg.no_repeat_ngram_size,
         prompt_ignore_length=cfg.prompt_ignore_length,
         beam_search_diversity_rate=cfg.beam_search_diversity_rate,
@@ -429,16 +432,34 @@ class _LegacyRequestHandle(RequestHandle):
         self._request = request
         self._result = result
         self._normalizer = _ResponseNormalizer(request)
+        self._aborted = False
 
     @property
     def request_id(self) -> str:
         return self._request.request_id
 
-    def events(self) -> Iterator[EngineEvent]:
-        while not self._normalizer.finished:
-            response = self._result.queue.get()
-            yield from self._normalizer.normalize(response)
+    def _cleanup(self) -> None:
+        # Runs when the generator closes — either it ran to the terminal event
+        # or the consumer stopped early (break / client disconnect cancels the
+        # generator at ``yield``). Abort the still-running engine request
+        # first (while the bookkeeping is intact), then release it. Ordering
+        # matters: ``_forget`` clears the id ``abort`` needs.
+        self._do_abort()
         self._adapter._forget(self._request.request_id)
+
+    def _do_abort(self) -> None:
+        if self._aborted or self._normalizer.finished:
+            return
+        self._aborted = True
+        self._adapter.abort(self._request.request_id)
+
+    def events(self) -> Iterator[EngineEvent]:
+        try:
+            while not self._normalizer.finished:
+                response = self._result.queue.get()
+                yield from self._normalizer.normalize(response)
+        finally:
+            self._cleanup()
 
     async def aevents(self) -> AsyncIterator[EngineEvent]:
         if self._result.aqueue is None:
@@ -449,14 +470,16 @@ class _LegacyRequestHandle(RequestHandle):
                     request_id=self._request.request_id,
                 )
             )
-        while not self._normalizer.finished:
-            response = await self._result.aqueue.get()
-            for event in self._normalizer.normalize(response):
-                yield event
-        self._adapter._forget(self._request.request_id)
+        try:
+            while not self._normalizer.finished:
+                response = await self._result.aqueue.get()
+                for event in self._normalizer.normalize(response):
+                    yield event
+        finally:
+            self._cleanup()
 
     def abort(self) -> None:
-        self._adapter.abort(self._request.request_id)
+        self._do_abort()
 
 
 class LegacyEngineClientAdapter(EngineClient):

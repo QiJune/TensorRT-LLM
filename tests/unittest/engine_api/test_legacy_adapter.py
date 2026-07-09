@@ -175,6 +175,25 @@ class TestSubmission:
         assert params.logprobs_mode is LogprobMode.PROCESSED
         assert params.exclude_input_from_output is False
 
+    def test_unset_length_penalty_stays_none(self, adapter, executor):
+        """Unset length_penalty/early_stopping reach the runtime as None.
+
+        None is the documented "use the C++ runtime default"; coercing to
+        1.0/1 would rank beams differently from the in-process path.
+        """
+        adapter.submit(make_request(use_beam_search=True, best_of=2, n=2))
+        params = executor.submitted[-1].sampling_params
+        assert params.length_penalty is None
+        assert params.early_stopping is None
+
+    def test_explicit_length_penalty_preserved(self, adapter, executor):
+        adapter.submit(
+            make_request(use_beam_search=True, best_of=2, n=2, length_penalty=0.8, early_stopping=2)
+        )
+        params = executor.submitted[-1].sampling_params
+        assert params.length_penalty == 0.8
+        assert params.early_stopping == 2
+
     def test_duplicate_request_id_rejected(self, adapter):
         adapter.submit(make_request())
         with pytest.raises(EngineClientError) as excinfo:
@@ -484,6 +503,59 @@ class TestAbortAndErrors:
         with pytest.raises(EngineClientError) as excinfo:
             adapter.abort("never-submitted")
         assert excinfo.value.error.code is EngineErrorCode.UNKNOWN_REQUEST
+
+    def test_handle_forgotten_after_full_consumption(self, adapter, executor):
+        handle = adapter.submit(make_request())
+        rid = submitted_id(executor)
+        executor.push(
+            rid,
+            FakeResponse(
+                rid, FakeResult([[5]], finish_reasons=[FakeFinishReason("LENGTH")], is_final=True)
+            ),
+        )
+        list(handle.events())
+        assert handle.request_id not in adapter._handles
+        assert handle.request_id not in adapter._request_ids
+
+    def test_handle_forgotten_when_consumer_breaks_and_closes(self, adapter, executor):
+        """Breaking on the terminal event still forgets the request.
+
+        The pipeline breaks on the terminal event, closing the generator
+        while suspended; the finally must still forget the request.
+        """
+        handle = adapter.submit(make_request())
+        rid = submitted_id(executor)
+        executor.push(rid, FakeResponse(rid, FakeResult([[5]])))
+        executor.push(
+            rid,
+            FakeResponse(
+                rid, FakeResult([[6]], finish_reasons=[FakeFinishReason("LENGTH")], is_final=True)
+            ),
+        )
+        gen = handle.events()
+        for event in gen:
+            if event.terminal_kind is TerminalKind.FINISHED:
+                break
+        gen.close()
+        assert handle.request_id not in adapter._handles
+        assert handle.request_id not in adapter._request_ids
+        # Completed request: closing must not abort.
+        assert executor.aborted_ids == []
+
+    def test_early_close_before_terminal_aborts_and_forgets(self, adapter, executor):
+        """Early close before the terminal aborts and forgets.
+
+        A disconnect closes the generator before the terminal event; the
+        finally must abort the still-running engine request and forget it.
+        """
+        handle = adapter.submit(make_request())
+        rid = submitted_id(executor)
+        executor.push(rid, FakeResponse(rid, FakeResult([[5]])))
+        gen = handle.events()
+        next(gen)
+        gen.close()
+        assert executor.aborted_ids == [rid]
+        assert handle.request_id not in adapter._request_ids
 
     def test_error_response_becomes_typed_error_event(self, adapter, executor):
         handle = adapter.submit(make_request())

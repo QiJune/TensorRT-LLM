@@ -133,6 +133,49 @@ class TestStreaming:
         assert events[-1].terminal_kind is TerminalKind.FINISHED
         assert [e.event_index for e in events] == [0, 1, 2, 3]
 
+    def test_handle_state_forgotten_after_full_consumption(self, stack):
+        handle = stack.submit(make_request(num_tokens=3))
+        list(handle.events())
+        assert handle.request_id not in stack.client._handles
+        assert handle.request_id not in stack.client._checkers
+
+    def test_handle_state_forgotten_when_consumer_breaks_and_closes(self, stack):
+        """Breaking on the terminal event still forgets per-request state.
+
+        The pipeline breaks on the terminal event, closing the generator
+        while suspended; the finally must still forget per-request state.
+        """
+        handle = stack.submit(make_request(num_tokens=3))
+        gen = handle.events()
+        for event in gen:
+            if event.terminal_kind is TerminalKind.FINISHED:
+                break
+        gen.close()
+        assert handle.request_id not in stack.client._handles
+        assert handle.request_id not in stack.client._checkers
+
+    def test_early_close_before_terminal_aborts_and_forgets(self):
+        """Early close before the terminal aborts and forgets state.
+
+        A disconnect closes the generator before the terminal event; the
+        finally must abort the still-running request and forget its state.
+        """
+        engine = FakeEngine(script=infinite_script)
+        stack = LocalProcessEngineClient(engine)
+        try:
+            handle = stack.submit(make_request("live", num_tokens=3))
+            gen = handle.events()
+            next(gen)
+            gen.close()
+            assert "live" not in stack.client._handles
+            assert "live" not in stack.client._checkers
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline and "live" not in engine.aborted_request_ids:
+                time.sleep(0.05)
+            assert "live" in engine.aborted_request_ids
+        finally:
+            stack.shutdown()
+
     def test_concurrent_interleaved_streams_stay_correlated(self, stack):
         results = {}
         errors = []

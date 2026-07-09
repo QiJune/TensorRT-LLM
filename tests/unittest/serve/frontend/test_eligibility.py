@@ -544,14 +544,16 @@ class TestOpenAIRouting:
     def test_streaming_disconnect_aborts_engine_handle(self, client):
         """A cancelled streaming generator aborts the engine handle.
 
-        If the HTTP client disconnects mid-stream, the cancelled generator
-        must abort the engine handle so it stops consuming resources.
+        If the HTTP client disconnects mid-stream, closing the pipeline
+        generator cascades into ``handle.aevents()``; a contract-compliant
+        handle aborts the still-running engine request in its ``finally``.
         """
 
         class InfiniteHandle(RequestHandle):
             def __init__(self, request):
                 self._request = request
                 self.aborted = False
+                self._finished = False
 
             @property
             def request_id(self):
@@ -562,16 +564,20 @@ class TestOpenAIRouting:
 
             async def aevents(self):
                 index = 0
-                while True:
-                    yield EngineEvent(
-                        request_id=self._request.request_id,
-                        event_index=index,
-                        token_ids=[5],
-                        prompt_token_ids=list(self._request.prompt_token_ids)
-                        if index == 0
-                        else None,
-                    )
-                    index += 1
+                try:
+                    while True:
+                        yield EngineEvent(
+                            request_id=self._request.request_id,
+                            event_index=index,
+                            token_ids=[5],
+                            prompt_token_ids=list(self._request.prompt_token_ids)
+                            if index == 0
+                            else None,
+                        )
+                        index += 1
+                finally:
+                    if not self._finished:
+                        self.abort()
 
             def abort(self):
                 self.aborted = True
