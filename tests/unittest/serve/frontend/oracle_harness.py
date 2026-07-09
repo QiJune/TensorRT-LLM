@@ -368,6 +368,63 @@ def _llm_api_sampling_params(fixture: OracleFixture) -> SamplingParams:
     return SamplingParams(**kwargs)
 
 
+# --- headless variant: engine in a separate process ---------------------------
+
+
+def _headless_engine_main(endpoint: str, steps) -> None:
+    """Child-process entry: serve the fixture stream over the boundary socket."""
+    import time as _time
+
+    import zmq as _zmq
+
+    _zmq.Context._instance = None  # fresh ZMQ context after fork
+
+    from tensorrt_llm.engine_api.socket_transport import EngineSocketServer
+
+    executor = _OracleExecutor(steps)
+    server = EngineSocketServer(LegacyEngineClientAdapter(executor), endpoint=endpoint)
+    server.start()
+    while True:
+        _time.sleep(0.2)
+
+
+class _HeadlessOracleClient:
+    """RemoteEngineClient plus ownership of the engine child process."""
+
+    def __init__(self, client, process) -> None:
+        self._client = client
+        self._process = process
+
+    def __getattr__(self, name):
+        return getattr(self._client, name)
+
+    def shutdown(self) -> None:
+        self._client.shutdown()
+        self._process.terminate()
+        self._process.join(timeout=10)
+
+
+def headless_client_factory(fixture: OracleFixture) -> Callable:
+    """Client factory running the engine side in a separate (forked) process."""
+
+    def factory(_executor):
+        import multiprocessing
+        import uuid
+
+        from tensorrt_llm.engine_api.engine_server import RemoteEngineClient
+
+        endpoint = f"ipc:///tmp/oracle_headless_{uuid.uuid4().hex}.sock"
+        context = multiprocessing.get_context("fork")
+        process = context.Process(
+            target=_headless_engine_main, args=(endpoint, fixture.steps), daemon=True
+        )
+        process.start()
+        client = RemoteEngineClient(endpoint, handshake_timeout_seconds=60)
+        return _HeadlessOracleClient(client, process)
+
+    return factory
+
+
 # --- normalization + comparison ---------------------------------------------
 
 

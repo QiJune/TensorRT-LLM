@@ -176,6 +176,16 @@ class EngineSocketServer:
     def readiness(self) -> ReadinessState:
         return self._readiness
 
+    def set_backend(self, backend: EngineClient) -> None:
+        """Install the backend once the engine finished initializing."""
+        self._backend = backend
+
+    def set_model_context(self, model_context: dict[str, Any]) -> None:
+        self._model_context = model_context
+
+    def set_capabilities(self, capabilities: dict[str, Any]) -> None:
+        self._capabilities = capabilities
+
     # --- serve loop -------------------------------------------------------------
 
     def _serve_loop(self) -> None:

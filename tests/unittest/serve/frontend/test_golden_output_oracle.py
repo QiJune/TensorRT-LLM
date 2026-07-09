@@ -70,6 +70,20 @@ def test_llm_api_parity_over_socket(fixture: OracleFixture):
     assert_llm_api_equal(old_snapshots, new_snapshots)
 
 
+@pytest.mark.parametrize("fixture", OPENAI_FIXTURES, ids=lambda f: f.name)
+def test_openai_parity_headless(fixture: OracleFixture):
+    """The same fixtures must hold with the engine in a separate process.
+
+    The Python LLM API never runs detached (it stays an in-process facade),
+    so the headless variant covers the OpenAI fixtures only.
+    """
+    from oracle_harness import headless_client_factory
+
+    old_output = run_old_path_openai(fixture)
+    new_output = asyncio.run(run_new_path_openai(fixture, headless_client_factory(fixture)))
+    assert_openai_equal(old_output, new_output, fixture.streaming)
+
+
 class TestHarnessSelfChecks:
     """The oracle must catch seeded divergences — proof the comparison bites."""
 
