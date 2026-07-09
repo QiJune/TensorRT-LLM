@@ -62,6 +62,38 @@ def stack():
     server.shutdown()
 
 
+class TestDetachedEngineErrorResponse:
+    def test_engine_terminal_error_becomes_structured_response(self):
+        """An engine ERROR terminal becomes a structured response detached.
+
+        A non-streaming completion whose engine stream ends in an ERROR
+        terminal must surface a structured error, not a 500.
+        """
+        from fake_engine import exploding_script
+
+        engine = FakeEngine(script=exploding_script)
+        server = EngineSocketServer(
+            engine,
+            endpoint=f"ipc:///tmp/runtime_control_{uuid.uuid4().hex}.sock",
+            model_context={"model": "err-model", "tokenizer_dir": None},
+        )
+        server.start()
+        frontend = DetachedFrontend(server.endpoint, tokenizer=MinimalTokenizer())
+        client = TestClient(create_detached_app(frontend))
+        try:
+            response = client.post(
+                "/v1/completions",
+                json={"model": "err-model", "prompt": "hi there", "max_tokens": 4},
+            )
+            assert response.status_code == 503
+            body = response.json()["error"]
+            assert body["code"] == EngineErrorCode.INTERNAL_ERROR.value
+            assert "exploded" in body["message"]
+        finally:
+            frontend.shutdown()
+            server.shutdown()
+
+
 class TestControlEndpointsDetached:
     def test_health_returns_live_engine_state(self, stack):
         engine, _server, _frontend, client = stack

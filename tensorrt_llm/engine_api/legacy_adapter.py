@@ -290,11 +290,28 @@ class _ResponseNormalizer:
             stop_reason = self._token_level_stop_reason(reason_name, token_ids)
             stop_kind = "end_token" if reason_name == "END_ID" else "stop_sequence"
 
-        logprobs = None
+        # Logprobs must align with this event's token_ids. The PyTorch/TRTLLM
+        # sampler returns a streamwise-cumulative log_probs list, while a
+        # non-cumulative (delta) event carries only the newly generated
+        # tokens; passing the full cumulative list would make later events
+        # carry more logprobs than tokens and trip the frontend length
+        # assertion. Emit only the entries that pair with token_ids.
+        raw_logprobs = None
         if logprobs_result is not None and logprobs_result.generation is not None:
-            logprobs = _plain_logprobs(logprobs_result.generation)
+            raw_logprobs = list(logprobs_result.generation)
         elif getattr(result, "log_probs", None):
-            logprobs = _plain_logprobs(result.log_probs[source_index])
+            raw_logprobs = list(result.log_probs[source_index])
+        logprobs = None
+        if raw_logprobs is not None:
+            if cumulative:
+                # Beam: token_ids is the full prefix; keep the aligned prefix.
+                logprobs = _plain_logprobs(raw_logprobs[: len(token_ids)])
+            elif len(raw_logprobs) > len(token_ids):
+                # Cumulative source on a delta event: the new entries are the
+                # last len(token_ids).
+                logprobs = _plain_logprobs(raw_logprobs[-len(token_ids) :])
+            else:
+                logprobs = _plain_logprobs(raw_logprobs)
 
         cumulative_logprob = None
         if getattr(result, "cum_log_probs", None):

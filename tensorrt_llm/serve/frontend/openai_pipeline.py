@@ -35,6 +35,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from tensorrt_llm.engine_api.contracts import (
     EngineClient,
+    EngineClientError,
     EngineErrorCode,
     EngineRequest,
     FrontendOutputConfig,
@@ -452,4 +453,7 @@ def _make_assembler(
 
 def _raise_on_assembly_error(assembler: FrontendResponseAssembler) -> None:
     if assembler.error is not None:
-        raise RuntimeError(f"Generation failed: {assembler.error.message}")
+        # Raise the typed engine error so the endpoint (co-located) and the
+        # detached app convert it into a structured OpenAI error response
+        # rather than an unhandled 500.
+        raise EngineClientError(assembler.error)

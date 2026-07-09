@@ -322,6 +322,46 @@ class TestOpenAIRouting:
         response = asyncio.run(OpenAIServer.openai_completion(fake_self, request, None))
         assert response.status_code == 400
 
+    def test_engine_terminal_error_becomes_typed_error_response(self, client):
+        """An engine ERROR terminal becomes a structured error response.
+
+        A non-streaming request whose engine stream ends in an ERROR
+        terminal must surface a structured error, not a 500.
+        """
+        from tensorrt_llm.engine_api import EngineError
+        from tensorrt_llm.serve.openai_server import OpenAIServer
+
+        class ErrorTerminalHandle(FakeHandle):
+            def _events(self):
+                return [
+                    EngineEvent(
+                        request_id=self._request.request_id,
+                        event_index=0,
+                        terminal_kind=TerminalKind.ERROR,
+                        error=EngineError(
+                            code=EngineErrorCode.REQUEST_FAILED, message="runtime request failed"
+                        ),
+                    )
+                ]
+
+        class ErrorTerminalClient(FakeEngineClient):
+            def submit(self, request):
+                self.submitted.append(request)
+                return ErrorTerminalHandle(request)
+
+        pipeline = make_pipeline(ErrorTerminalClient())
+        request = CompletionRequest(model="test-model", prompt="hi there", max_tokens=4)
+        # _collect surfaces the typed engine error.
+        with pytest.raises(EngineClientError):
+            asyncio.run(pipeline.try_completion(request))
+
+        fake_self = SimpleNamespace(
+            _engine_pipeline=pipeline,
+            create_error_response=OpenAIServer.create_error_response,
+        )
+        response = asyncio.run(OpenAIServer.openai_completion(fake_self, request, None))
+        assert response.status_code == 400
+
     def test_ineligible_request_falls_back_colocated(self, client):
         pipeline = make_pipeline(client)
         request = CompletionRequest(

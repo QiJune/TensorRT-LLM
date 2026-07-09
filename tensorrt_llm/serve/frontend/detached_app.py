@@ -173,14 +173,24 @@ def create_detached_app(frontend: DetachedFrontend) -> FastAPI:
         from tensorrt_llm.serve.openai_protocol import ChatCompletionRequest
 
         request = ChatCompletionRequest(**(await raw_request.json()))
-        return _as_response(await frontend.pipeline.try_chat(request, raw_request))
+        try:
+            return _as_response(await frontend.pipeline.try_chat(request, raw_request))
+        except EngineClientError as e:
+            return _typed_error_response(e)
+        except ValueError as e:
+            return _bad_request_response(str(e))
 
     @app.post("/v1/completions")
     async def completions(raw_request: Request) -> Response:
         from tensorrt_llm.serve.openai_protocol import CompletionRequest
 
         request = CompletionRequest(**(await raw_request.json()))
-        return _as_response(await frontend.pipeline.try_completion(request, raw_request))
+        try:
+            return _as_response(await frontend.pipeline.try_completion(request, raw_request))
+        except EngineClientError as e:
+            return _typed_error_response(e)
+        except ValueError as e:
+            return _bad_request_response(str(e))
 
     return app
 
@@ -199,6 +209,20 @@ def _typed_error_response(error: EngineClientError) -> JSONResponse:
                 "message": error.error.message,
                 "type": "engine_error",
                 "code": error.error.code.value,
+                "param": None,
+            }
+        },
+    )
+
+
+def _bad_request_response(message: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=HTTPStatus.BAD_REQUEST,
+        content={
+            "error": {
+                "message": message,
+                "type": "BadRequestError",
+                "code": HTTPStatus.BAD_REQUEST.value,
                 "param": None,
             }
         },

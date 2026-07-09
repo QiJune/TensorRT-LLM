@@ -309,6 +309,37 @@ class TestEventNormalization:
         assert event.logprobs == [-0.25]
         assert event.cumulative_logprob == -0.25
 
+    def test_cumulative_logprobs_source_sliced_to_delta(self, adapter, executor):
+        """Cumulative log_probs are sliced to the per-event delta.
+
+        A streamwise-cumulative source must be sliced so each delta event
+        carries only the newly generated logprob entries — else later
+        events carry more logprobs than tokens.
+        """
+        handle = adapter.submit(make_request(logprobs=0, logprobs_simple_format=True))
+        rid = submitted_id(executor)
+        # log_probs grows cumulatively while each event's token_ids is a delta.
+        executor.push(rid, FakeResponse(rid, FakeResult([[5]], log_probs=[[-0.1]])))
+        executor.push(rid, FakeResponse(rid, FakeResult([[6]], log_probs=[[-0.1, -0.2]])))
+        executor.push(
+            rid,
+            FakeResponse(
+                rid,
+                FakeResult(
+                    [[7]],
+                    log_probs=[[-0.1, -0.2, -0.3]],
+                    finish_reasons=[FakeFinishReason("LENGTH")],
+                    is_final=True,
+                ),
+            ),
+        )
+        events = list(handle.events())
+        for e in events:
+            assert len(e.logprobs) == len(e.token_ids), (
+                f"event {e.event_index} logprobs {e.logprobs} misaligned with tokens {e.token_ids}"
+            )
+        assert [e.logprobs for e in events] == [[-0.1], [-0.2], [-0.3]]
+
     def test_prompt_logprobs_from_response_wrapper_first_event_only(self, adapter, executor):
         handle = adapter.submit(make_request(prompt_logprobs=0))
         rid = submitted_id(executor)
