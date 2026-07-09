@@ -65,6 +65,8 @@ Per-request half of the predicate (`check_request` / `check_sampling_params`).
 | LoRA / prompt adapter | co-located fallback | headless reject | — | FUT-9 |
 | Lookahead / speculative per-request config | co-located fallback | headless reject | — | FUT-9 |
 | `disaggregated_params` on a request | co-located fallback | headless reject | adapter passes disagg metadata through opaquely for the old path | FUT-3 |
+| Chat tool-call conversation history (assistant `tool_calls`/`function_call`, `tool` messages) | co-located fallback | headless reject | the import-light detached parser cannot reproduce `parse_chat_messages_coroutines`' tool handling; `request.tools` for the current turn stays eligible | FUT-9 |
+| `return_perf_metrics` enabled on the LLM API | pipeline never constructed — deployment-level fallback: the EngineRequest/output lack arrival_time and metrics_dict | n/a | — | FUT-10 |
 | Chat/completion `conversation_params` (multi-turn routing) | co-located fallback | headless reject | not mapped to the engine request; served in-process | FUT-9 |
 | Chat `agent_hierarchy` (hierarchy-aware scheduling) | co-located fallback | headless reject | not mapped to the engine request; served in-process | FUT-9 |
 | `return_perf_metrics` enabled on the deployment | pipeline never constructed — deployment-level fallback: the pipeline bypasses the server's `_extract_metrics`/Prometheus, so the in-process path serves everything | not offered | — | FUT-10 |
