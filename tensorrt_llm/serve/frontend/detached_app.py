@@ -30,6 +30,7 @@ from typing import Any, Optional
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
 
+from tensorrt_llm.engine_api.contracts import EngineClientError, EngineErrorCode
 from tensorrt_llm.serve.frontend.eligibility import PipelineDeploymentMode
 from tensorrt_llm.serve.frontend.model_context import FrontendModelContext
 from tensorrt_llm.serve.frontend.openai_pipeline import OpenAIServingPipeline
@@ -95,6 +96,52 @@ def create_detached_app(frontend: DetachedFrontend) -> FastAPI:
             }
         )
 
+    @app.get("/version")
+    async def version() -> JSONResponse:
+        from tensorrt_llm.version import __version__
+
+        return JSONResponse(content={"version": __version__})
+
+    @app.get("/iteration_stats")
+    async def iteration_stats() -> JSONResponse:
+        try:
+            stats = frontend.client.get_stats(timeout=2.0)
+        except EngineClientError as e:
+            return _typed_error_response(e)
+        return JSONResponse(content=stats)
+
+    @app.get("/kv_cache_events")
+    async def kv_cache_events() -> JSONResponse:
+        try:
+            events = frontend.client.get_kv_events(timeout=2.0)
+        except EngineClientError as e:
+            return _typed_error_response(e)
+        return JSONResponse(content=events)
+
+    # Endpoints backed by collective RPC into the workers are engine-side
+    # only: on a detached frontend (and on multi-rank headless engines) they
+    # return the typed unsupported-capability error the capability matrix
+    # declares.
+    for route in ("/release_memory", "/resume_memory", "/update_weights"):
+
+        async def collective_rpc_unsupported(
+            raw_request: Request, _route: str = route
+        ) -> JSONResponse:
+            return JSONResponse(
+                status_code=HTTPStatus.NOT_IMPLEMENTED,
+                content={
+                    "error": {
+                        "message": f"{_route} is backed by collective RPC into the "
+                        "workers and is not available on a detached frontend",
+                        "type": "unsupported_capability",
+                        "code": EngineErrorCode.UNSUPPORTED_CAPABILITY.value,
+                        "param": None,
+                    }
+                },
+            )
+
+        app.add_api_route(route, collective_rpc_unsupported, methods=["POST"])
+
     @app.post("/v1/chat/completions")
     async def chat(raw_request: Request) -> Response:
         from tensorrt_llm.serve.openai_protocol import ChatCompletionRequest
@@ -116,3 +163,17 @@ def _as_response(result: Any) -> Response:
     if isinstance(result, Response):
         return result
     return JSONResponse(content=result.model_dump(exclude_none=True))
+
+
+def _typed_error_response(error: EngineClientError) -> JSONResponse:
+    return JSONResponse(
+        status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+        content={
+            "error": {
+                "message": error.error.message,
+                "type": "engine_error",
+                "code": error.error.code.value,
+                "param": None,
+            }
+        },
+    )
