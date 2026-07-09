@@ -26,6 +26,7 @@ byte-equal after JSON decoding.
 
 from __future__ import annotations
 
+import contextlib
 import json
 from dataclasses import dataclass
 from typing import Callable, Optional
@@ -165,14 +166,21 @@ class OracleToolParser:
         return SimpleNamespace(normal_text=text, calls=[])
 
 
-def _register_oracle_tool_parser() -> str:
+ORACLE_TOOL_PARSER = "oracle_test_parser"
+
+
+@contextlib.contextmanager
+def _oracle_tool_parser_registered():
+    """Scoped registration: the parser must not leak into the CLI surface
+    (the serve CLI api-stability test enumerates registered parsers).
+    """
     from tensorrt_llm.serve.tool_parser.tool_parser_factory import ToolParserFactory
 
-    ToolParserFactory.parsers.setdefault("oracle_test_parser", OracleToolParser)
-    return "oracle_test_parser"
-
-
-ORACLE_TOOL_PARSER = _register_oracle_tool_parser()
+    ToolParserFactory.parsers[ORACLE_TOOL_PARSER] = OracleToolParser
+    try:
+        yield
+    finally:
+        ToolParserFactory.parsers.pop(ORACLE_TOOL_PARSER, None)
 
 
 # --- fixture model ---------------------------------------------------------
@@ -295,6 +303,11 @@ def _chat_prompt_and_conversation(request, tokenizer):
 
 def run_old_path_openai(fixture: OracleFixture):
     """Drive the historical result machinery + serve-side postprocessors."""
+    with _oracle_tool_parser_registered():
+        return _run_old_path_openai(fixture)
+
+
+def _run_old_path_openai(fixture: OracleFixture):
     tokenizer = OracleTokenizer()
     request = build_request_model(fixture)
     if fixture.endpoint == "chat":
@@ -386,6 +399,11 @@ def _new_pipeline_components(fixture: OracleFixture, client_factory: Optional[Ca
 
 async def run_new_path_openai(fixture: OracleFixture, client_factory: Optional[Callable] = None):
     """Drive the engine-client pipeline end to end (production code path)."""
+    with _oracle_tool_parser_registered():
+        return await _run_new_path_openai(fixture, client_factory)
+
+
+async def _run_new_path_openai(fixture: OracleFixture, client_factory: Optional[Callable] = None):
     _tokenizer, client, processor = _new_pipeline_components(fixture, client_factory)
     try:
         pipeline = OpenAIServingPipeline(
