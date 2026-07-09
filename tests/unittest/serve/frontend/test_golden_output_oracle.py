@@ -142,6 +142,77 @@ class TestStreamingMultiSequenceParity:
         assert_openai_equal(old_output, new_output, streaming=True)
 
 
+class TestToolParserStopLogprobsShape:
+    """Semantic proof the AC-4 combination actually fires in the fixture.
+
+    Old-vs-new equality alone could pass with an inert stop configuration;
+    this decodes the OLD path's stream directly and asserts the parsed
+    tool-call delta, the stop-derived terminal, and the logprob payloads
+    are all present.
+    """
+
+    def test_old_path_stream_contains_tool_call_stop_and_logprobs(self):
+        fixture = next(
+            f for f in OPENAI_FIXTURES if f.name == "chat_stream_tool_parser_stop_logprobs"
+        )
+        chunks = [
+            json.loads(chunk[len("data: ") :].strip()) for chunk in run_old_path_openai(fixture)
+        ]
+
+        tool_call_names = [
+            call.get("function", {}).get("name")
+            for payload in chunks
+            for choice in payload.get("choices") or []
+            for call in (choice.get("delta") or {}).get("tool_calls") or []
+        ]
+        assert "get_weather" in tool_call_names, (
+            "the fixture no longer produces a parsed tool-call delta"
+        )
+
+        terminals = [
+            choice
+            for payload in chunks
+            for choice in payload.get("choices") or []
+            if choice.get("finish_reason") is not None
+        ]
+        assert terminals, "no terminal chunk emitted"
+        # The stop string fired: the frontend scan set stop_reason and the
+        # finish became stop-derived; with a parsed tool call present the
+        # formatter rewrites 'stop' to 'tool_calls' (historical semantics),
+        # so 'length' here would mean the stop never matched.
+        assert terminals[-1]["finish_reason"] == "tool_calls", (
+            "the configured stop string did not fire — the terminal must be "
+            "stop-derived (rewritten to tool_calls), not length"
+        )
+        assert terminals[-1]["stop_reason"] == " world"
+
+        logprob_chunks = [
+            choice
+            for payload in chunks
+            for choice in payload.get("choices") or []
+            if choice.get("logprobs")
+        ]
+        assert logprob_chunks, "no logprob payloads present in the stream"
+
+    def test_new_path_stream_matches_the_same_shape(self):
+        """The equality gate implies this, but assert it directly too."""
+        fixture = next(
+            f for f in OPENAI_FIXTURES if f.name == "chat_stream_tool_parser_stop_logprobs"
+        )
+        chunks = [
+            json.loads(chunk[len("data: ") :].strip())
+            for chunk in asyncio.run(run_new_path_openai(fixture))
+        ]
+        terminals = [
+            choice
+            for payload in chunks
+            for choice in payload.get("choices") or []
+            if choice.get("finish_reason") is not None
+        ]
+        assert terminals and terminals[-1]["finish_reason"] == "tool_calls"
+        assert terminals[-1]["stop_reason"] == " world"
+
+
 class TestHarnessSelfChecks:
     """The oracle must catch seeded divergences — proof the comparison bites."""
 

@@ -729,7 +729,11 @@ OPENAI_FIXTURES: list[OracleFixture] = [
             "max_tokens": 16,
             "logprobs": True,
             "top_logprobs": 1,
-            "stop": ["<STOP>"],
+            # The stop string is generated after the tool call (token 102
+            # decodes to " world"), so the frontend stop scan actually fires:
+            # it trims the text and rewrites the LENGTH finish to a
+            # stop-derived terminal with stop_reason " world".
+            "stop": [" world"],
             "tools": [
                 {
                     "type": "function",
@@ -746,10 +750,11 @@ OPENAI_FIXTURES: list[OracleFixture] = [
             StepSpec([112], logprobs=[{112: Logprob(-0.5, rank=1)}]),
             StepSpec([113], logprobs=[{113: Logprob(-0.75, rank=1)}]),
             StepSpec([114], logprobs=[{114: Logprob(-1.0, rank=1)}]),
+            StepSpec([115], logprobs=[{115: Logprob(-1.25, rank=1)}]),
             StepSpec(
-                [115],
-                logprobs=[{115: Logprob(-1.25, rank=1)}],
-                finish="END_ID",
+                [102],
+                logprobs=[{102: Logprob(-1.5, rank=1)}],
+                finish="LENGTH",
                 is_final=True,
             ),
         ],
