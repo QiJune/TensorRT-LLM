@@ -136,6 +136,8 @@ class OpenAIServingPipeline:
         reasoning_parser: Optional[str] = None,
         tool_parser: Optional[str] = None,
         tool_call_id_type: str = "random",
+        allow_request_chat_template: bool = False,
+        gather_generation_logits: bool = False,
     ) -> None:
         self._client = engine_client
         self._processor = processor
@@ -144,6 +146,8 @@ class OpenAIServingPipeline:
         self._reasoning_parser = reasoning_parser
         self._tool_parser = tool_parser
         self._tool_call_id_type = tool_call_id_type
+        self._allow_request_chat_template = allow_request_chat_template
+        self._gather_generation_logits = gather_generation_logits
 
     @property
     def mode(self) -> PipelineDeploymentMode:
@@ -170,9 +174,43 @@ class OpenAIServingPipeline:
                 EligibilityResult(False, "logit_bias tensors cannot cross the engine boundary"),
                 "chat",
             )
+        # The server's chat-template policy applies before any routing
+        # decision: co-located, the in-process path raises its historical
+        # error; detached, the request is rejected typed.
+        if getattr(request, "chat_template", None) is not None and not (
+            self._allow_request_chat_template
+        ):
+            return self._handle_ineligible(
+                EligibilityResult(
+                    False,
+                    "request-level chat templates are disabled by server policy",
+                ),
+                "chat",
+            )
         sampling_params = request.to_sampling_params(
-            vocab_size=None, reasoning_parser=self._reasoning_parser, backend="pytorch"
+            vocab_size=None,
+            gather_generation_logits=self._gather_generation_logits,
+            reasoning_parser=self._reasoning_parser,
+            backend="pytorch",
         )
+        # Apply the historical chat path's sampling mutations before the
+        # eligibility check so requests it would turn into guided decoding
+        # (strict tools) or raw-special-token output are routed correctly.
+        if self._tool_parser and request.tools:
+            from tensorrt_llm.serve.tool_parser.strict_mode import (
+                build_tool_strict_guided_decoding_params,
+            )
+            from tensorrt_llm.serve.tool_parser.tool_parser_factory import ToolParserFactory
+
+            tool_parser_cls = ToolParserFactory.parsers.get(self._tool_parser.lower())
+            if tool_parser_cls and getattr(tool_parser_cls, "needs_raw_special_tokens", False):
+                sampling_params.skip_special_tokens = False
+            if sampling_params.guided_decoding is None:
+                strict_guided = build_tool_strict_guided_decoding_params(
+                    request.tools, self._tool_parser
+                )
+                if strict_guided is not None:
+                    sampling_params.guided_decoding = strict_guided
         decision = check_request(
             sampling_params,
             endpoint="chat",

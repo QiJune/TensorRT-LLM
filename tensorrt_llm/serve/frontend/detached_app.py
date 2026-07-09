@@ -50,11 +50,37 @@ class DetachedFrontend:
         tool_parser: Optional[str] = None,
         tokenizer: Any = None,
     ) -> None:
+        import time
+
+        from tensorrt_llm.engine_api.contracts import EngineClientError, EngineError
+        from tensorrt_llm.engine_api.contracts import EngineErrorCode as _Code
         from tensorrt_llm.engine_api.engine_server import RemoteEngineClient
+        from tensorrt_llm.engine_api.protocol import ReadinessState
 
         self.client = RemoteEngineClient(
             engine_endpoint, handshake_timeout_seconds=handshake_timeout_seconds
         )
+        # An engine may answer while still initializing; the model context is
+        # only trustworthy once it is ready, so wait (within the handshake
+        # budget) and refresh before building tokenizer and pipeline.
+        deadline = time.monotonic() + handshake_timeout_seconds
+        while self.client.readiness is not ReadinessState.READY and time.monotonic() < deadline:
+            time.sleep(0.2)
+            try:
+                self.client.refresh_handshake(timeout=5.0)
+            except EngineClientError:
+                pass
+        if self.client.readiness is not ReadinessState.READY:
+            readiness = self.client.readiness
+            self.client.shutdown()
+            raise EngineClientError(
+                EngineError(
+                    code=_Code.ENGINE_UNAVAILABLE,
+                    message=f"engine at {engine_endpoint} did not become ready "
+                    f"within {handshake_timeout_seconds}s (last readiness: "
+                    f"{readiness.value if readiness else 'unknown'})",
+                )
+            )
         self.model_context = FrontendModelContext.from_handshake(
             self.client.model_context, self.client.capabilities
         )

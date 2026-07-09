@@ -188,7 +188,76 @@ class TestLifecycle:
             server.shutdown()
 
 
+class TestReadinessRefresh:
+    def test_same_client_becomes_ready_after_engine_initializes(self):
+        """A client created during initialization must serve after readiness
+        flips, without being recreated (submit refreshes the handshake)."""
+        release = threading.Event()
+        engine = FakeEngine()
+
+        def slow_factory():
+            release.wait(timeout=30)
+            return engine, {"model": "fake", "tokenizer_dir": "/fake"}
+
+        server = EngineServer(slow_factory)
+        server.start(wait=False)
+        client = None
+        try:
+            client = RemoteEngineClient(server.endpoint)
+            assert client.readiness is ReadinessState.INITIALIZING
+            release.set()
+            assert server.wait_ready(timeout=30)
+            # Same client, no reconstruction: submit refreshes readiness.
+            events = list(client.submit(make_request()).events())
+            assert events[-1].terminal_kind is TerminalKind.FINISHED
+            assert client.readiness is ReadinessState.READY
+            assert client.model_context.get("model") == "fake"
+        finally:
+            release.set()
+            if client is not None:
+                client.shutdown()
+            server.shutdown()
+
+    def test_refresh_handshake_updates_capabilities_and_context(self):
+        release = threading.Event()
+        engine = FakeEngine()
+
+        def slow_factory():
+            release.wait(timeout=30)
+            return engine, {"model": "fake", "tokenizer_dir": "/fake"}
+
+        server = EngineServer(slow_factory)
+        server.start(wait=False)
+        client = None
+        try:
+            client = RemoteEngineClient(server.endpoint)
+            assert client.model_context == {}
+            release.set()
+            server.wait_ready(timeout=30)
+            state = client.refresh_handshake(timeout=10)
+            assert state is ReadinessState.READY
+            assert client.model_context["model"] == "fake"
+            assert client.capabilities["generation"]["streaming"] is True
+        finally:
+            release.set()
+            if client is not None:
+                client.shutdown()
+            server.shutdown()
+
+
 class TestFailFast:
+    def test_runtime_factory_fails_fast_before_model_construction(self):
+        """Unsupported configs must raise before any runtime import or LLM
+        construction (the factory is never even built)."""
+        from tensorrt_llm.engine_api.engine_server import build_runtime_backend_factory
+
+        with pytest.raises(ValueError, match="num_postprocess_workers=2"):
+            build_runtime_backend_factory("some/model", {"num_postprocess_workers": 2})
+        with pytest.raises(ValueError, match="pytorch"):
+            build_runtime_backend_factory("some/model", {"backend": "tensorrt"})
+        with pytest.raises(ValueError, match="orchestrator_type"):
+            build_runtime_backend_factory("some/model", {"orchestrator_type": "ray"})
+
     def test_headless_launch_with_postproc_workers_fails_fast(self):
         args = SimpleNamespace(num_postprocess_workers=2, backend="pytorch", orchestrator_type=None)
         with pytest.raises(ValueError, match="num_postprocess_workers=2"):

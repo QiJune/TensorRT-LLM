@@ -132,9 +132,16 @@ VOCAB_TEXT = {5: "Hello", 6: " world"}
 class FakeTokenizer:
     eos_token_id = 2
     pad_token_id = 0
+    chat_template = "fake-template"
 
     def encode(self, text, add_special_tokens=True, **kwargs):
         return [hash(w) % 100 + 10 for w in text.split()]
+
+    def get_chat_template(self, chat_template=None, tools=None):
+        return chat_template or self.chat_template
+
+    def apply_chat_template(self, conversation=None, **kwargs):
+        return " ".join(m["content"] for m in conversation)
 
     def decode(self, token_ids, **kwargs):
         if isinstance(token_ids, int):
@@ -263,6 +270,137 @@ class TestOpenAIRouting:
         request = CompletionRequest(model="test-model", prompt=["a", "b"], max_tokens=4)
         assert asyncio.run(pipeline.try_completion(request)) is None
         assert client.submitted == []
+
+    def test_request_chat_template_rejected_by_server_policy(self, client):
+        """Server policy applies before any routing decision."""
+        request = ChatCompletionRequest(
+            model="test-model",
+            messages=[{"role": "user", "content": "hi"}],
+            chat_template="{{ custom }}",
+        )
+        pipeline = make_pipeline(client)  # allow_request_chat_template=False
+        assert asyncio.run(pipeline.try_chat(request)) is None
+        assert client.submitted == []
+
+        detached = make_pipeline(client, mode=PipelineDeploymentMode.DETACHED)
+        response = asyncio.run(detached.try_chat(request))
+        assert response.status_code == 400
+        assert client.submitted == []
+
+    def test_strict_tools_synthesize_guided_decoding_and_fall_back(self, client):
+        """A strict tool becomes guided decoding pre-eligibility, so the
+        request must never cross the seam this loop."""
+        from tensorrt_llm.serve.tool_parser.tool_parser_factory import ToolParserFactory
+
+        class _Info:
+            trigger = "<tool>"
+            begin = "<tool>"
+            end = "</tool>"
+
+        class StrictCapableParser:
+            needs_raw_special_tokens = True
+
+            def supports_structural_tag(self):
+                return True
+
+            def structure_info(self):
+                return lambda name: _Info()
+
+        ToolParserFactory.parsers["_oracle_strict_parser"] = StrictCapableParser
+        try:
+            request = ChatCompletionRequest(
+                model="test-model",
+                messages=[{"role": "user", "content": "hi"}],
+                tools=[
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "strict": True,
+                            "parameters": {"type": "object", "properties": {}},
+                        },
+                    }
+                ],
+            )
+            pipeline = OpenAIServingPipeline(
+                client,
+                FrontendProcessor(FakeTokenizer()),
+                model_label="test-model",
+                tool_parser="_oracle_strict_parser",
+            )
+            assert asyncio.run(pipeline.try_chat(request)) is None
+            assert client.submitted == []
+
+            detached = OpenAIServingPipeline(
+                client,
+                FrontendProcessor(FakeTokenizer()),
+                model_label="test-model",
+                mode=PipelineDeploymentMode.DETACHED,
+                tool_parser="_oracle_strict_parser",
+            )
+            response = asyncio.run(detached.try_chat(request))
+            assert response.status_code == 400
+            assert client.submitted == []
+        finally:
+            ToolParserFactory.parsers.pop("_oracle_strict_parser", None)
+
+    def test_raw_special_tokens_parser_mutation_applied_before_split(self, client):
+        """Non-strict tools with a raw-special-tokens parser stay eligible,
+        and the historical skip_special_tokens=False mutation reaches the
+        frontend output config."""
+        from tensorrt_llm.serve.tool_parser.tool_parser_factory import ToolParserFactory
+
+        class RawTokensParser:
+            needs_raw_special_tokens = True
+
+            def supports_structural_tag(self):
+                return False
+
+            def parse_streaming_increment(self, text, tools):
+                from types import SimpleNamespace
+
+                return SimpleNamespace(normal_text=text, calls=[])
+
+            def detect_and_parse(self, text, tools):
+                from types import SimpleNamespace
+
+                return SimpleNamespace(normal_text=text, calls=[])
+
+        ToolParserFactory.parsers["_oracle_raw_parser"] = RawTokensParser
+        observed = {}
+
+        class RecordingProcessor(FrontendProcessor):
+            def process_chat(self, conversation, sampling_params, **kwargs):
+                observed["skip_special_tokens"] = sampling_params.skip_special_tokens
+                return super().process_chat(conversation, sampling_params, **kwargs)
+
+        try:
+            request = ChatCompletionRequest(
+                model="test-model",
+                messages=[{"role": "user", "content": "hi"}],
+                tools=[
+                    {
+                        "type": "function",
+                        "function": {"name": "get_weather", "parameters": {}},
+                    }
+                ],
+            )
+
+            class ModelConfig:
+                model_type = "llama"
+
+            pipeline = OpenAIServingPipeline(
+                client,
+                RecordingProcessor(FakeTokenizer(), model_config=ModelConfig()),
+                model_label="test-model",
+                tool_parser="_oracle_raw_parser",
+            )
+            response = asyncio.run(pipeline.try_chat(request))
+            assert response is not None
+            assert observed["skip_special_tokens"] is False
+            assert len(client.submitted) == 1
+        finally:
+            ToolParserFactory.parsers.pop("_oracle_raw_parser", None)
 
     def test_multimodal_chat_falls_back(self, client):
         pipeline = make_pipeline(client)

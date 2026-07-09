@@ -560,6 +560,23 @@ class SocketEngineClient(EngineClient):
     # --- handshake -------------------------------------------------------------
 
     def _handshake(self, timeout: float) -> None:
+        try:
+            self.refresh_handshake(timeout)
+        except EngineClientError:
+            self.shutdown()
+            raise
+
+    def refresh_handshake(self, timeout: float = 10.0) -> ReadinessState:
+        """Re-handshake: update readiness, capabilities, and model context.
+
+        An engine may answer the first handshake while still initializing;
+        this refresh lets a long-lived client observe the transition to
+        ready without reconnecting.
+
+        Raises:
+            EngineClientError: Typed ``engine_unavailable`` when no engine
+                answers within ``timeout``.
+        """
         reply_queue: queue.Queue = queue.Queue()
         with self._lock:
             self._handshake_queue = reply_queue
@@ -567,7 +584,6 @@ class SocketEngineClient(EngineClient):
         try:
             reply = reply_queue.get(timeout=timeout)
         except queue.Empty:
-            self.shutdown()
             raise EngineClientError(
                 EngineError(
                     code=EngineErrorCode.ENGINE_UNAVAILABLE,
@@ -576,11 +592,11 @@ class SocketEngineClient(EngineClient):
                 )
             ) from None
         if isinstance(reply, EngineClientError):
-            self.shutdown()
             raise reply
         self.capabilities = reply.payload.get("capabilities") or {}
         self.readiness = ReadinessState(reply.payload.get("readiness_state"))
         self.model_context = reply.payload.get("model_context") or {}
+        return self.readiness
 
     def require_capability(self, *path: str) -> None:
         """Reject frontend-side when the engine did not advertise a capability."""
@@ -691,6 +707,13 @@ class SocketEngineClient(EngineClient):
     def submit(self, request: EngineRequest) -> RequestHandle:
         if self._fatal is not None:
             raise EngineClientError(self._fatal)
+        if self.readiness is not ReadinessState.READY:
+            # The engine may have finished initializing since the last
+            # handshake: refresh once before rejecting.
+            try:
+                self.refresh_handshake(timeout=5.0)
+            except EngineClientError:
+                pass
         if self.readiness is not ReadinessState.READY:
             raise EngineClientError(
                 EngineError(

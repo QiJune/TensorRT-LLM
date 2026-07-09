@@ -225,8 +225,26 @@ def build_runtime_backend_factory(
     Constructing the runtime spawns the executor proxy — MPI session
     startup, result-dispatch and error-monitor threads, RPC control client —
     exactly as the in-process path does; the adapter then exposes it over
-    the boundary contract. Fails fast on unsupported launch configurations.
+    the boundary contract.
+
+    Unsupported launch configurations fail fast here — before any runtime
+    import or model construction; a second validation after construction
+    guards args normalized by defaults.
+
+    Raises:
+        ValueError: Immediately, for unsupported launch configurations.
     """
+    import types
+
+    launch_extra = dict(llm_args_extra or {})
+    launch_extra.setdefault("backend", "pytorch")
+    validate_headless_launch_args(
+        types.SimpleNamespace(
+            backend=launch_extra.get("backend"),
+            orchestrator_type=launch_extra.get("orchestrator_type"),
+            num_postprocess_workers=launch_extra.get("num_postprocess_workers", 0),
+        )
+    )
 
     def factory() -> tuple[EngineClient, dict[str, Any]]:
         from tensorrt_llm.engine_api.legacy_adapter import LegacyEngineClientAdapter
