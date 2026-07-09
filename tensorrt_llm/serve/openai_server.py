@@ -496,6 +496,57 @@ class OpenAIServer(_VideoRoutesMixin):
                 self.perf_metrics = deque(maxlen=max_perf_metrics)
                 self.perf_metrics_lock = asyncio.Lock()
 
+        self._engine_pipeline = self._maybe_create_engine_pipeline()
+
+    def _maybe_create_engine_pipeline(self):
+        """Build the engine-client serving pipeline when opted in and eligible.
+
+        Returns None (in-process path serves everything) unless the prototype
+        ``enable_engine_client_pipeline`` flag is on and the deployment
+        satisfies the pipeline's eligibility predicate.
+        """
+        args = getattr(self.generator, "args", None)
+        if args is None or not getattr(args, "enable_engine_client_pipeline",
+                                       False):
+            return None
+        from tensorrt_llm.serve.frontend.eligibility import check_deployment
+        decision = check_deployment(args)
+        if not decision:
+            logger.debug("engine-client pipeline disabled for this "
+                         f"deployment: {decision.reason}")
+            return None
+        if self.use_harmony:
+            logger.debug("engine-client pipeline disabled: harmony models "
+                         "are served by the in-process path")
+            return None
+        llm_pipeline_getter = getattr(self.generator, "_get_engine_pipeline",
+                                      None)
+        llm_pipeline = llm_pipeline_getter(
+        ) if llm_pipeline_getter is not None else None
+        if llm_pipeline is None:
+            return None
+        from tensorrt_llm.serve.frontend.openai_pipeline import \
+            OpenAIServingPipeline
+        from tensorrt_llm.serve.frontend.request_processor import \
+            FrontendProcessor
+        processor = FrontendProcessor(
+            self.tokenizer,
+            model_config=self.model_config,
+            processor=self.processor,
+            generation_config=getattr(self.generator, "_generation_config",
+                                      None),
+            default_chat_template=self.chat_template,
+            default_stream_interval=getattr(args, "stream_interval", 1),
+        )
+        return OpenAIServingPipeline(
+            llm_pipeline.engine_client,
+            processor,
+            model_label=self.model,
+            reasoning_parser=args.reasoning_parser,
+            tool_parser=self.tool_parser,
+            tool_call_id_type=self.tool_call_id_type,
+        )
+
     @staticmethod
     def _ensure_post_processor_hook_supported(
             use_harmony: bool, post_processor_hook: Optional[str]) -> None:
@@ -1224,6 +1275,11 @@ class OpenAIServer(_VideoRoutesMixin):
 
     async def openai_chat(self, request: ChatCompletionRequest,
                           raw_request: Request) -> Response:
+        if self._engine_pipeline is not None:
+            pipeline_response = await self._engine_pipeline.try_chat(
+                request, raw_request)
+            if pipeline_response is not None:
+                return pipeline_response
 
         def get_role() -> str:
             if request.add_generation_prompt:
@@ -1522,6 +1578,11 @@ class OpenAIServer(_VideoRoutesMixin):
 
     async def openai_completion(self, request: CompletionRequest,
                                 raw_request: Request) -> Response:
+        if self._engine_pipeline is not None:
+            pipeline_response = await self._engine_pipeline.try_completion(
+                request, raw_request)
+            if pipeline_response is not None:
+                return pipeline_response
 
         async def completion_response(
                 promise: RequestOutput,

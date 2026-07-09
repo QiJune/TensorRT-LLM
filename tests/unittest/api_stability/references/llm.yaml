@@ -243,6 +243,10 @@ methods:
         annotation: Optional[Literal["rpc", "ray"]]
         default: null
         status: prototype
+      enable_engine_client_pipeline:
+        annotation: bool
+        default: False
+        status: prototype
       sparse_attention_config:
         annotation: Union[tensorrt_llm.llmapi.llm_args.RocketSparseAttentionConfig, tensorrt_llm.llmapi.llm_args.DeepSeekSparseAttentionConfig, tensorrt_llm.llmapi.llm_args.DeepSeekV4SparseAttentionConfig, tensorrt_llm.llmapi.llm_args.SkipSoftmaxAttentionConfig, tensorrt_llm.llmapi.llm_args.MiniMaxM3SparseAttentionConfig, NoneType]
         default: null

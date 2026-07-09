@@ -4101,6 +4101,17 @@ class BaseLlmArgs(StrictBaseModel):
         status="prototype",
     )
 
+    enable_engine_client_pipeline: bool = Field(
+        default=False,
+        description=
+        "Route eligible requests through the frontend engine-client pipeline: "
+        "tokenization, detokenization, stop-string handling and OpenAI formatting "
+        "run in the frontend over a token-level engine boundary. Ineligible "
+        "requests fall back to the in-process path. Defaults to False (the "
+        "in-process path serves all requests).",
+        status="prototype",
+    )
+
     env_overrides: Optional[Dict[str, str]] = Field(
         default=None,
         description=

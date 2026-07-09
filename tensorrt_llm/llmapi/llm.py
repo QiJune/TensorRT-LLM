@@ -640,6 +640,25 @@ class BaseLLM:
         if self._executor is None or self._executor.is_shutdown():
             raise RuntimeError("LLM is shutting down")
 
+        if (engine_pipeline := self._get_engine_pipeline()) is not None:
+            pipeline_result = engine_pipeline.try_generate_async(
+                inputs,
+                sampling_params
+                if sampling_params is not None else SamplingParams(),
+                streaming=streaming,
+                lora_request=lora_request,
+                prompt_adapter_request=prompt_adapter_request,
+                disaggregated_params=disaggregated_params,
+                kv_cache_retention_config=kv_cache_retention_config,
+                trace_headers=trace_headers,
+                _postproc_params=_postproc_params,
+                scheduling_params=scheduling_params,
+                conversation_params=conversation_params,
+                cache_salt=cache_salt,
+            )
+            if pipeline_result is not None:
+                return pipeline_result
+
         sampling_params = self._prepare_sampling_params(sampling_params)
 
         # With pytorch backend, py_executor has logic to handle max_tokens of 1,
@@ -1280,6 +1299,42 @@ class BaseLLM:
             else:
                 os.environ[key] = str_value
                 logger.info(f"Setting {key}='{str_value}'")
+
+    def _get_engine_pipeline(self):
+        """Return the engine-client pipeline for eligible text requests, or None.
+
+        Built lazily on first use when the prototype
+        ``enable_engine_client_pipeline`` flag is on and the deployment
+        satisfies the pipeline's eligibility predicate; otherwise every
+        request stays on the in-process path.
+        """
+        if not hasattr(self, "_engine_pipeline_cache"):
+            self._engine_pipeline_cache = self._build_engine_pipeline()
+        return self._engine_pipeline_cache
+
+    def _build_engine_pipeline(self):
+        if not getattr(self.args, "enable_engine_client_pipeline", False):
+            return None
+        from ..serve.frontend.eligibility import check_deployment
+        decision = check_deployment(self.args)
+        if not decision:
+            logger.debug("engine-client pipeline disabled for this "
+                         f"deployment: {decision.reason}")
+            return None
+        if self._is_encoder_decoder_model() or self.tokenizer is None:
+            logger.debug("engine-client pipeline disabled: requires a "
+                         "decoder-only model with a tokenizer")
+            return None
+        from ..engine_api.legacy_adapter import LegacyEngineClientAdapter
+        from ..serve.frontend.llm_api_pipeline import LlmApiEnginePipeline
+        from ..serve.frontend.request_processor import FrontendProcessor
+        processor = FrontendProcessor(
+            self.tokenizer,
+            generation_config=self._generation_config,
+            default_stream_interval=getattr(self.args, "stream_interval", 1),
+        )
+        return LlmApiEnginePipeline(LegacyEngineClientAdapter(self._executor),
+                                    processor)
 
     def _prepare_sampling_params(
             self,
