@@ -27,16 +27,29 @@ lifetime spans all streaming chunks of one request.
 
 from __future__ import annotations
 
+import os
 import time
 from dataclasses import dataclass, field
 from typing import Any, List, Literal, Optional, Tuple, Union
 
-from tensorrt_llm.llmapi.disagg_utils import (
-    rewrite_usage_info_from_ctx,
-    rewrite_usage_response_from_ctx,
-)
 from tensorrt_llm.llmapi.reasoning_parser import ReasoningParserFactory, ReasoningParserResult
-from tensorrt_llm.serve.chat_utils import make_tool_call_id
+from tensorrt_llm.serve.tool_call_id import make_tool_call_id
+
+if os.environ.get("TLLM_LIGHTWEIGHT_IMPORT", "0") == "1":
+    # Detached frontends reject disaggregated-serving requests with typed
+    # capability errors, so ctx_usage is always None here and the rewrite
+    # helpers reduce to identities; the real implementations live in the
+    # engine-side disagg utilities, which pull the runtime import graph.
+    def rewrite_usage_info_from_ctx(usage, ctx_usage):
+        return usage
+
+    def rewrite_usage_response_from_ctx(response, ctx_usage):
+        return response
+else:
+    from tensorrt_llm.llmapi.disagg_utils import (
+        rewrite_usage_info_from_ctx,
+        rewrite_usage_response_from_ctx,
+    )
 from tensorrt_llm.serve.frontend.response_assembler import AssembledRequestView
 from tensorrt_llm.serve.openai_protocol import (
     ChatCompletionLogProbs,

@@ -99,104 +99,125 @@ def _setup_vendored_triton_kernels():
 
 _setup_vendored_triton_kernels()
 
-# Need to import torch before tensorrt_llm library, otherwise some shared binary files
-# cannot be found for the public PyTorch, raising errors like:
-# ImportError: libc10.so: cannot open shared object file: No such file or directory
-import torch  # noqa
+if os.environ.get("TLLM_LIGHTWEIGHT_IMPORT", "0") == "1":
+    # Lightweight import mode for processes that must never load the GPU
+    # runtime (e.g. a serving frontend detached from the engine). The
+    # package body below — torch, the C++ bindings, model machinery — is
+    # skipped entirely; light submodules (logger, engine_api, version) are
+    # imported individually by their users.
+    from .version import __version__  # noqa: F401
 
-import tensorrt_llm._torch.models as torch_models
-import tensorrt_llm.functional as functional
-import tensorrt_llm.math_utils as math_utils
-import tensorrt_llm.models as models
-import tensorrt_llm.quantization as quantization
-import tensorrt_llm.runtime as runtime
-import tensorrt_llm.tools as tools
+    __all__ = ['__version__']
 
-from ._common import _init, default_net, default_trtnet, precision
-from ._mnnvl_utils import MnnvlMemory, MnnvlMoe, MoEAlltoallInfo
-from ._utils import (default_gpus_per_node, local_mpi_rank, local_mpi_size,
-                     mpi_barrier, mpi_comm, mpi_rank, mpi_world_size,
-                     set_mpi_comm, str_dtype_to_torch, str_dtype_to_trt,
-                     torch_dtype_to_trt)
-from .builder import BuildConfig, Builder, BuilderConfig, build
-from .disaggregated_params import DisaggregatedParams
-from .functional import Tensor, constant
-from .llmapi import LLM, AsyncLLM, MultimodalEncoder
-from .llmapi.llm_args import LlmArgs, TorchLlmArgs, TrtLlmArgs
-from .logger import logger
-from .mapping import Mapping
-from .models.automodel import AutoConfig, AutoModelForCausalLM
-from .module import Module
-from .network import Network, net_guard
-from .parameter import Parameter
-from .python_plugin import PluginBase
-from .sampling_params import SamplingParams
-from .version import __version__
-from .visual_gen import (ExtraParamSchema, VisualGen, VisualGenArgs,
-                         VisualGenMetrics, VisualGenOutput, VisualGenParams,
-                         VisualGenResult)
+    def __getattr__(name):
+        raise AttributeError(
+            f"tensorrt_llm.{name} is unavailable under "
+            "TLLM_LIGHTWEIGHT_IMPORT=1; this process must not load the GPU "
+            "runtime")
 
-__all__ = [
-    'AutoConfig',
-    'AutoModelForCausalLM',
-    'logger',
-    'str_dtype_to_trt',
-    'torch_dtype_to_trt',
-    'str_dtype_to_torch',
-    'default_gpus_per_node',
-    'local_mpi_rank',
-    'local_mpi_size',
-    'mpi_barrier',
-    'mpi_comm',
-    'mpi_rank',
-    'set_mpi_comm',
-    'mpi_world_size',
-    'constant',
-    'default_net',
-    'default_trtnet',
-    'precision',
-    'net_guard',
-    'torch_models',
-    'Network',
-    'Mapping',
-    'MnnvlMemory',
-    'MnnvlMoe',
-    'MoEAlltoallInfo',
-    'PluginBase',
-    'Builder',
-    'BuilderConfig',
-    'build',
-    'BuildConfig',
-    'Tensor',
-    'Parameter',
-    'runtime',
-    'Module',
-    'functional',
-    'models',
-    'quantization',
-    'tools',
-    'LLM',
-    'AsyncLLM',
-    'MultimodalEncoder',
-    'LlmArgs',
-    'TorchLlmArgs',
-    'TrtLlmArgs',
-    'SamplingParams',
-    'VisualGenArgs',
-    'ExtraParamSchema',
-    'VisualGenMetrics',
-    'VisualGenOutput',
-    'VisualGenResult',
-    'DisaggregatedParams',
-    'KvCacheConfig',
-    'math_utils',
-    'VisualGen',
-    'VisualGenParams',
-    '__version__',
-]
+    _LIGHTWEIGHT_IMPORT = True
+else:
+    _LIGHTWEIGHT_IMPORT = False
 
-_init()
+if not _LIGHTWEIGHT_IMPORT:
+    # Need to import torch before tensorrt_llm library, otherwise some shared binary files
+    # cannot be found for the public PyTorch, raising errors like:
+    # ImportError: libc10.so: cannot open shared object file: No such file or directory
+    import torch  # noqa
 
-print(f"[TensorRT-LLM] TensorRT LLM version: {__version__}")
+    import tensorrt_llm._torch.models as torch_models
+    import tensorrt_llm.functional as functional
+    import tensorrt_llm.math_utils as math_utils
+    import tensorrt_llm.models as models
+    import tensorrt_llm.quantization as quantization
+    import tensorrt_llm.runtime as runtime
+    import tensorrt_llm.tools as tools
 
-sys.stdout.flush()
+    from ._common import _init, default_net, default_trtnet, precision
+    from ._mnnvl_utils import MnnvlMemory, MnnvlMoe, MoEAlltoallInfo
+    from ._utils import (default_gpus_per_node, local_mpi_rank, local_mpi_size,
+                         mpi_barrier, mpi_comm, mpi_rank, mpi_world_size,
+                         set_mpi_comm, str_dtype_to_torch, str_dtype_to_trt,
+                         torch_dtype_to_trt)
+    from .builder import BuildConfig, Builder, BuilderConfig, build
+    from .disaggregated_params import DisaggregatedParams
+    from .functional import Tensor, constant
+    from .llmapi import LLM, AsyncLLM, MultimodalEncoder
+    from .llmapi.llm_args import LlmArgs, TorchLlmArgs, TrtLlmArgs
+    from .logger import logger
+    from .mapping import Mapping
+    from .models.automodel import AutoConfig, AutoModelForCausalLM
+    from .module import Module
+    from .network import Network, net_guard
+    from .parameter import Parameter
+    from .python_plugin import PluginBase
+    from .sampling_params import SamplingParams
+    from .version import __version__
+    from .visual_gen import (ExtraParamSchema, VisualGen, VisualGenArgs,
+                             VisualGenMetrics, VisualGenOutput, VisualGenParams,
+                             VisualGenResult)
+
+    __all__ = [
+        'AutoConfig',
+        'AutoModelForCausalLM',
+        'logger',
+        'str_dtype_to_trt',
+        'torch_dtype_to_trt',
+        'str_dtype_to_torch',
+        'default_gpus_per_node',
+        'local_mpi_rank',
+        'local_mpi_size',
+        'mpi_barrier',
+        'mpi_comm',
+        'mpi_rank',
+        'set_mpi_comm',
+        'mpi_world_size',
+        'constant',
+        'default_net',
+        'default_trtnet',
+        'precision',
+        'net_guard',
+        'torch_models',
+        'Network',
+        'Mapping',
+        'MnnvlMemory',
+        'MnnvlMoe',
+        'MoEAlltoallInfo',
+        'PluginBase',
+        'Builder',
+        'BuilderConfig',
+        'build',
+        'BuildConfig',
+        'Tensor',
+        'Parameter',
+        'runtime',
+        'Module',
+        'functional',
+        'models',
+        'quantization',
+        'tools',
+        'LLM',
+        'AsyncLLM',
+        'MultimodalEncoder',
+        'LlmArgs',
+        'TorchLlmArgs',
+        'TrtLlmArgs',
+        'SamplingParams',
+        'VisualGenArgs',
+        'ExtraParamSchema',
+        'VisualGenMetrics',
+        'VisualGenOutput',
+        'VisualGenResult',
+        'DisaggregatedParams',
+        'KvCacheConfig',
+        'math_utils',
+        'VisualGen',
+        'VisualGenParams',
+        '__version__',
+    ]
+
+    _init()
+
+    print(f"[TensorRT-LLM] TensorRT LLM version: {__version__}")
+
+    sys.stdout.flush()

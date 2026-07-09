@@ -85,6 +85,9 @@ class FrontendProcessor:
         default_chat_template: Server-level chat template override.
         default_stream_interval: Streaming detokenization interval used when
             the request does not pin one.
+        lightweight_templates: Apply chat templates through the import-light
+            text-only path (detached frontends, which reject multimodal)
+            instead of the full multimodal-aware pipeline.
     """
 
     # Test instrumentation: counts pipeline invocations process-wide so
@@ -100,6 +103,7 @@ class FrontendProcessor:
         generation_config: Any = None,
         default_chat_template: Optional[str] = None,
         default_stream_interval: int = 1,
+        lightweight_templates: bool = False,
     ) -> None:
         self._tokenizer = tokenizer
         self._model_config = model_config
@@ -107,6 +111,7 @@ class FrontendProcessor:
         self._generation_config = generation_config
         self._default_chat_template = default_chat_template
         self._default_stream_interval = default_stream_interval
+        self._lightweight_templates = lightweight_templates
 
     @property
     def tokenizer(self) -> Any:
@@ -149,6 +154,26 @@ class FrontendProcessor:
     ) -> ProcessedInput:
         """Apply the chat template to a parsed conversation, then tokenize."""
         type(self).invocation_count += 1
+        if self._lightweight_templates:
+            from tensorrt_llm.tokenizer.chat_template import apply_text_chat_template
+
+            prompt = apply_text_chat_template(
+                tokenizer=self._tokenizer,
+                conversation=conversation,
+                add_generation_prompt=add_generation_prompt,
+                tools=tools,
+                documents=documents,
+                chat_template=chat_template or self._default_chat_template,
+                chat_template_kwargs=chat_template_kwargs or {},
+            )
+            prompt_token_ids = self.tokenize(prompt, sampling_params)
+            sampling, output_config = self.split_sampling_params(sampling_params)
+            return ProcessedInput(
+                prompt_token_ids=prompt_token_ids,
+                prompt=prompt,
+                sampling=sampling,
+                output_config=output_config,
+            )
         # Deferred: pulls the historical template machinery only on the chat
         # endpoint; the text path stays independent of it.
         from tensorrt_llm.inputs.utils import apply_chat_template

@@ -515,12 +515,10 @@ def parse_chat_messages_coroutines(
     ), mm_placeholder_counts
 
 
-def make_tool_call_id(id_type: str = "random", func_name=None, idx=None):
-    if id_type == "kimi_k2":
-        return f"functions.{func_name}:{idx}"
-    else:
-        # by default return random
-        return f"chatcmpl-tool-{uuid.uuid4().hex}"
+# Kept in the import-light tool_call_id module so the detached frontend can
+# use it without the model/runtime import graph; re-exported here for the
+# historical import path.
+from tensorrt_llm.serve.tool_call_id import make_tool_call_id  # noqa: E402
 
 
 # Adapted from

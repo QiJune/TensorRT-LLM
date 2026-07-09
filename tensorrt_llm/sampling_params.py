@@ -12,18 +12,29 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+from __future__ import annotations
+
 import json
 import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field, fields
 from typing import List, NamedTuple, Optional, Tuple, Union
 
-import torch
 from pydantic import BaseModel
 from strenum import StrEnum
 
-from tensorrt_llm.bindings import executor as tllme
 from tensorrt_llm.logger import logger
+
+if os.environ.get("TLLM_LIGHTWEIGHT_IMPORT", "0") == "1":
+    # Lightweight import mode (detached serving frontend): torch and the C++
+    # bindings stay engine-side. Annotations are deferred (future import) and
+    # the guarded code paths using these modules never run frontend-side.
+    torch = None
+    tllme = None
+else:
+    import torch
+
+    from tensorrt_llm.bindings import executor as tllme
 
 MAX_TOP_LOGPROBS = 20
 

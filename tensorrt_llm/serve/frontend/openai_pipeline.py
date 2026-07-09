@@ -86,6 +86,17 @@ def _messages_have_multimodal(messages: list) -> bool:
     return False
 
 
+def _parse_text_conversation(messages: list) -> list[dict[str, Any]]:
+    """Flatten text-only chat messages into role/content dicts."""
+    conversation = []
+    for message in messages:
+        content = message.get("content")
+        if isinstance(content, list):
+            content = "\n".join(part.get("text", "") for part in content if isinstance(part, dict))
+        conversation.append({"role": message.get("role"), "content": content or ""})
+    return conversation
+
+
 def _normalize_single_prompt(prompt: Any) -> Optional[Union[str, list[int]]]:
     """Return the single prompt of a completions request, or None if batched."""
     if isinstance(prompt, str):
@@ -172,17 +183,26 @@ class OpenAIServingPipeline:
         if not decision:
             return self._handle_ineligible(decision, "chat")
 
-        from tensorrt_llm.serve.chat_utils import parse_chat_messages_coroutines
+        if self._mode is PipelineDeploymentMode.DETACHED:
+            # Import-light text-only parsing: multimodal content was already
+            # rejected above, so plain role/content extraction is the whole
+            # surface.
+            conversation = _parse_text_conversation(request.messages)
+            mm_placeholder_counts: list = []
+        else:
+            from tensorrt_llm.serve.chat_utils import parse_chat_messages_coroutines
 
-        conversation, mm_coroutines, mm_placeholder_counts = parse_chat_messages_coroutines(
-            request.messages, self._processor._model_config, None
-        )
-        mm_data, mm_embeddings = await mm_coroutines
-        if mm_data or mm_embeddings:
-            return self._handle_ineligible(
-                EligibilityResult(False, "multimodal requests are served by the in-process path"),
-                "chat",
+            conversation, mm_coroutines, mm_placeholder_counts = parse_chat_messages_coroutines(
+                request.messages, self._processor._model_config, None
             )
+            mm_data, mm_embeddings = await mm_coroutines
+            if mm_data or mm_embeddings:
+                return self._handle_ineligible(
+                    EligibilityResult(
+                        False, "multimodal requests are served by the in-process path"
+                    ),
+                    "chat",
+                )
 
         tool_dicts = (
             None if request.tools is None else [tool.model_dump() for tool in request.tools]

@@ -443,6 +443,8 @@ setup(
             'trtllm-refit=tensorrt_llm.commands.refit:main',
             'trtllm-bench=tensorrt_llm.commands.bench:main',
             'trtllm-serve=tensorrt_llm.commands.serve:main',
+            'trtllm-serve-engine=tensorrt_llm.commands.serve_engine:main',
+            'trtllm-serve-frontend=tensorrt_llm.commands.serve_frontend:main',
             'trtllm-eval=tensorrt_llm.commands.eval:main'
         ],
     },
