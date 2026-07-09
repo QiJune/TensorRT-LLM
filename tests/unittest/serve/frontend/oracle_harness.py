@@ -171,8 +171,10 @@ ORACLE_TOOL_PARSER = "oracle_test_parser"
 
 @contextlib.contextmanager
 def _oracle_tool_parser_registered():
-    """Scoped registration: the parser must not leak into the CLI surface
-    (the serve CLI api-stability test enumerates registered parsers).
+    """Register the oracle parser for the duration of one oracle run.
+
+    Scoped so the parser never leaks into the CLI surface (the serve CLI
+    api-stability test enumerates registered parsers).
     """
     from tensorrt_llm.serve.tool_parser.tool_parser_factory import ToolParserFactory
 
