@@ -104,8 +104,10 @@ class TestControlEndpointsDetached:
 
 class TestDetachedFrontendLifecycle:
     def test_frontend_constructed_during_initialization_serves_after_ready(self):
-        """A DetachedFrontend created while the engine initializes must wait
-        for readiness and then serve — no reconstruction.
+        """A frontend created during engine initialization serves after ready.
+
+        No reconstruction: the same DetachedFrontend instance waits for
+        readiness and then serves.
         """
         import threading
 

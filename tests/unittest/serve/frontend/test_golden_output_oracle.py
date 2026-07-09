@@ -86,7 +86,9 @@ def test_openai_parity_headless(fixture: OracleFixture):
 
 
 class TestStreamingMultiSequenceParity:
-    """The historical path re-emits prior deltas and terminal chunks for
+    """Bug-for-bug parity pins for interleaved multi-sequence streaming.
+
+    The historical path re-emits prior deltas and terminal chunks for
     untouched sequences on interleaved n>1 streaming (its diff cursors only
     advance for the sequence named by each response, and its formatter keeps
     finish state per call, not per request). The exact-equality gate (DEC-4)
