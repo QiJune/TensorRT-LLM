@@ -627,6 +627,43 @@ class TestOpenAIRouting:
         assert asyncio.run(pipeline.try_completion(request)) is None
         assert client.submitted == []
 
+    def test_tool_call_history_chat_falls_back(self, client):
+        pipeline = make_pipeline(client)
+        request = ChatCompletionRequest(
+            model="test-model",
+            messages=[
+                {"role": "user", "content": "weather?"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": "{}"},
+                        }
+                    ],
+                },
+                {"role": "tool", "content": "sunny", "tool_call_id": "call_1"},
+            ],
+        )
+        assert asyncio.run(pipeline.try_chat(request)) is None
+        assert client.submitted == []
+
+    def test_tool_call_history_chat_rejects_detached(self, client):
+        pipeline = make_pipeline(client, mode=PipelineDeploymentMode.DETACHED)
+        request = ChatCompletionRequest(
+            model="test-model",
+            messages=[
+                {"role": "user", "content": "weather?"},
+                {"role": "tool", "content": "sunny", "tool_call_id": "call_1"},
+            ],
+        )
+        response = asyncio.run(pipeline.try_chat(request))
+        assert response is not None
+        assert response.status_code == 400
+        assert client.submitted == []
+
     def test_return_perf_metrics_disables_pipeline(self):
         """return_perf_metrics disables the pipeline at the server level.
 
@@ -742,6 +779,29 @@ class TestLlmApiRouting:
         )
         assert result is None
         assert client.submitted == []
+
+    def test_return_perf_metrics_disables_llm_api_pipeline(self):
+        """return_perf_metrics disables the LLM-API engine-client pipeline.
+
+        LLM(return_perf_metrics=True) must not build it; the in-process path
+        carries arrival_time and metrics_dict.
+        """
+        from tensorrt_llm.llmapi.llm import BaseLLM
+
+        stub = SimpleNamespace(
+            args=SimpleNamespace(
+                enable_engine_client_pipeline=True,
+                backend="pytorch",
+                orchestrator_type=None,
+                num_postprocess_workers=0,
+                post_processor_hook=None,
+                return_perf_metrics=True,
+                stream_interval=1,
+            ),
+            _is_encoder_decoder_model=lambda: False,
+            tokenizer=object(),
+        )
+        assert BaseLLM._build_engine_pipeline(stub) is None
 
     def test_guided_decoding_falls_back(self, client):
         from tensorrt_llm.sampling_params import GuidedDecodingParams

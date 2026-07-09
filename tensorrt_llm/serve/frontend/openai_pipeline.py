@@ -102,6 +102,25 @@ def _parse_text_conversation(messages: list) -> list[dict[str, Any]]:
     return conversation
 
 
+def _messages_have_tool_calls(messages: list) -> bool:
+    """Detect tool-call metadata in the chat history.
+
+    The import-light detached parser flattens messages to role/content and
+    would drop assistant ``tool_calls``/``function_call`` and tool messages'
+    ``tool_call_id``/``name``, rendering tool-use history into a wrong prompt.
+    Such requests are served by the in-process path instead (which uses the
+    full ``parse_chat_messages_coroutines``).
+    """
+    for message in messages:
+        if not isinstance(message, dict):
+            return True
+        if message.get("role") in ("tool", "function"):
+            return True
+        if message.get("tool_calls") or message.get("function_call") or message.get("tool_call_id"):
+            return True
+    return False
+
+
 # W3C distributed-tracing headers (mirrors tracing.TRACE_HEADERS; inlined so
 # the detached frontend stays import-light — llmapi.tracing pulls torch).
 _TRACE_HEADER_NAMES = ("traceparent", "tracestate")
@@ -247,6 +266,13 @@ class OpenAIServingPipeline:
             return self._handle_ineligible(
                 EligibilityResult(
                     False, "agent_hierarchy scheduling is served by the in-process path"
+                ),
+                "chat",
+            )
+        if _messages_have_tool_calls(request.messages):
+            return self._handle_ineligible(
+                EligibilityResult(
+                    False, "tool-call conversation history is served by the in-process path"
                 ),
                 "chat",
             )

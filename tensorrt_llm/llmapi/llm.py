@@ -1328,6 +1328,14 @@ class BaseLLM:
             logger.debug("engine-client pipeline disabled: requires a "
                          "decoder-only model with a tokenizer")
             return None
+        if getattr(self.args, "return_perf_metrics", False):
+            # The pipeline's EngineRequest/output does not carry arrival_time
+            # or the RequestOutput metrics_dict, so it cannot reproduce the
+            # in-process perf-metrics path. Disable it (mirrors the serving
+            # path) so metrics-enabled deployments serve in-process.
+            logger.debug("engine-client pipeline disabled: return_perf_metrics "
+                         "requires the in-process metrics path")
+            return None
         from ..engine_api.legacy_adapter import LegacyEngineClientAdapter
         from ..serve.frontend.llm_api_pipeline import LlmApiEnginePipeline
         from ..serve.frontend.request_processor import FrontendProcessor
