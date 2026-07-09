@@ -36,6 +36,7 @@ from tensorrt_llm.executor import CppExecutorError
 from tensorrt_llm.executor.postproc_worker import PostprocParams
 from tensorrt_llm.inputs import prompt_inputs
 from tensorrt_llm.inputs.data import TokensPrompt
+from tensorrt_llm.engine_api.contracts import EngineClientError
 from tensorrt_llm.inputs.media_io import BaseMediaIO
 from tensorrt_llm.inputs.multimodal import MultimodalServerConfig
 from tensorrt_llm.inputs.registry import BaseMultimodalInputProcessor
@@ -1215,8 +1216,17 @@ class OpenAIServer(_VideoRoutesMixin):
     async def openai_chat(self, request: ChatCompletionRequest,
                           raw_request: Request) -> Response:
         if self._engine_pipeline is not None:
-            pipeline_response = await self._engine_pipeline.try_chat(
-                request, raw_request)
+            # Cover the new-path call with the same error handling as the
+            # historical path: parsing/submission failures (SamplingParams
+            # validation, EngineClientError) become typed error responses,
+            # not unhandled 500s.
+            try:
+                pipeline_response = await self._engine_pipeline.try_chat(
+                    request, raw_request)
+            except EngineClientError as e:
+                return self.create_error_response(str(e))
+            except ValueError as e:
+                return self.create_error_response(str(e))
             if pipeline_response is not None:
                 return pipeline_response
 
@@ -1518,8 +1528,15 @@ class OpenAIServer(_VideoRoutesMixin):
     async def openai_completion(self, request: CompletionRequest,
                                 raw_request: Request) -> Response:
         if self._engine_pipeline is not None:
-            pipeline_response = await self._engine_pipeline.try_completion(
-                request, raw_request)
+            # Cover the new-path call with the same error handling as the
+            # historical path (see openai_chat).
+            try:
+                pipeline_response = await self._engine_pipeline.try_completion(
+                    request, raw_request)
+            except EngineClientError as e:
+                return self.create_error_response(str(e))
+            except ValueError as e:
+                return self.create_error_response(str(e))
             if pipeline_response is not None:
                 return pipeline_response
 

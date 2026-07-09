@@ -21,6 +21,7 @@ import torch
 
 from tensorrt_llm.engine_api import (
     EngineClient,
+    EngineClientError,
     EngineErrorCode,
     EngineEvent,
     EngineRequest,
@@ -272,6 +273,55 @@ class TestOpenAIRouting:
         assert response is not None
         assert client.submitted[0].sampling.prompt_ignore_length == 2
 
+    def test_pipeline_valueerror_becomes_typed_error_response(self, client):
+        """New-path validation failures become typed error responses.
+
+        E.g. greedy n>1 must be converted by the endpoint, not a 500.
+        """
+        from tensorrt_llm.serve.openai_server import OpenAIServer
+
+        pipeline = make_pipeline(client)
+        # Greedy n>1 raises ValueError inside try_chat's to_sampling_params.
+        request = ChatCompletionRequest(
+            model="test-model",
+            messages=[{"role": "user", "content": "hi"}],
+            n=2,
+            temperature=0.0,
+        )
+        with pytest.raises(ValueError):
+            asyncio.run(pipeline.try_chat(request))
+
+        # The endpoint wrapper converts it to a BadRequest error response.
+        fake_self = SimpleNamespace(
+            _engine_pipeline=pipeline,
+            create_error_response=OpenAIServer.create_error_response,
+        )
+        response = asyncio.run(OpenAIServer.openai_chat(fake_self, request, None))
+        assert response.status_code == 400
+        assert client.submitted == []
+
+    def test_pipeline_engine_client_error_becomes_typed_error_response(self, client):
+        from tensorrt_llm.engine_api import EngineError
+        from tensorrt_llm.serve.openai_server import OpenAIServer
+
+        class RaisingClient(FakeEngineClient):
+            def submit(self, request):
+                raise EngineClientError(
+                    EngineError(code=EngineErrorCode.REQUEST_FAILED, message="submit boom")
+                )
+
+        pipeline = make_pipeline(RaisingClient())
+        request = CompletionRequest(model="test-model", prompt="hi there", max_tokens=4)
+        with pytest.raises(EngineClientError):
+            asyncio.run(pipeline.try_completion(request))
+
+        fake_self = SimpleNamespace(
+            _engine_pipeline=pipeline,
+            create_error_response=OpenAIServer.create_error_response,
+        )
+        response = asyncio.run(OpenAIServer.openai_completion(fake_self, request, None))
+        assert response.status_code == 400
+
     def test_ineligible_request_falls_back_colocated(self, client):
         pipeline = make_pipeline(client)
         request = CompletionRequest(
@@ -482,6 +532,22 @@ class TestLlmApiRouting:
         )
         assert result is not None
         assert client.submitted[0].sampling.prompt_ignore_length == 3
+
+    def test_return_perf_metrics_from_normalized_params_reaches_engine(self, client):
+        """Normalized sampling-param defaults reach the engine request.
+
+        LLM.generate_async applies LLM-level defaults (e.g.
+        return_perf_metrics) before the pipeline handles the request; the
+        pipeline must carry the normalized value through.
+        """
+        pipeline = LlmApiEnginePipeline(client, FrontendProcessor(FakeTokenizer()))
+        # Simulates the post-_prepare_sampling_params state where the LLM
+        # applied its return_perf_metrics default.
+        result = pipeline.try_generate_async(
+            "hello world", SamplingParams(end_id=2, return_perf_metrics=True)
+        )
+        assert result is not None
+        assert client.submitted[0].sampling.return_perf_metrics is True
 
     def test_unmapped_kwargs_fall_back(self, client):
         pipeline = LlmApiEnginePipeline(client, FrontendProcessor(FakeTokenizer()))

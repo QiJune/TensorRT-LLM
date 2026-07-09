@@ -317,6 +317,29 @@ class TestErrorsAndAbort:
         assert assembler.done
         assert assembler.error.code is EngineErrorCode.REQUEST_FAILED
 
+    def test_error_terminal_after_partial_output_is_position_independent(self):
+        """ERROR terminals are position-independent, even after partial output.
+
+        A socket-side engine failure arrives as an ERROR terminal with
+        event_index 0 even after tokens streamed; it must preserve the typed
+        error, not raise an out-of-order protocol violation.
+        """
+        assembler = make_assembler()
+        assembler.consume(event(event_index=0, token_ids=[1]))
+        assembler.consume(event(event_index=1, token_ids=[2]))
+        # ERROR terminal with the position-independent event_index 0.
+        assembler.consume(
+            event(
+                event_index=0,
+                token_ids=[],
+                terminal_kind=TerminalKind.ERROR,
+                error=EngineError(code=EngineErrorCode.INTERNAL_ERROR, message="engine died"),
+            )
+        )
+        assert assembler.done
+        assert assembler.error.code is EngineErrorCode.INTERNAL_ERROR
+        assert "engine died" in assembler.error.message
+
 
 class TestInputContract:
     def test_events_cannot_carry_detokenized_text(self):

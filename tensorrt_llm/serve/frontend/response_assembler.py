@@ -206,13 +206,18 @@ class FrontendResponseAssembler:
             raise ContractViolationError(
                 f"event for request {event.request_id!r} fed to assembler of {self._request_id!r}"
             )
-        self._checker.observe(event)
 
+        # Error terminals are position-independent: a socket-side engine
+        # failure arrives with event_index 0 even after partial output has
+        # streamed. Preserve the typed engine error rather than letting the
+        # ordering checker reject it as out-of-order.
         if event.terminal_kind is TerminalKind.ERROR:
             self._error = event.error
             self._terminated.add(event.sequence_index)
             self._view._done = True
             return
+
+        self._checker.observe(event)
 
         self._fold_sequence(event)
         if self._config.detokenize and self._tokenizer is not None:

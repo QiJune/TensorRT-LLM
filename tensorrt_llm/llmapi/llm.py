@@ -640,11 +640,15 @@ class BaseLLM:
         if self._executor is None or self._executor.is_shutdown():
             raise RuntimeError("LLM is shutting down")
 
+        # Normalize sampling params up front so the engine-client pipeline
+        # sees the same LLM-level defaults (e.g. return_perf_metrics, end_id)
+        # the in-process path applies.
+        sampling_params = self._prepare_sampling_params(sampling_params)
+
         if (engine_pipeline := self._get_engine_pipeline()) is not None:
             pipeline_result = engine_pipeline.try_generate_async(
                 inputs,
-                sampling_params
-                if sampling_params is not None else SamplingParams(),
+                sampling_params,
                 streaming=streaming,
                 lora_request=lora_request,
                 prompt_adapter_request=prompt_adapter_request,
@@ -659,8 +663,6 @@ class BaseLLM:
             )
             if pipeline_result is not None:
                 return pipeline_result
-
-        sampling_params = self._prepare_sampling_params(sampling_params)
 
         # With pytorch backend, py_executor has logic to handle max_tokens of 1,
         # so set to 1 to avoid allocating unnecessary KV cache blocks for single request
