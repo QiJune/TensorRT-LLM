@@ -52,16 +52,22 @@ from typing_extensions import Annotated, Required, TypeAlias, TypedDict
 
 from tensorrt_llm.conversation_params import \
     ConversationParams as LlmConversationParams
-from tensorrt_llm.disaggregated_params import \
-    DisaggregatedParams as LlmDisaggregatedParams
-from tensorrt_llm.disaggregated_params import DisaggScheduleStyle
 from tensorrt_llm.llmapi.reasoning_parser import ReasoningParserFactory
 from tensorrt_llm.sampling_params import GuidedDecodingParams, SamplingParams
 
 if os.environ.get("TLLM_LIGHTWEIGHT_IMPORT", "0") == "1":
+    # disaggregated_params imports tensorrt + tensorrt_llm.bindings (C++); the
+    # detached frontend must not load them. Disagg requests are ineligible for
+    # the engine-client pipeline, so the real types are only needed on the
+    # co-located/heavy path.
     LoRARequest = Any
     MediaModality = str
+    LlmDisaggregatedParams = Any
+    DisaggScheduleStyle = Any
 else:
+    from tensorrt_llm.disaggregated_params import \
+        DisaggregatedParams as LlmDisaggregatedParams
+    from tensorrt_llm.disaggregated_params import DisaggScheduleStyle
     from tensorrt_llm.executor.request import LoRARequest
     from tensorrt_llm.inputs.media_io import MediaModality
 from tensorrt_llm.sampling_params import (check_logprobs_limit,

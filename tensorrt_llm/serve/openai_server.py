@@ -456,6 +456,14 @@ class OpenAIServer(_VideoRoutesMixin):
             logger.debug("engine-client pipeline disabled: harmony models "
                          "are served by the in-process path")
             return None
+        if getattr(args, "return_perf_metrics", False):
+            # The pipeline returns its response directly, bypassing the
+            # server's _extract_metrics/Prometheus collection. When metrics
+            # are enabled the in-process path must serve everything so they
+            # are populated.
+            logger.debug("engine-client pipeline disabled: return_perf_metrics "
+                         "requires the in-process metrics collection path")
+            return None
         llm_pipeline_getter = getattr(self.generator, "_get_engine_pipeline",
                                       None)
         llm_pipeline = llm_pipeline_getter(

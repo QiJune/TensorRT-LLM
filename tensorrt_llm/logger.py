@@ -17,7 +17,15 @@ import os
 import sys
 from typing import Dict, Optional
 
-import tensorrt as trt
+# The detached frontend (TLLM_LIGHTWEIGHT_IMPORT=1) is a GPU-runtime-free
+# process that may not have TensorRT installed at all; importing it here
+# would defeat the lightweight guarantee (and can fail outright). The TRT
+# logger is only meaningful when a TRT engine is present, so skip it in
+# lightweight mode. Flag-off behavior is unchanged.
+if os.environ.get("TLLM_LIGHTWEIGHT_IMPORT") == "1":
+    trt = None
+else:
+    import tensorrt as trt
 
 try:
     from polygraphy.logger import G_LOGGER
@@ -186,7 +194,7 @@ class Logger(metaclass=Singleton):
             min_severity = self.DEFAULT_LEVEL
 
         self._min_severity = min_severity
-        self._trt_logger = trt.Logger(severity_map[min_severity][0])
+        self._trt_logger = trt.Logger(severity_map[min_severity][0]) if trt is not None else None
         self._logger = logging.getLogger(self.PREFIX)
         self._logger.propagate = False
         handler = logging.StreamHandler(stream=sys.stdout)
@@ -269,7 +277,7 @@ class Logger(metaclass=Singleton):
             raise AttributeError(f"No such severity: {severity}")
 
     @property
-    def trt_logger(self) -> trt.ILogger:
+    def trt_logger(self) -> "trt.ILogger":
         return self._trt_logger
 
     def log(self, severity, *msg):
@@ -344,14 +352,20 @@ class Logger(metaclass=Singleton):
             self._polygraphy_logger.module_severity = severity_map[min_severity][2]
 
 
+def _trt_level(attr: str):
+    # None in lightweight mode (no TensorRT); the TRT level is only consumed
+    # when a trt.Logger is actually constructed.
+    return getattr(trt.Logger, attr) if trt is not None else None
+
+
 severity_map = {
-    "internal_error": [trt.Logger.INTERNAL_ERROR, logging.CRITICAL],
-    "error": [trt.Logger.ERROR, logging.ERROR],
-    "warning": [trt.Logger.WARNING, logging.WARNING],
-    "info": [trt.Logger.INFO, logging.INFO],
-    "verbose": [trt.Logger.VERBOSE, logging.DEBUG],
-    "debug": [trt.Logger.VERBOSE, logging.DEBUG],
-    "trace": [trt.Logger.VERBOSE, logging.DEBUG],
+    "internal_error": [_trt_level("INTERNAL_ERROR"), logging.CRITICAL],
+    "error": [_trt_level("ERROR"), logging.ERROR],
+    "warning": [_trt_level("WARNING"), logging.WARNING],
+    "info": [_trt_level("INFO"), logging.INFO],
+    "verbose": [_trt_level("VERBOSE"), logging.DEBUG],
+    "debug": [_trt_level("VERBOSE"), logging.DEBUG],
+    "trace": [_trt_level("VERBOSE"), logging.DEBUG],
 }
 
 if G_LOGGER is not None:

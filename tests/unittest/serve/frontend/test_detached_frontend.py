@@ -91,6 +91,14 @@ os.environ["TLLM_LIGHTWEIGHT_IMPORT"] = "1"
 endpoint = sys.argv[1]
 
 from tensorrt_llm.serve.frontend.detached_app import DetachedFrontend, create_detached_app
+# The engine-server client (imports the logger) and the OpenAI request models
+# (import disaggregated_params) are both on the frontend path — importing them
+# here ensures the forbidden-module check covers TensorRT / C++ bindings leaks.
+from tensorrt_llm.engine_api.engine_server import RemoteEngineClient  # noqa: F401
+from tensorrt_llm.serve.openai_protocol import (  # noqa: F401
+    ChatCompletionRequest,
+    CompletionRequest,
+)
 
 
 class MinimalTokenizer:
@@ -121,7 +129,10 @@ forbidden = sorted(
     for name in sys.modules
     if name == "torch"
     or name.startswith("torch.")
+    or name == "tensorrt"
+    or name.startswith("tensorrt.")
     or name.startswith("tensorrt_llm._torch")
+    or name.startswith("tensorrt_llm.bindings")
     or name == "tensorrt_llm.llmapi.llm"
     or name.startswith("tensorrt_llm.executor")
 )

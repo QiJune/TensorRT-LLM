@@ -616,6 +616,39 @@ class TestOpenAIRouting:
         assert asyncio.run(pipeline.try_chat(request)) is None
         assert client.submitted == []
 
+    def test_conversation_params_completion_falls_back(self, client):
+        pipeline = make_pipeline(client)
+        request = CompletionRequest(
+            model="test-model",
+            prompt="hi there",
+            max_tokens=4,
+            conversation_params={"conversation_id": "conv-1"},
+        )
+        assert asyncio.run(pipeline.try_completion(request)) is None
+        assert client.submitted == []
+
+    def test_return_perf_metrics_disables_pipeline(self):
+        """return_perf_metrics disables the pipeline at the server level.
+
+        The pipeline bypasses _extract_metrics, so with metrics enabled the
+        in-process path serves everything and Prometheus stays populated.
+        """
+        from tensorrt_llm.serve.openai_server import OpenAIServer
+
+        args = SimpleNamespace(
+            enable_engine_client_pipeline=True,
+            backend="pytorch",
+            orchestrator_type=None,
+            num_postprocess_workers=0,
+            post_processor_hook=None,
+            return_perf_metrics=True,
+        )
+        stub = SimpleNamespace(
+            generator=SimpleNamespace(args=args, _get_engine_pipeline=lambda: object()),
+            use_harmony=False,
+        )
+        assert OpenAIServer._maybe_create_engine_pipeline(stub) is None
+
     def test_agent_hierarchy_chat_falls_back(self, client):
         pipeline = make_pipeline(client)
         request = ChatCompletionRequest(

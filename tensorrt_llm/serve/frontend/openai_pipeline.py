@@ -345,6 +345,14 @@ class OpenAIServingPipeline:
                 EligibilityResult(False, "logit_bias tensors cannot cross the engine boundary"),
                 "completions",
             )
+        # conversation_params (sticky multi-turn routing) is not mapped to the
+        # engine request; served in-process so the conversation id is not
+        # silently dropped (mirrors the chat path).
+        if getattr(request, "conversation_params", None) is not None:
+            return self._handle_ineligible(
+                EligibilityResult(False, "conversation_params are served by the in-process path"),
+                "completions",
+            )
         prompt = _normalize_single_prompt(request.prompt)
         sampling_params = request.to_sampling_params(vocab_size=None, backend="pytorch")
         decision = check_request(
