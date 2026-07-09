@@ -27,7 +27,7 @@ Routing values:
 | `/v1/completions` (single prompt) | new-path | new-path | token ids + `RuntimeSamplingConfig` | — |
 | `/v1/completions` (multi-prompt batch) | co-located fallback | headless reject | — | FUT-10 |
 | `/v1/completions` (echo with pre-tokenized prompt) | co-located fallback | headless reject | — | FUT-10 |
-| Chat for harmony/gpt-oss models | untouched (separate route) | headless reject (route absent) | — | FUT-6 |
+| Chat for harmony/gpt-oss models | untouched (in-process Harmony adapter) | detached fail-fast: the frontend has no Harmony adapter, so DetachedFrontend raises a typed UNSUPPORTED_CAPABILITY at construction (handshake carries `model_type`; respects DISABLE_HARMONY_ADAPTER) | — | FUT-6 |
 | `/v1/responses` (Responses API) | untouched (separate route) | headless reject (route absent) | — | FUT-6 |
 | LLM API text path (`LLM.generate_async`) | new-path | n/a — the LLM API never runs detached (DEC-1) | in-process contract objects | — |
 | LLM API non-text inputs (multimodal, queries, encoder ids) | co-located fallback | n/a | — | FUT-7 |
