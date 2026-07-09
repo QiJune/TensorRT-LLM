@@ -282,8 +282,10 @@ class _ResponseNormalizer:
         token_ids = list(result.output_token_ids[source_index])
 
         stop_reason = None
-        if reason_name in ("END_ID", "STOP_WORDS"):
+        stop_kind = None
+        if terminal_kind is TerminalKind.FINISHED and reason_name in ("END_ID", "STOP_WORDS"):
             stop_reason = self._token_level_stop_reason(reason_name, token_ids)
+            stop_kind = "end_token" if reason_name == "END_ID" else "stop_sequence"
 
         logprobs = None
         if logprobs_result is not None and logprobs_result.generation is not None:
@@ -319,6 +321,7 @@ class _ResponseNormalizer:
             finish_reason=finish_reason
             if terminal_kind is TerminalKind.FINISHED
             else ("cancelled" if cancelled else None),
+            stop_kind=stop_kind,
             stop_reason=stop_reason,
             terminal_kind=terminal_kind,
             disaggregated_metadata=_disaggregated_metadata(result),

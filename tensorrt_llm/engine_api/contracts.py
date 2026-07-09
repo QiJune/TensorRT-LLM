@@ -75,6 +75,7 @@ __all__ = [
     "RequestHandle",
     "RuntimeControl",
     "RuntimeSamplingConfig",
+    "StopKind",
     "TensorAuxiliaryPayload",
     "TerminalKind",
     "TokenLogprob",
@@ -82,6 +83,11 @@ __all__ = [
 ]
 
 FinishReason = Literal["stop", "length", "timeout", "cancelled", "not_finished"]
+
+# How a 'stop' finish was triggered: the end token, or a stop token sequence
+# the runtime matched. Stop *strings* are a frontend concern and never appear
+# here.
+StopKind = Literal["end_token", "stop_sequence"]
 
 
 class TerminalKind(str, enum.Enum):
@@ -300,6 +306,10 @@ class FrontendOutputConfig:
     skip_special_tokens: bool = True
     spaces_between_special_tokens: bool = True
     stop_strings: Optional[list[str]] = None
+    # Tokenized form of each entry in ``stop_strings`` (same order), produced
+    # by the frontend's tokenizer. Used for token-level stop attribution and
+    # trimming without re-tokenizing.
+    stop_sequence_token_ids: Optional[list[list[int]]] = None
     stop_token_ids: Optional[list[int]] = None
     include_stop_str_in_output: bool = False
     num_return_sequences: int = 1
@@ -403,6 +413,8 @@ class EngineEvent:
         prompt_token_ids: Prompt echo; first event of a sequence only.
         prompt_logprobs: Prompt logprobs; first event of a sequence only.
         finish_reason: Why generation finished; terminal events only.
+        stop_kind: For ``finish_reason == "stop"``, whether the end token or a
+            runtime-matched stop token sequence triggered it.
         stop_reason: The stop token id that ended generation, if any. Stop
             strings are detected frontend-side and never appear here.
         terminal_kind: Set on the sequence's single terminal event.
@@ -424,6 +436,7 @@ class EngineEvent:
     prompt_token_ids: Optional[list[int]] = None
     prompt_logprobs: Optional[LogprobsPayload] = None
     finish_reason: Optional[FinishReason] = None
+    stop_kind: Optional[StopKind] = None
     stop_reason: Optional[int] = None
     terminal_kind: Optional[TerminalKind] = None
     error: Optional[EngineError] = None
@@ -451,6 +464,10 @@ class EngineEvent:
         if self.finish_reason is not None and self.terminal_kind is None:
             raise ContractViolationError(
                 "EngineEvent.finish_reason is only valid on terminal events"
+            )
+        if self.stop_kind is not None and self.finish_reason != "stop":
+            raise ContractViolationError(
+                "EngineEvent.stop_kind is only valid when finish_reason is 'stop'"
             )
         if self.tensor_payload is not None and not isinstance(
             self.tensor_payload, TensorAuxiliaryPayload
