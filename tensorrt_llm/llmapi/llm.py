@@ -655,6 +655,7 @@ class BaseLLM:
                 scheduling_params=scheduling_params,
                 conversation_params=conversation_params,
                 cache_salt=cache_salt,
+                priority=priority,
             )
             if pipeline_result is not None:
                 return pipeline_result

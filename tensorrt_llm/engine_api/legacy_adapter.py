@@ -106,6 +106,7 @@ def _to_sampling_params(request: EngineRequest) -> SamplingParams:
         length_penalty=cfg.length_penalty if cfg.length_penalty is not None else 1.0,
         early_stopping=cfg.early_stopping if cfg.early_stopping is not None else 1,
         no_repeat_ngram_size=cfg.no_repeat_ngram_size,
+        prompt_ignore_length=cfg.prompt_ignore_length,
         beam_search_diversity_rate=cfg.beam_search_diversity_rate,
         beam_width_array=cfg.beam_width_array,
         stop_token_ids=list(cfg.stop_token_ids) if cfg.stop_token_ids else None,

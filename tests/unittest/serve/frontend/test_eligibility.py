@@ -227,10 +227,14 @@ def client():
     return FakeEngineClient()
 
 
+class _ModelConfig:
+    model_type = "llama"
+
+
 def make_pipeline(client, mode=PipelineDeploymentMode.COLOCATED) -> OpenAIServingPipeline:
     return OpenAIServingPipeline(
         client,
-        FrontendProcessor(FakeTokenizer()),
+        FrontendProcessor(FakeTokenizer(), model_config=_ModelConfig()),
         model_label="test-model",
         mode=mode,
     )
@@ -246,6 +250,27 @@ class TestOpenAIRouting:
         assert client.submitted[0].crosses_neutral_wire
         assert response.choices[0].text == "Hello world"
         assert response.usage.completion_tokens == 2
+
+    def test_chat_cache_salt_reaches_engine_request(self, client):
+        pipeline = make_pipeline(client)
+        request = ChatCompletionRequest(
+            model="test-model",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=4,
+            cache_salt="tenant-B",
+        )
+        response = asyncio.run(pipeline.try_chat(request))
+        assert response is not None
+        assert client.submitted[0].cache_salt == "tenant-B"
+
+    def test_prompt_ignore_length_reaches_engine_request(self, client):
+        pipeline = make_pipeline(client)
+        request = CompletionRequest(
+            model="test-model", prompt="hi there", max_tokens=4, prompt_ignore_length=2
+        )
+        response = asyncio.run(pipeline.try_completion(request))
+        assert response is not None
+        assert client.submitted[0].sampling.prompt_ignore_length == 2
 
     def test_ineligible_request_falls_back_colocated(self, client):
         pipeline = make_pipeline(client)
@@ -437,6 +462,26 @@ class TestLlmApiRouting:
         assert output.outputs[0].token_ids == [5, 6]
         assert output.outputs[0].text == "Hello world"
         assert output.outputs[0].finish_reason == "length"
+
+    def test_priority_and_cache_salt_reach_engine_request(self, client):
+        pipeline = LlmApiEnginePipeline(client, FrontendProcessor(FakeTokenizer()))
+        result = pipeline.try_generate_async(
+            "hello world",
+            SamplingParams(end_id=2),
+            priority=0.9,
+            cache_salt="tenant-C",
+        )
+        assert result is not None
+        assert client.submitted[0].priority == 0.9
+        assert client.submitted[0].cache_salt == "tenant-C"
+
+    def test_prompt_ignore_length_reaches_engine_request(self, client):
+        pipeline = LlmApiEnginePipeline(client, FrontendProcessor(FakeTokenizer()))
+        result = pipeline.try_generate_async(
+            "hello world", SamplingParams(end_id=2, prompt_ignore_length=3)
+        )
+        assert result is not None
+        assert client.submitted[0].sampling.prompt_ignore_length == 3
 
     def test_unmapped_kwargs_fall_back(self, client):
         pipeline = LlmApiEnginePipeline(client, FrontendProcessor(FakeTokenizer()))

@@ -57,6 +57,10 @@ from tensorrt_llm.serve.frontend.openai_formatters import (
 from tensorrt_llm.serve.frontend.request_processor import FrontendProcessor, ProcessedInput
 from tensorrt_llm.serve.frontend.response_assembler import FrontendResponseAssembler
 
+# Mirrors executor.request.DEFAULT_REQUEST_PRIORITY (kept local so the
+# detached frontend stays import-light — executor.request pulls torch).
+DEFAULT_REQUEST_PRIORITY: float = 0.5
+
 __all__ = ["OpenAIServingPipeline"]
 
 
@@ -273,12 +277,22 @@ class OpenAIServingPipeline:
         ):
             params.last_message_content = conversation[-1]["content"]
 
+        cache_salt = getattr(request, "cache_salt", None)
+        priority = getattr(request, "priority", DEFAULT_REQUEST_PRIORITY)
         if request.stream:
             return StreamingResponse(
-                self._stream(processed, params, format_chat_stream_chunks),
+                self._stream(
+                    processed,
+                    params,
+                    format_chat_stream_chunks,
+                    cache_salt=cache_salt,
+                    priority=priority,
+                ),
                 media_type="text/event-stream",
             )
-        view = await self._collect(processed, streaming=False)
+        view = await self._collect(
+            processed, streaming=False, cache_salt=cache_salt, priority=priority
+        )
         return format_chat_response(view, params)
 
     # --- completions ------------------------------------------------------
@@ -312,23 +326,42 @@ class OpenAIServingPipeline:
         params.num_prompt_tokens = len(processed.prompt_token_ids)
         params.prompt = processed.prompt
 
+        cache_salt = getattr(request, "cache_salt", None)
+        priority = getattr(request, "priority", DEFAULT_REQUEST_PRIORITY)
         if request.stream:
             return StreamingResponse(
-                self._stream(processed, params, format_completion_stream_chunks),
+                self._stream(
+                    processed,
+                    params,
+                    format_completion_stream_chunks,
+                    cache_salt=cache_salt,
+                    priority=priority,
+                ),
                 media_type="text/event-stream",
             )
-        view = await self._collect(processed, streaming=False)
+        view = await self._collect(
+            processed, streaming=False, cache_salt=cache_salt, priority=priority
+        )
         return format_completion_response(view, params)
 
     # --- shared pipeline drive ----------------------------------------------
 
-    def _submit(self, processed: ProcessedInput, streaming: bool):
+    def _submit(
+        self,
+        processed: ProcessedInput,
+        streaming: bool,
+        *,
+        cache_salt: Optional[str] = None,
+        priority: float = DEFAULT_REQUEST_PRIORITY,
+    ):
         request_id = uuid.uuid4().hex
         engine_request = EngineRequest(
             request_id=request_id,
             prompt_token_ids=list(processed.prompt_token_ids),
             sampling=processed.sampling,
             streaming=streaming,
+            cache_salt=cache_salt,
+            priority=priority,
         )
         handle = self._client.submit(engine_request)
         assembler = _make_assembler(
@@ -340,8 +373,17 @@ class OpenAIServingPipeline:
         )
         return handle, assembler
 
-    async def _collect(self, processed: ProcessedInput, streaming: bool):
-        handle, assembler = self._submit(processed, streaming)
+    async def _collect(
+        self,
+        processed: ProcessedInput,
+        streaming: bool,
+        *,
+        cache_salt: Optional[str] = None,
+        priority: float = DEFAULT_REQUEST_PRIORITY,
+    ):
+        handle, assembler = self._submit(
+            processed, streaming, cache_salt=cache_salt, priority=priority
+        )
         async for event in handle.aevents():
             assembler.consume(event)
             if assembler.done:
@@ -350,10 +392,18 @@ class OpenAIServingPipeline:
         return assembler.view
 
     async def _stream(
-        self, processed: ProcessedInput, params: Any, formatter
+        self,
+        processed: ProcessedInput,
+        params: Any,
+        formatter,
+        *,
+        cache_salt: Optional[str] = None,
+        priority: float = DEFAULT_REQUEST_PRIORITY,
     ) -> AsyncGenerator[str, None]:
         try:
-            handle, assembler = self._submit(processed, streaming=True)
+            handle, assembler = self._submit(
+                processed, streaming=True, cache_salt=cache_salt, priority=priority
+            )
             async for event in handle.aevents():
                 assembler.consume(event)
                 if assembler.error is not None:

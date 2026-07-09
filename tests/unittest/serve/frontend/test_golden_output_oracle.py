@@ -141,6 +141,21 @@ class TestStreamingMultiSequenceParity:
         new_output = asyncio.run(run_new_path_openai(fixture))
         assert_openai_equal(old_output, new_output, streaming=True)
 
+        # Same bug-for-bug parity as chat: the historical completion stream
+        # postprocessor emits a chunk for every choice on every step (empty
+        # text for untouched sequences, re-emitted terminals), and the
+        # pipeline reproduces it exactly. Pin the old path's shape so an
+        # upstream fix forces a lockstep pipeline update.
+        stream = self._content_stream(old_output)
+        empty_untouched = [item for item in stream if item[1] == ""]
+        assert empty_untouched, (
+            "the historical completion stream no longer emits empty chunks "
+            "for untouched sequences — update the pipeline in lockstep and "
+            "refresh this pin"
+        )
+        terminals = [item for item in stream if item[2] is not None]
+        assert len([t for t in terminals if t[0] == 0]) == 2
+
 
 class TestToolParserStopLogprobsShape:
     """Semantic proof the AC-4 combination actually fires in the fixture.

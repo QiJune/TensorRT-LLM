@@ -154,13 +154,17 @@ class LlmApiEnginePipeline:
         lora_request: Any = None,
         prompt_adapter_request: Any = None,
         disaggregated_params: Any = None,
+        cache_salt: Optional[str] = None,
+        priority: float = 0.5,
         **unsupported_kwargs: Any,
     ) -> Optional[EnginePipelineRequestOutput]:
         """Serve an eligible text request, or return None to fall back.
 
         Any keyword the pipeline does not map (multimodal params, KV
         retention config, scheduling/conversation params, ...) makes the
-        request ineligible when set.
+        request ineligible when set. ``cache_salt`` (KV-cache isolation) and
+        ``priority`` (scheduling) are mapped onto the engine request rather
+        than forcing a fallback.
         """
         prompt = _normalize_text_inputs(inputs)
         if prompt is None:
@@ -185,6 +189,8 @@ class LlmApiEnginePipeline:
             prompt_token_ids=list(processed.prompt_token_ids),
             sampling=processed.sampling,
             streaming=streaming,
+            cache_salt=cache_salt,
+            priority=priority,
         )
         handle = self._client.submit(engine_request)
         assembler = FrontendResponseAssembler(

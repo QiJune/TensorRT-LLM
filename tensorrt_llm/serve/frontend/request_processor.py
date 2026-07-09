@@ -279,6 +279,7 @@ class FrontendProcessor:
             length_penalty=params.length_penalty,
             early_stopping=params.early_stopping,
             no_repeat_ngram_size=params.no_repeat_ngram_size,
+            prompt_ignore_length=params.prompt_ignore_length,
             beam_search_diversity_rate=params.beam_search_diversity_rate,
             beam_width_array=params.beam_width_array,
             stop_token_ids=stop_token_ids or None,

@@ -273,6 +273,7 @@ class RuntimeSamplingConfig:
     length_penalty: Optional[float] = None
     early_stopping: Optional[int] = None
     no_repeat_ngram_size: Optional[int] = None
+    prompt_ignore_length: Optional[int] = None
     beam_search_diversity_rate: Optional[float] = None
     beam_width_array: Optional[list[int]] = None
     stop_token_ids: Optional[list[int]] = None
