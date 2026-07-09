@@ -29,6 +29,7 @@ from typing import Any, Optional
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response
+from pydantic import ValidationError
 
 from tensorrt_llm.engine_api.contracts import EngineClientError, EngineErrorCode
 from tensorrt_llm.serve.frontend.eligibility import PipelineDeploymentMode
@@ -172,24 +173,26 @@ def create_detached_app(frontend: DetachedFrontend) -> FastAPI:
     async def chat(raw_request: Request) -> Response:
         from tensorrt_llm.serve.openai_protocol import ChatCompletionRequest
 
-        request = ChatCompletionRequest(**(await raw_request.json()))
         try:
+            # Parse/validate inside the try so malformed JSON or a schema
+            # validation error becomes a structured 4xx, not an unhandled 500.
+            request = ChatCompletionRequest(**(await raw_request.json()))
             return _as_response(await frontend.pipeline.try_chat(request, raw_request))
         except EngineClientError as e:
             return _typed_error_response(e)
-        except ValueError as e:
+        except (ValueError, ValidationError) as e:
             return _bad_request_response(str(e))
 
     @app.post("/v1/completions")
     async def completions(raw_request: Request) -> Response:
         from tensorrt_llm.serve.openai_protocol import CompletionRequest
 
-        request = CompletionRequest(**(await raw_request.json()))
         try:
+            request = CompletionRequest(**(await raw_request.json()))
             return _as_response(await frontend.pipeline.try_completion(request, raw_request))
         except EngineClientError as e:
             return _typed_error_response(e)
-        except ValueError as e:
+        except (ValueError, ValidationError) as e:
             return _bad_request_response(str(e))
 
     return app

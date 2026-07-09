@@ -726,6 +726,68 @@ class TestLlmApiRouting:
         assert output.outputs[0].text == "Hello world"
         assert output.outputs[0].finish_reason == "length"
 
+    def test_completed_output_closes_event_generator(self):
+        """A completed output closes its event generator.
+
+        The handle's finally (which forgets the request) must run, or a
+        retained output leaks the handle/request id.
+        """
+        closed = []
+
+        class TrackingHandle(RequestHandle):
+            def __init__(self, request):
+                self._request = request
+
+            @property
+            def request_id(self):
+                return self._request.request_id
+
+            def _emit(self):
+                yield EngineEvent(
+                    request_id=self._request.request_id,
+                    event_index=0,
+                    token_ids=[5, 6],
+                    prompt_token_ids=list(self._request.prompt_token_ids),
+                    terminal_kind=TerminalKind.FINISHED,
+                    finish_reason="length",
+                )
+
+            def events(self):
+                try:
+                    yield from self._emit()
+                finally:
+                    closed.append(("sync", self._request.request_id))
+
+            async def aevents(self):
+                try:
+                    for e in self._emit():
+                        yield e
+                finally:
+                    closed.append(("async", self._request.request_id))
+
+            def abort(self):
+                pass
+
+        class TrackingClient(FakeEngineClient):
+            def submit(self, request):
+                self.submitted.append(request)
+                return TrackingHandle(request)
+
+        # sync
+        pipeline = LlmApiEnginePipeline(TrackingClient(), FrontendProcessor(FakeTokenizer()))
+        output = pipeline.try_generate_async("hello world", SamplingParams(end_id=2)).result()
+        assert output.finished
+        assert closed == [("sync", output.request_id)]
+
+        # async
+        closed.clear()
+        pipeline = LlmApiEnginePipeline(TrackingClient(), FrontendProcessor(FakeTokenizer()))
+        output = asyncio.run(
+            pipeline.try_generate_async("hello world", SamplingParams(end_id=2)).aresult()
+        )
+        assert output.finished
+        assert closed == [("async", output.request_id)]
+
     def test_priority_and_cache_salt_reach_engine_request(self, client):
         pipeline = LlmApiEnginePipeline(client, FrontendProcessor(FakeTokenizer()))
         result = pipeline.try_generate_async(

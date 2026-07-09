@@ -93,12 +93,29 @@ class EnginePipelineRequestOutput:
             self._sync_events = self._handle.events()
         event = next(self._sync_events)
         self._assembler.consume(event)
+        if self._assembler.done:
+            # Close the generator so the handle's finally runs (_forget, and
+            # abort on early stops); otherwise a retained completed output
+            # leaks its request id/handle in the adapter/client.
+            self._close_sync_events()
+
+    def _close_sync_events(self) -> None:
+        if self._sync_events is not None:
+            self._sync_events.close()
+            self._sync_events = None
 
     async def _step_async(self) -> None:
         if self._async_events is None:
             self._async_events = self._handle.aevents()
         event = await self._async_events.__anext__()
         self._assembler.consume(event)
+        if self._assembler.done:
+            await self._close_async_events()
+
+    async def _close_async_events(self) -> None:
+        if self._async_events is not None:
+            await self._async_events.aclose()
+            self._async_events = None
 
     def result(self, timeout: Optional[float] = None) -> "EnginePipelineRequestOutput":
         while not self.finished:

@@ -93,6 +93,40 @@ class TestDetachedEngineErrorResponse:
             frontend.shutdown()
             server.shutdown()
 
+    def test_malformed_request_becomes_bad_request_not_500(self):
+        """Malformed requests become a structured 4xx, not a 500.
+
+        Malformed JSON and schema-validation errors must surface as a
+        structured bad-request response.
+        """
+        engine = FakeEngine()
+        server = EngineSocketServer(
+            engine,
+            endpoint=f"ipc:///tmp/runtime_control_{uuid.uuid4().hex}.sock",
+            model_context={"model": "m", "tokenizer_dir": None},
+        )
+        server.start()
+        frontend = DetachedFrontend(server.endpoint, tokenizer=MinimalTokenizer())
+        client = TestClient(create_detached_app(frontend))
+        try:
+            # Malformed JSON body.
+            bad_json = client.post(
+                "/v1/chat/completions",
+                content=b"{not valid json",
+                headers={"content-type": "application/json"},
+            )
+            assert bad_json.status_code == 400
+            assert "error" in bad_json.json()
+            # Schema validation error (messages must be a list).
+            bad_schema = client.post(
+                "/v1/completions", json={"model": "m", "prompt": 12345, "max_tokens": "eight"}
+            )
+            assert bad_schema.status_code == 400
+            assert "error" in bad_schema.json()
+        finally:
+            frontend.shutdown()
+            server.shutdown()
+
 
 class TestControlEndpointsDetached:
     def test_health_returns_live_engine_state(self, stack):
