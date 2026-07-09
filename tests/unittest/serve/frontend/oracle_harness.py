@@ -325,34 +325,40 @@ def _new_pipeline_components(fixture: OracleFixture, client_factory: Optional[Ca
 async def run_new_path_openai(fixture: OracleFixture, client_factory: Optional[Callable] = None):
     """Drive the engine-client pipeline end to end (production code path)."""
     _tokenizer, client, processor = _new_pipeline_components(fixture, client_factory)
-    pipeline = OpenAIServingPipeline(
-        client,
-        processor,
-        model_label=fixture.model,
-        mode=PipelineDeploymentMode.COLOCATED,
-    )
-    request = build_request_model(fixture)
-    if fixture.endpoint == "chat":
-        response = await pipeline.try_chat(request)
-    else:
-        response = await pipeline.try_completion(request)
-    assert response is not None, f"fixture {fixture.name} unexpectedly ineligible"
-    if fixture.streaming:
-        chunks = [chunk async for chunk in response.body_iterator]
-        assert chunks and chunks[-1] == "data: [DONE]\n\n"
-        return chunks[:-1]
-    return response
+    try:
+        pipeline = OpenAIServingPipeline(
+            client,
+            processor,
+            model_label=fixture.model,
+            mode=PipelineDeploymentMode.COLOCATED,
+        )
+        request = build_request_model(fixture)
+        if fixture.endpoint == "chat":
+            response = await pipeline.try_chat(request)
+        else:
+            response = await pipeline.try_completion(request)
+        assert response is not None, f"fixture {fixture.name} unexpectedly ineligible"
+        if fixture.streaming:
+            chunks = [chunk async for chunk in response.body_iterator]
+            assert chunks and chunks[-1] == "data: [DONE]\n\n"
+            return chunks[:-1]
+        return response
+    finally:
+        client.shutdown()
 
 
 def run_new_path_llm_api(fixture: OracleFixture, client_factory: Optional[Callable] = None):
     _tokenizer, client, processor = _new_pipeline_components(fixture, client_factory)
-    pipeline = LlmApiEnginePipeline(client, processor)
-    sampling_params = _llm_api_sampling_params(fixture)
-    request_output = pipeline.try_generate_async(
-        fixture.request_kwargs["prompt"], sampling_params, streaming=fixture.streaming
-    )
-    assert request_output is not None, f"fixture {fixture.name} unexpectedly ineligible"
-    return _collect_llm_api_snapshots(request_output, fixture.streaming)
+    try:
+        pipeline = LlmApiEnginePipeline(client, processor)
+        sampling_params = _llm_api_sampling_params(fixture)
+        request_output = pipeline.try_generate_async(
+            fixture.request_kwargs["prompt"], sampling_params, streaming=fixture.streaming
+        )
+        assert request_output is not None, f"fixture {fixture.name} unexpectedly ineligible"
+        return _collect_llm_api_snapshots(request_output, fixture.streaming)
+    finally:
+        client.shutdown()
 
 
 def _llm_api_sampling_params(fixture: OracleFixture) -> SamplingParams:

@@ -47,6 +47,29 @@ def test_llm_api_parity_in_process(fixture: OracleFixture):
     assert_llm_api_equal(old_snapshots, new_snapshots)
 
 
+def _socket_client_factory(executor):
+    """Route the pipeline through the boundary socket, co-located."""
+    from tensorrt_llm.engine_api.legacy_adapter import LegacyEngineClientAdapter
+    from tensorrt_llm.engine_api.socket_transport import LocalProcessEngineClient
+
+    return LocalProcessEngineClient(LegacyEngineClientAdapter(executor))
+
+
+@pytest.mark.parametrize("fixture", OPENAI_FIXTURES, ids=lambda f: f.name)
+def test_openai_parity_over_socket(fixture: OracleFixture):
+    """The same fixtures must hold over the msgpack socket path."""
+    old_output = run_old_path_openai(fixture)
+    new_output = asyncio.run(run_new_path_openai(fixture, _socket_client_factory))
+    assert_openai_equal(old_output, new_output, fixture.streaming)
+
+
+@pytest.mark.parametrize("fixture", LLM_API_FIXTURES, ids=lambda f: f.name)
+def test_llm_api_parity_over_socket(fixture: OracleFixture):
+    old_snapshots = run_old_path_llm_api(fixture)
+    new_snapshots = run_new_path_llm_api(fixture, _socket_client_factory)
+    assert_llm_api_equal(old_snapshots, new_snapshots)
+
+
 class TestHarnessSelfChecks:
     """The oracle must catch seeded divergences — proof the comparison bites."""
 
