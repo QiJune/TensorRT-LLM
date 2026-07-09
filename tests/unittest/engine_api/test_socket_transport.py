@@ -365,3 +365,11 @@ class TestControlPlaneOverSocket:
         with pytest.raises(EngineClientError) as excinfo:
             stack.client._control("collective_rpc")
         assert excinfo.value.error.code is EngineErrorCode.UNSUPPORTED_CAPABILITY
+
+    def test_non_wire_safe_control_result_returns_typed_error(self, engine, stack):
+        """A backend returning non-plain data must not time the caller out."""
+        engine.stats = [{"callback": lambda: None}]
+        with pytest.raises(EngineClientError) as excinfo:
+            stack.get_stats(timeout=0.1)
+        assert excinfo.value.error.code is EngineErrorCode.PROTOCOL_VIOLATION
+        assert "wire-safe" in excinfo.value.error.message

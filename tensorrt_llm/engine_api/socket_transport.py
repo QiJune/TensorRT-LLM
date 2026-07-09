@@ -48,6 +48,7 @@ from typing import Any, AsyncIterator, Iterator, Optional
 import zmq
 
 from tensorrt_llm.engine_api.contracts import (
+    ContractViolationError,
     EngineClient,
     EngineClientError,
     EngineError,
@@ -383,14 +384,30 @@ class EngineSocketServer:
             except Exception as e:
                 payload["error_code"] = EngineErrorCode.INTERNAL_ERROR.value
                 payload["error_message"] = str(e)
-        self._enqueue(
-            connection,
-            WireMessage(
-                message_type=MessageType.CONTROL_RESPONSE,
-                request_id=message.request_id,
-                payload=payload,
-            ),
-        )
+        try:
+            self._enqueue(
+                connection,
+                WireMessage(
+                    message_type=MessageType.CONTROL_RESPONSE,
+                    request_id=message.request_id,
+                    payload=payload,
+                ),
+            )
+        except ContractViolationError as e:
+            # A backend returned non-plain data: answer with a typed error
+            # instead of dropping the reply (which would time the caller out).
+            self._enqueue(
+                connection,
+                WireMessage(
+                    message_type=MessageType.CONTROL_RESPONSE,
+                    request_id=message.request_id,
+                    payload={
+                        "control_id": control_id,
+                        "error_code": EngineErrorCode.PROTOCOL_VIOLATION.value,
+                        "error_message": f"control result is not wire-safe: {e}",
+                    },
+                ),
+            )
 
     # --- outbound with slow-consumer policy ------------------------------------
 

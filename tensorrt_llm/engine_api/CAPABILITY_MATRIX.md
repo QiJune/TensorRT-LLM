@@ -61,12 +61,12 @@ Per-request half of the predicate (`check_request` / `check_sampling_params`).
 | Python `logits_processor` (incl. batched) | co-located fallback | headless reject | declared `PythonExtension` side channel, never the neutral wire | FUT-8 |
 | `thinking_token_budget` (attaches a logits processor) | co-located fallback | headless reject | — | FUT-8 |
 | `logit_bias` / `embedding_bias` (tensor) | co-located fallback | headless reject | — | FUT-8 |
-| `return_context_logits` / `return_generation_logits` / `additional_model_outputs` | co-located fallback | headless reject | reserved `TensorAuxiliaryPayload` side channel | FUT-7 |
+| `return_context_logits` / `return_generation_logits` / `return_encoder_output` / `additional_model_outputs` | co-located fallback | headless reject | reserved `TensorAuxiliaryPayload` side channel | FUT-7 |
 | LoRA / prompt adapter | co-located fallback | headless reject | — | FUT-9 |
 | Lookahead / speculative per-request config | co-located fallback | headless reject | — | FUT-9 |
 | `disaggregated_params` on a request | co-located fallback | headless reject | adapter passes disagg metadata through opaquely for the old path | FUT-3 |
 | KV retention / scheduling / conversation params, `_postproc_params` (LLM API kwargs) | co-located fallback | n/a | — | FUT-9 |
-| Post-processor hook (`post_processor_hook`) | untouched (old path only; hook is in-process) | not offered | — | FUT-10 |
+| Post-processor hook (`post_processor_hook` configured) | pipeline never constructed — deployment-level fallback: the hook runs at the in-process detokenization chokepoint, so the in-process path serves everything | not offered | — | FUT-10 |
 
 ## Backends and topologies
 

@@ -25,6 +25,8 @@ Deployment conditions (evaluated once per server/LLM instance):
   RPC orchestrators are not wired to the pipeline.
 - ``num_postprocess_workers == 0`` (postprocess worker processes carry
   formatter callables to the engine side, which the pipeline forbids).
+- No ``post_processor_hook`` configured (the hook runs at the in-process
+  detokenization chokepoint, which the pipeline replaces).
 
 Per-request conditions:
 
@@ -96,6 +98,11 @@ def check_deployment(llm_args: Any) -> EligibilityResult:
     if num_postprocess_workers > 0:
         return _ineligible(
             f"num_postprocess_workers={num_postprocess_workers} requires the in-process path"
+        )
+    if getattr(llm_args, "post_processor_hook", None) is not None:
+        return _ineligible(
+            "post_processor_hook runs at the in-process detokenization chokepoint; "
+            "the pipeline would bypass it"
         )
     return _ELIGIBLE
 

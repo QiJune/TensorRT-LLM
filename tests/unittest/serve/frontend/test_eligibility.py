@@ -65,6 +65,12 @@ class TestDeploymentPredicate:
         decision = check_deployment(deployment_args(num_postprocess_workers=2))
         assert not decision and "num_postprocess_workers=2" in decision.reason
 
+    def test_post_processor_hook_disables_pipeline(self):
+        """The hook runs at the in-process detok chokepoint; the pipeline must
+        never bypass it, so a configured hook disables the pipeline entirely."""
+        decision = check_deployment(deployment_args(post_processor_hook="my_pkg.my_hook"))
+        assert not decision and "post_processor_hook" in decision.reason
+
 
 class TestRequestPredicate:
     def test_plain_text_chat_request_eligible(self):
