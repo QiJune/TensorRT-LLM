@@ -14,9 +14,11 @@
 # limitations under the License.
 import atexit
 import concurrent.futures
+import contextlib
 import json
 import os
 import threading
+import traceback
 import weakref
 from queue import Empty
 from typing import Dict, List, Optional, Union
@@ -296,6 +298,23 @@ class GenerationExecutorProxy(GenerationExecutor):
                 result.queue.put(dead_error)
             except Exception:  # noqa: BLE001 - a full/closed queue must not stop the sweep
                 pass
+        # The contract population has no rank-0 GenerationResult, so the sweep
+        # above cannot reach it: poison those streams typed with the same
+        # immediacy (idempotent; pre_shutdown repeats it later). Without this,
+        # legacy requests fail fast on worker death while contract streams
+        # wait for the monitor poll tick.
+        service = self._engine_service
+        if service is not None:
+            try:
+                service.fail_all("engine dead")
+            except Exception as e:  # noqa: BLE001 - the sweep must complete
+                logger.error(f"engine service fail_all on engine death: {e!r}")
+        frame_router = self._engine_frame_router
+        if frame_router is not None:
+            try:
+                frame_router.fail_all("engine dead")
+            except Exception as e:  # noqa: BLE001 - the sweep must complete
+                logger.error(f"frame router fail_all on engine death: {e!r}")
 
     def _handle_worker_death(self, error: BaseException) -> None:
         """Event-driven worker-death handler.
@@ -411,6 +430,50 @@ class GenerationExecutorProxy(GenerationExecutor):
     def resource_governor_queue(self):
         return self._resource_governor_queue
 
+    # --- experimental engine-client hooks (inert unless a router is attached) ---
+    _engine_frame_router = None
+    _engine_service = None
+
+    def attach_engine_frame_router(self, router) -> None:
+        """Attach the experimental engine-frame router (TLLM_EXPERIMENTAL_ENGINE_CLIENT).
+
+        The router observes submissions and raw responses to produce the
+        typed engine-contract frame stream (shadow mode: the legacy path
+        stays authoritative). With no router attached every hook in this
+        class is inert and legacy behavior is unchanged.
+        """
+        self._engine_frame_router = router
+
+    @property
+    def _submission_lock(self):
+        """Submission/lifecycle lock serializing id allocation + enqueue with
+        shutdown, shared by the legacy and contract submit paths. Created on
+        first use; reentrant because a submit-side background-error check can
+        reach ``pre_shutdown`` while the lock is held."""
+        # dict.setdefault is atomic under the GIL, so concurrent first access
+        # cannot observe two different locks.
+        return self.__dict__.setdefault("_submission_lock_instance",
+                                        threading.RLock())
+
+    def attach_engine_service(self, service) -> None:
+        """Attach the engine service (authoritative contract routing).
+
+        Unlike the shadow router, an attached service claims contract
+        responses exclusively: they never reach legacy delivery. Only one
+        service may attach per proxy lifetime.
+        """
+        if self._engine_service is not None:
+            raise RuntimeError(
+                "an engine service is already attached to this executor")
+        self._engine_service = service
+
+    def submit_contract(self, engine_request, stop_reasons=()) -> int:
+        """Contract-native submission (no rank-0 GenerationResult)."""
+        if self._engine_service is None:
+            raise RuntimeError("no engine service attached")
+        return self._engine_service.submit_contract(engine_request,
+                                                    stop_reasons=stop_reasons)
+
     def abort_request(self, request_id: int) -> None:
         """Abort a request by sending a cancelling request to the request queue.
 
@@ -462,10 +525,33 @@ class GenerationExecutorProxy(GenerationExecutor):
 
         res = res if isinstance(res, list) else [res]
 
+        # Contract routing runs BEFORE any GenerationResult lookup: an
+        # attached engine service exclusively claims contract-owned ids (they
+        # never reach legacy delivery or the pop-on-final logic). The shadow
+        # router, when attached instead, only observes — legacy delivery
+        # still runs. Failures in either must never break legacy dispatch.
+        service = self._engine_service
+        router = self._engine_frame_router
+
         for i in res:
             global_tracer().log_instant("IPC.get")
             if i is None:
                 return False
+            if service is not None:
+                try:
+                    if service.route_response(i):
+                        continue
+                except Exception as e:
+                    logger.error(
+                        f"engine service raised while routing a response; "
+                        f"continuing legacy dispatch: {e!r}\n{traceback.format_exc()}")
+            if router is not None:
+                try:
+                    router.on_response(i)
+                except Exception as e:
+                    logger.error(
+                        f"engine-frame router raised while observing a response; "
+                        f"continuing legacy dispatch: {e!r}\n{traceback.format_exc()}")
             process_res(i)
 
         if async_queues:
@@ -566,14 +652,37 @@ class GenerationExecutorProxy(GenerationExecutor):
             return
         logger_debug('Proxy.pre_shutdown...\n', "yellow")
 
-        if self.doing_shutdown:
-            return
-        else:
+        # Serialize the shutdown transition with in-flight submissions when
+        # the engine service is attached (reentrant: a submit-side
+        # background-error check can reach here while holding the lock).
+        lock_ctx = (self._submission_lock if self._engine_service is not None
+                    else contextlib.nullcontext())
+        with lock_ctx:
+            if self.doing_shutdown:
+                return
             self.doing_shutdown = True
 
         # Wake the error monitor thread immediately so it exits cleanly
         if hasattr(self, '_shutdown_event'):
             self._shutdown_event.set()
+
+        service = self._engine_service
+        if service is not None:
+            try:
+                # Poisons every contract stream typed and issues best-effort
+                # runtime cancellation — the contract-population counterpart
+                # of _abort_all_requests below.
+                service.fail_all("executor shutdown")
+            except Exception as e:
+                logger.error(
+                    f"engine service raised in fail_all during shutdown: {e!r}")
+        router = self._engine_frame_router
+        if router is not None:
+            try:
+                router.fail_all("executor shutdown")
+            except Exception as e:
+                logger.error(
+                    f"engine-frame router raised in fail_all during shutdown: {e!r}")
 
         self._abort_all_requests()
 
@@ -661,28 +770,54 @@ class GenerationExecutorProxy(GenerationExecutor):
 
         self._start_dispatch_threads()
 
-        request.set_id(self._get_next_client_id())
-        logprob_params = self._get_logprob_params(request)
+        # With an engine service attached, the whole allocate+register+enqueue
+        # sequence is serialized with contract submission and shutdown (shared
+        # allocator; the worker sentinel must never interleave between
+        # registration and enqueue). Without one, legacy behavior and cost are
+        # unchanged.
+        lock_ctx = (self._submission_lock if self._engine_service is not None
+                    else contextlib.nullcontext())
+        with lock_ctx:
+            request.set_id(self._get_next_client_id())
+            if self._engine_service is not None:
+                # The shared allocator must stay monotonic across BOTH
+                # populations while contract routing is exclusive: a wrapped
+                # or regressed id fails this submission before it can collide
+                # with a contract-owned or recently retired id.
+                self._engine_service.observe_legacy_allocation(request.id)
+            router = self._engine_frame_router
+            if router is not None:
+                # Bind on the submit thread, after client-id assignment and
+                # before the enqueue below (race-free by construction).
+                router.observe_submit(request)
+            logprob_params = self._get_logprob_params(request)
 
-        result = GenerationResult(
-            request,
-            background_error_handler=self._handle_background_error,
-            executor=self,
-            disaggregated_params=request.disaggregated_params,
-            logprob_params=logprob_params)
-        self._results[request.id] = result
+            result = GenerationResult(
+                request,
+                background_error_handler=self._handle_background_error,
+                executor=self,
+                disaggregated_params=request.disaggregated_params,
+                logprob_params=logprob_params)
+            self._results[request.id] = result
 
-        # Close the submit-vs-death race: _mark_engine_dead() runs on the
-        # error-monitor thread and its one-shot sweep snapshots _results, so a
-        # result registered just after that snapshot would never be unblocked
-        # and would hang forever on a dead worker. Re-check after registering
-        # and fail fast if the engine died in that window.
-        if self._engine_dead or self._fatal_error is not None:
-            self._results.pop(request.id, None)
-            raise EngineDeadError(self._fatal_error)
+            # Close the submit-vs-death race: _mark_engine_dead() runs on the
+            # error-monitor thread and its one-shot sweep snapshots _results,
+            # so a result registered just after that snapshot would never be
+            # unblocked and would hang forever on a dead worker. Re-check after
+            # registering and fail fast if the engine died in that window.
+            if self._engine_dead or self._fatal_error is not None:
+                self._results.pop(request.id, None)
+                if router is not None:
+                    router.on_submit_enqueue_failed(request.id)
+                raise EngineDeadError(self._fatal_error)
 
-        with nvtx_range_debug("request_queue.put"):
-            self.request_queue.put(request)
+            with nvtx_range_debug("request_queue.put"):
+                try:
+                    self.request_queue.put(request)
+                except Exception:
+                    if router is not None:
+                        router.on_submit_enqueue_failed(request.id)
+                    raise
 
         self._handle_background_error()
 

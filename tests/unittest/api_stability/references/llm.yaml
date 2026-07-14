@@ -35,6 +35,10 @@ methods:
         annotation: bool
         default: False
         status: prototype
+      experimental_engine_client:
+        annotation: bool
+        default: False
+        status: prototype
       # Bindings and mirrored configs
       peft_cache_config:
         annotation: Optional[tensorrt_llm.llmapi.llm_args.PeftCacheConfig]
