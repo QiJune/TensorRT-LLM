@@ -84,6 +84,24 @@ def _init_hf_modules():
 _init_hf_modules()
 
 
+def _request_stop_words(request: GenerationRequest) -> List[List[int]]:
+    """Runtime stop words for a request.
+
+    Combines the stop words derived from ``sampling_params`` (stop token ids
+    plus tokenizer-processed stop strings) with the request's pre-tokenized
+    ``stop_token_sequences``, which callers set when they tokenize stop
+    strings themselves. ``ignore_eos`` suppresses all of them, matching the
+    legacy behavior for sampling-params-derived stops.
+    """
+    if request.sampling_params.ignore_eos:
+        return []
+    stop_words = request.sampling_params._get_stop_words()
+    stop_token_sequences = getattr(request, "stop_token_sequences", None)
+    if stop_token_sequences:
+        stop_words = stop_words + [list(seq) for seq in stop_token_sequences]
+    return stop_words
+
+
 class BaseWorker(GenerationExecutor):
 
     class WorkerExit(GeneratorExit):
@@ -546,8 +564,7 @@ class BaseWorker(GenerationExecutor):
                 guided_decoding_params=request.sampling_params.
                 _get_guided_decoding_params(),
                 bad_words=request.sampling_params._get_bad_words(),
-                stop_words=[] if request.sampling_params.ignore_eos else
-                request.sampling_params._get_stop_words(),
+                stop_words=_request_stop_words(request),
                 embedding_bias=request.sampling_params.embedding_bias,
                 lora_config=lora_config,
                 prompt_tuning_config=prompt_tuning_config,
@@ -1337,12 +1354,20 @@ def _compute_pytorch_prompt_logprobs(
                 prompt=cached, generation=None
             )  # generation logprobs, if requested, is provided directly in response.result.log_probs from the sampler.
     context_logits = response.result.context_logits
-    assert context_logits is not None, "context_logits must not be None when prompt_logprobs is requested."
     result = response.result.get_result()
-    assert result is not None, "result must not be None when prompt_logprobs is requested."
-    # Single element list
-    first_generation_token = result.output_token_ids[0][:1]
-    assert first_generation_token, "first generation token must not be empty when prompt_logprobs is requested."
+    first_generation_token = (result.output_token_ids[0][:1] if
+                              (result is not None and result.output_token_ids
+                               and result.output_token_ids[0]) else [])
+    if context_logits is None or not first_generation_token:
+        # A final response with no generated token (e.g. a request cancelled
+        # before its first token) legitimately has nothing to compute prompt
+        # logprobs from. Skip instead of asserting so the terminal response
+        # still reaches the consumer.
+        logger.debug(
+            f"Skipping prompt-logprob computation for client_id="
+            f"{response.client_id}: response carries no generated token or "
+            f"context logits.")
+        return None
     # Pass prompt_token_ids with an offset of 1 for correct mapping to the context logits
     prompt_token_ids = generation_result._generation_request.prompt_token_ids[
         1:] + first_generation_token

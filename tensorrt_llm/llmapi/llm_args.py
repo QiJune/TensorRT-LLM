@@ -5043,6 +5043,15 @@ class TorchLlmArgs(BaseLlmArgs):
         description="If true, force dynamic quantization. Defaults to False.",
         status="prototype")
 
+    experimental_engine_client: bool = Field(
+        default=False,
+        description=
+        "Enable the experimental engine-client serving path (typed "
+        "iteration-level engine contract) for eligible streaming requests. "
+        "The TLLM_EXPERIMENTAL_ENGINE_CLIENT environment variable overrides "
+        "this setting in both directions ('1' forces on, '0' forces off).",
+        status="prototype")
+
     allreduce_strategy: Optional[Literal[
         'AUTO', 'NCCL', 'UB', 'MINLATENCY', 'ONESHOT', 'TWOSHOT',
         'LOWPRECISION', 'MNNVL',

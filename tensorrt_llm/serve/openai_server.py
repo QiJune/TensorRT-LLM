@@ -2,6 +2,7 @@
 import array
 import asyncio
 import base64
+import copy
 import functools
 import json
 import os
@@ -17,6 +18,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from http import HTTPStatus
 from pathlib import Path
+from types import SimpleNamespace
 from typing import (Annotated, Any, AsyncGenerator, AsyncIterator, List,
                     Optional, Union)
 
@@ -271,6 +273,20 @@ class OpenAIServer(_VideoRoutesMixin):
         self._embedding_max_queue_delay = embedding_max_queue_delay
         self._embedding_max_queue_size = embedding_max_queue_size
         self.embedding_batcher: Optional[EncodeBatcher] = None
+        # Experimental engine-client serving path; None (fully legacy)
+        # unless the resolved flag (LlmArgs experimental_engine_client,
+        # overridden in both directions by TLLM_EXPERIMENTAL_ENGINE_CLIENT)
+        # is on and the config passes the setup gates. The import is lazy so
+        # the flag-off import graph is unchanged.
+        self._engine_client_serving = None
+        if not self._is_visual_gen and (
+                os.environ.get("TLLM_EXPERIMENTAL_ENGINE_CLIENT") is not None
+                or getattr(getattr(generator, "args", None),
+                           "experimental_engine_client", False)):
+            from tensorrt_llm.serve.engine_client_serving import \
+                EngineClientServing
+            self._engine_client_serving = EngineClientServing.create_if_enabled(
+                generator)
         self.tool_parser = tool_parser
         self.metadata_server = create_metadata_server(metadata_server_cfg)
         self.disagg_cluster_config = disagg_cluster_config
@@ -1584,12 +1600,6 @@ class OpenAIServer(_VideoRoutesMixin):
             if conversation and conversation[-1].get(
                     "content") and conversation[-1].get("role") == get_role():
                 postproc_args.last_message_content = conversation[-1]["content"]
-            postproc_params = PostprocParams(
-                post_processor=chat_stream_post_processor
-                if request.stream else chat_response_post_processor,
-                postproc_args=postproc_args,
-            )
-
             trace_headers = (None if raw_request is None else
                              tracing.extract_trace_headers(raw_request.headers))
 
@@ -1601,6 +1611,13 @@ class OpenAIServer(_VideoRoutesMixin):
                 agent_hierarchy=request.agent_hierarchy)
 
             generate_inputs = prompt
+            # The contract path normalizes sampling params EXCLUSIVELY at the
+            # context-only boundary: capture a pristine copy before the live
+            # preprocess below can prepare the original in place.
+            contract_sampling_params = (
+                copy.deepcopy(sampling_params)
+                if request.stream and self._engine_client_serving is not None
+                else None)
             preprocess_fn = getattr(self.generator, "preprocess", None)
             if preprocess_fn is not None:
                 loop = asyncio.get_event_loop()
@@ -1608,6 +1625,35 @@ class OpenAIServer(_VideoRoutesMixin):
                     self._input_proc_executor,
                     functools.partial(preprocess_fn, prompt, sampling_params,
                                       disaggregated_params))
+
+            if request.stream and self._engine_client_serving is not None:
+                contract_generator = self._engine_client_serving.try_stream(
+                    preprocessed=generate_inputs,
+                    sampling_params=contract_sampling_params,
+                    post_processor=chat_stream_post_processor,
+                    postproc_args=postproc_args,
+                    raw_request=raw_request,
+                    lora_request=request.lora_request,
+                    disaggregated_params=disaggregated_params,
+                    conversation_params=conversation_params,
+                    scheduling_params=scheduling_params,
+                    cache_salt=request.cache_salt,
+                    trace_headers=trace_headers,
+                    echo=bool(getattr(request, "echo", False)),
+                )
+                if contract_generator is not None:
+                    from tensorrt_llm.serve.engine_client_serving import \
+                        wrap_sse_with_done
+                    return StreamingResponse(
+                        content=wrap_sse_with_done(contract_generator,
+                                                   raw_request),
+                        media_type="text/event-stream")
+
+            postproc_params = PostprocParams(
+                post_processor=chat_stream_post_processor
+                if request.stream else chat_response_post_processor,
+                postproc_args=postproc_args,
+            )
 
             promise = self.generator.generate_async(
                 inputs=generate_inputs,
@@ -1915,16 +1961,17 @@ class OpenAIServer(_VideoRoutesMixin):
                 postproc_args.stream_created = stream_created
                 if request.echo:
                     postproc_args.prompt = prompt
-                postproc_params = PostprocParams(
-                    post_processor=completion_stream_post_processor
-                    if request.stream else completion_response_post_processor,
-                    postproc_args=postproc_args,
-                )
                 trace_headers = (None if raw_request is None else
                                  tracing.extract_trace_headers(
                                      raw_request.headers))
 
                 prompt = prompt_inputs(prompt)
+                # Pristine copy for the contract path, captured before the
+                # live input processor can prepare the shared original.
+                contract_sampling_params = (
+                    copy.deepcopy(sampling_params)
+                    if request.stream and len(prompts) == 1
+                    and self._engine_client_serving is not None else None)
                 if prompt.get("prompt") is not None:
                     loop = asyncio.get_event_loop()
                     prompt_token_ids, extra_processed_inputs = await loop.run_in_executor(
@@ -1939,6 +1986,40 @@ class OpenAIServer(_VideoRoutesMixin):
                 else:
                     tokens_prompt = prompt
 
+                if (request.stream and len(prompts) == 1
+                        and self._engine_client_serving is not None):
+                    tokens_view = tokens_prompt if isinstance(
+                        tokens_prompt, dict) else {}
+                    preprocessed_shim = SimpleNamespace(
+                        prompt_token_ids=tokens_view.get("prompt_token_ids"),
+                        query_token_ids=tokens_view.get("query_token_ids"),
+                        multimodal_params=tokens_view.get("multi_modal_data")
+                        or tokens_view.get("multi_modal_embeddings"),
+                        encoder_input_token_ids=None)
+                    contract_generator = self._engine_client_serving.try_stream(
+                        preprocessed=preprocessed_shim,
+                        sampling_params=contract_sampling_params,
+                        post_processor=completion_stream_post_processor,
+                        postproc_args=postproc_args,
+                        raw_request=raw_request,
+                        lora_request=request.lora_request,
+                        disaggregated_params=disaggregated_params,
+                        conversation_params=conversation_params,
+                        trace_headers=trace_headers,
+                        echo=bool(getattr(request, "echo", False)),
+                    )
+                    if contract_generator is not None:
+                        return StreamingResponse(
+                            content=generator_wrapper(contract_generator),
+                            media_type="text/event-stream")
+
+                # Legacy path only: the contract path above never constructs
+                # PostprocParams (the formatter callable stays frontend-side).
+                postproc_params = PostprocParams(
+                    post_processor=completion_stream_post_processor
+                    if request.stream else completion_response_post_processor,
+                    postproc_args=postproc_args,
+                )
                 promise = self.generator.generate_async(
                     inputs=tokens_prompt,
                     sampling_params=sampling_params,

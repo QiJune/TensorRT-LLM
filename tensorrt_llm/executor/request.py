@@ -114,6 +114,7 @@ class GenerationRequest:
         encoder_input_token_ids: Optional[Union[torch.Tensor, np.ndarray,
                                                 list]] = None,
         priority: float = DEFAULT_REQUEST_PRIORITY,
+        stop_token_sequences: Optional[List[List[int]]] = None,
     ):
         if isinstance(prompt_token_ids, list):
             self.prompt_token_ids = prompt_token_ids
@@ -163,6 +164,19 @@ class GenerationRequest:
             raise ValueError(
                 f"priority must be a float in [0.0, 1.0], got {priority}")
         self.priority = priority
+        # Pre-tokenized stop sequences forwarded verbatim as runtime stop
+        # words, in addition to whatever sampling_params derives. Callers that
+        # tokenize stop strings themselves use this instead of writing
+        # sampling_params' private tokenizer-derived state.
+        if stop_token_sequences is not None:
+            for seq in stop_token_sequences:
+                if not isinstance(seq, list) or not seq or not all(
+                        isinstance(t, int) and not isinstance(t, bool)
+                        for t in seq):
+                    raise ValueError(
+                        "stop_token_sequences must be a list of non-empty "
+                        f"lists of ints, got {stop_token_sequences!r}")
+        self.stop_token_sequences = stop_token_sequences
 
     @staticmethod
     def _normalize_optional_token_ids(token_ids: Optional[Union[torch.Tensor,
