@@ -72,6 +72,7 @@ class _WorkerStub:
         # responses_handler() reads this unguarded (base_worker.py); BaseWorker
         # sets it in __init__, which this stub bypasses, so seed it to None.
         self.frontend_result_queues = None
+        self._engine_wire_active = False
 
     def return_queue(self, client_id: int):
         return self._results[client_id].queue

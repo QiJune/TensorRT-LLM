@@ -48,6 +48,7 @@ from ..llmapi.mpi_session import (MpiCommSession, MpiPoolSession, MpiSession,
 from ..llmapi.tracer import enable_llm_tracer, get_tracer, global_tracer
 from ..llmapi.utils import (AsyncQueue, ManagedThread, _SyncQueue,
                             enable_llm_debug, logger_debug, print_colored)
+from . import engine_client, wire
 from .executor import GenerationExecutor
 from .ipc import FusedIpcQueue, IpcQueue
 from .postproc_worker import PostprocWorker, PostprocWorkerConfig
@@ -937,7 +938,11 @@ class GenerationExecutorProxy(GenerationExecutor):
             global_tracer().log_instant("IPC.get")
             if i is None:
                 return False
-            process_res(i)
+            if isinstance(i, wire.StepFrame):
+                for row in engine_client.decode(i, self._results):
+                    process_res(row)
+            else:
+                process_res(i)
 
         if async_queues:
             try:
@@ -1229,6 +1234,9 @@ class GenerationExecutorProxy(GenerationExecutor):
         the request as it is now, and a request that cannot be pickled raises
         here.
         """
+        if wire.ENABLED and isinstance(request, GenerationRequest):
+            request = engine_client.encode(
+                request, self.postproc_config.enabled) or request
         if self._request_sender is None:
             self.request_queue.put(request)
         else:

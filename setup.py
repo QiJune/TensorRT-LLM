@@ -204,6 +204,7 @@ else:
 
 package_data += [
     'bindings/*.pyi',
+    'contracts/**/*.proto',
     'bindings/**/*.pyi',
     'evaluate/lm_eval_tasks/**/*',
     'schemas/*.json',

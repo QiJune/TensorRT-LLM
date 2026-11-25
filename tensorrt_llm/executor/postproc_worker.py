@@ -14,6 +14,7 @@ from ..llmapi.tokenizer import TransformersTokenizer, load_hf_tokenizer
 from ..llmapi.utils import print_traceback_on_error
 from ..logger import logger
 from ..sampling_params import SamplingParams
+from . import engine_client, wire
 from .ipc import ZeroMqQueue
 from .postprocessor_hook import load_post_processor_hook
 from .utils import ErrorResponse, bucket_responses_by_frontend, is_llm_response
@@ -219,6 +220,36 @@ class PostprocWorker:
             # result_handler is not set
             return out, metrics_dict, perf_metrics, disaggregated_params
 
+    def _step_inputs(self, frame: wire.StepFrame) -> list:
+        """Turn the rows of a ``StepFrame`` into Inputs.
+
+        A request's first row brings the params its record is built from, as
+        the first Input of a pickled request does, and an error row becomes the
+        ErrorResponse rank 0 sends for a pickled request.
+        """
+        contexts = engine_client.frontend_contexts(frame)
+        inputs = []
+        # a new request's context says what it asked for until its record exists
+        for row in engine_client.decode(frame, self._records, contexts):
+            if row.has_error():
+                inputs.append(
+                    PostprocWorker.Input(
+                        ErrorResponse(row.client_id, row.error_msg,
+                                      row.request_id)))
+                continue
+            context = contexts.pop(row.client_id, None)
+            if context is None:
+                inputs.append(PostprocWorker.Input(row))
+                continue
+            inputs.append(
+                PostprocWorker.Input(
+                    row,
+                    sampling_params=context.sampling_params,
+                    postproc_params=context.postproc_params,
+                    disaggregated_params=context.disaggregated_params,
+                    streaming=context.streaming))
+        return inputs
+
     async def _batched_put(self):
         ''' Batched IPC send. '''
         async for batch in self._mainloop():
@@ -265,6 +296,10 @@ class PostprocWorker:
                 if record is not None and record._done:
                     is_final = True
                 should_abort = record._aborted if record else False
+                # a proto row says the request-level counters only when they
+                # change; the record holds them as pickled responses give them
+                counters = record if (record is not None and isinstance(
+                    inp.rsp, engine_client.StepRow)) else response_result
                 finish_reason = record.outputs[0].finish_reason if (
                     record and record.outputs
                 ) else None  # pass this through for _handle_response
@@ -281,19 +316,15 @@ class PostprocWorker:
                         should_abort=should_abort,
                         finish_reason=finish_reason,
                         num_generated_tokens=num_generated_tokens,
-                        decoding_iter=getattr(response_result, "decoding_iter",
-                                              0),
+                        decoding_iter=getattr(counters, "decoding_iter", 0),
                         avg_decoded_tokens_per_iter=getattr(
-                            response_result, "avg_decoded_tokens_per_iter",
-                            None),
-                        cached_tokens=getattr(response_result, "cached_tokens",
-                                              0),
-                        ctx_computed_tokens=getattr(response_result,
+                            counters, "avg_decoded_tokens_per_iter", None),
+                        cached_tokens=getattr(counters, "cached_tokens", 0),
+                        ctx_computed_tokens=getattr(counters,
                                                     "ctx_computed_tokens", 0),
-                        ctx_first_begin=getattr(response_result,
-                                                "ctx_first_begin", -1),
-                        ctx_num_chunks=getattr(response_result,
-                                               "ctx_num_chunks", 0),
+                        ctx_first_begin=getattr(counters, "ctx_first_begin",
+                                                -1),
+                        ctx_num_chunks=getattr(counters, "ctx_num_chunks", 0),
                     ))
                 if is_final:
                     self._records.pop(client_id, None)
@@ -323,6 +354,10 @@ class PostprocWorker:
                     self._to_stop.set()
                     yield None
                     break
+                if isinstance(inp, wire.StepFrame):
+                    for row_input in self._step_inputs(inp):
+                        await handle_single_input(row_input, batch)
+                    continue
                 await handle_single_input(inp, batch)
 
             yield batch

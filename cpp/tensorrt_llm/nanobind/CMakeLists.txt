@@ -3,6 +3,10 @@ set(TRTLLM_NB_MODULE
     ${TRTLLM_NB_MODULE}
     PARENT_SCOPE)
 
+# The native codec of the executor's wire (the engine contract), built from its
+# own directory
+add_subdirectory(${TRT_LLM_ROOT_DIR}/tensorrt_llm/executor/native engine_wire)
+
 set(SRCS
     batch_manager/algorithms.cpp
     batch_manager/bindings.cpp
@@ -12,6 +16,7 @@ set(SRCS
     batch_manager/kvCacheManagerV2Utils.cpp
     batch_manager/kvCacheManagerV2.cpp
     common/tllmExceptions.cpp
+    ${ENGINE_WIRE_SOURCES}
     executor/bindings.cpp
     executor/executorConfig.cpp
     executor/request.cpp
@@ -52,6 +57,11 @@ target_include_directories(
   ${TRTLLM_NB_MODULE} PRIVATE ${PROJECT_SOURCE_DIR}/tensorrt_llm/common/sha256)
 target_include_directories(${TRTLLM_NB_MODULE}
                            PRIVATE ${TRTLLM_FMHA_PARAMS_GENERATED_INCLUDE_DIR})
+target_include_directories(${TRTLLM_NB_MODULE}
+                           PRIVATE ${ENGINE_WIRE_INCLUDE_DIRS})
+add_dependencies(${TRTLLM_NB_MODULE} engine_wire_proto)
+# protobuf's own target: PyTorch's CMake package can hold protobuf::libprotobuf
+target_link_libraries(${TRTLLM_NB_MODULE} PRIVATE libprotobuf)
 set_property(TARGET ${TRTLLM_NB_MODULE} PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 target_link_directories(${TRTLLM_NB_MODULE} PUBLIC

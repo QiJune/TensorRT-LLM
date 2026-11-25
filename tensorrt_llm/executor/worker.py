@@ -38,6 +38,7 @@ from ..llmapi.mpi_session import set_mpi_session_cpp
 from ..llmapi.tokenizer import TokenizerBase
 from ..llmapi.tracer import VizTracer, set_global_tracer
 from ..llmapi.utils import ManagedThread, logger_debug, print_traceback_on_error
+from . import engine_server, wire
 from .base_worker import BaseWorker, _init_hf_modules
 from .ipc import FusedIpcQueue, IpcQueue
 from .postproc_worker import (PostprocWorker, PostprocWorkerConfig,
@@ -709,6 +710,8 @@ def worker_main(
                             logger.warning(f"stop_profile rejected: {e}")
                             ack_err = str(e)
                         send_profile_ack("stop", ack_err, req)
+                    elif isinstance(req, wire.SubmitFrame):
+                        engine_server.submit(worker, req)
                     elif isinstance(req, GenerationRequest):
                         try:
                             worker.submit(req)
