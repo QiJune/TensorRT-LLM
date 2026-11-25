@@ -29,6 +29,7 @@
 #include <torch/extension.h>
 #include <vector>
 
+#include "engineWire.h"
 #include "tensorrt_llm/batch_manager/peftCacheManagerConfig.h"
 #include "tensorrt_llm/common/cudaArchitectures.h"
 #include "tensorrt_llm/common/quantization.h"
@@ -531,6 +532,9 @@ NB_MODULE(TRTLLM_NB_MODULE, m)
 
     auto mSuffixAutomaton = mInternal.def_submodule("suffix_automaton", "Suffix automaton internal bindings");
     tensorrt_llm::nanobind::suffix_automaton::initBindings(mSuffixAutomaton);
+
+    auto mEngineWire = mInternal.def_submodule("engine_wire", "The executor's wire (engine.proto)");
+    tensorrt_llm::nanobind::engine_wire::initBindings(mEngineWire);
 
     // NVLS allocators
     nb::class_<tr::IpcNvlsHandle>(m, "IpcNvlsHandle")

@@ -2,6 +2,12 @@
   "schema_version": 1,
   "dependencies": [
     {
+      "name": "abseil-cpp",
+      "git_repository": "https://github.com/abseil/abseil-cpp",
+      "git_tag": "20250512.1",
+      "git_shallow": true
+    },
+    {
       "name": "cppzmq",
       "git_repository": "https://github.com/zeromq/cppzmq",
       "git_tag": "v4.10.0",
@@ -121,6 +127,13 @@
       "git_tag": "v3.1.0-c-cpp",
       "git_shallow": true,
       "source_subdir": "dont-add-this-project-with-add-subdirectory"
+    },
+    {
+      "name": "protobuf",
+      "git_repository": "https://github.com/protocolbuffers/protobuf",
+      "git_tag": "v33.6",
+      "git_shallow": true,
+      "patch_file": "patches/protobuf_libprotobuf_alias.patch"
     },
     {
       "name": "pybind11",

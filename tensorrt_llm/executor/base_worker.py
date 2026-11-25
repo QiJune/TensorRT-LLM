@@ -50,6 +50,7 @@ from ..llmapi.tokenizer import TokenizerBase
 from ..llmapi.tracer import global_tracer
 from ..llmapi.utils import _SyncQueue, configure_cpu_affinity, logger_debug
 from ..sampling_params import SamplingParams
+from . import engine_server
 from .executor import GenerationExecutor
 from .ipc import IpcQueue
 from .postproc_worker import (PostprocParams, PostprocWorker,
@@ -152,6 +153,10 @@ class BaseWorker(GenerationExecutor):
         # Requests already answered with an error by _maybe_wrap_response and
         # aborted; their remaining engine responses are dropped.
         self._refused_client_ids: Set[int] = set()
+        # The proto wire (engine_server.py): whether rank 0 publishes rows
+        # as StepOutputs, and the requests whose rows it prepares in Python.
+        self._engine_wire_active = False
+        self._prepared_client_ids: set[int] = set()
         self._await_response_helper = AwaitResponseHelper(weakref.proxy(self))
         self._backend = None if llm_args is None else llm_args.backend
         self._lora_config = llm_args.lora_config if llm_args is not None else None
@@ -406,6 +411,25 @@ class BaseWorker(GenerationExecutor):
                     self._lora_adapter_identities.setdefault(
                         adapter_id, identity)
 
+    def _load_lora_config(self, lora_request: LoRARequest) -> tllm.LoraConfig:
+        """Load ``lora_request``'s adapter on rank 0 and return its LoRA config.
+
+        Each rank loads independently from disk via py_lora_path in
+        PeftCacheManager.add_request_peft(); this warms rank 0's cache.
+
+        Raises:
+            RequestError: the adapter cannot be loaded.
+        """
+        try:
+            self._load_lora_adapter(lora_request)
+            return tllm.LoraConfig(
+                task_id=lora_request.adapter_id,
+                weights=None,
+                config=self._lora_manager.cpp_lora_config[str(
+                    lora_request.adapter_id)])
+        except Exception as e:  # any failure fails the request, not the worker
+            raise RequestError(f"Failed to load LoRA adapter: {e}") from e
+
     def _enqueue_request(self,
                          request: GenerationRequest,
                          result_wait_queue=None) -> int:
@@ -413,24 +437,13 @@ class BaseWorker(GenerationExecutor):
         if request.prompt_adapter_request is not None:
             raise RequestError(
                 "Prompt adapters are not supported by the PyTorch executor.")
+        lora_config = None
         py_lora_path = None
         py_lora_ckpt_source = None
         if self._lora_manager is not None and request.lora_request is not None:
-            try:
-                # Each rank loads independently from disk via py_lora_path in
-                # PeftCacheManager.add_request_peft(). Warm rank 0's cache here.
-                self._load_lora_adapter(request.lora_request)
-                uid = str(request.lora_request.adapter_id)
-                lora_config = tllm.LoraConfig(
-                    task_id=request.lora_request.adapter_id,
-                    weights=None,
-                    config=self._lora_manager.cpp_lora_config[uid])
-                py_lora_path = request.lora_request.lora_path
-                py_lora_ckpt_source = request.lora_request.ckpt_source
-            except Exception as e:
-                raise RequestError(f"Failed to load LoRA adapter: {e}") from e
-        else:
-            lora_config = None
+            lora_config = self._load_lora_config(request.lora_request)
+            py_lora_path = request.lora_request.lora_path
+            py_lora_ckpt_source = request.lora_request.ckpt_source
 
         # prompt_token_ids stays list[int] for all consumers. If an int32 buffer
         # rode along on the wire (GenerationRequest._prompt_token_ids_i32), hand
@@ -1681,6 +1694,11 @@ class AwaitResponseHelper:
         # bare ErrorResponse (a NamedTuple) would be splatted by extend().
         rsp_batch = []
 
+        if (self.worker._engine_wire_active
+                and not self.worker._has_background_error()):
+            responses = engine_server.publish(
+                self.worker, responses, self.enable_postprocprocess_parallel)
+
         for response in responses:
 
             if isinstance(response, ErrorResponse):
@@ -1724,6 +1742,8 @@ def _get_params_for_first_rsp(
            Optional["DisaggregatedParams"]]:
     res = worker._results.get(client_id, None)
     assert res is not None
+    if isinstance(res, engine_server.RequestEntry):
+        return engine_server.first_params(res)
     if not res._params_transmitted:
         res._params_transmitted = True
         return res.sampling_params, res.postproc_params, res.disaggregated_params
@@ -1904,6 +1924,19 @@ def _send_rsp(
         raise ValueError(f"Unknown response type: {response}")
 
 
+def _refuse_request(worker, response: LlmResponse,
+                    error: Exception) -> ErrorResponse:
+    """Answer ``response``'s request with ``error``, failing only this request.
+
+    The engine stops generating for the client, which has been answered;
+    ``_drop_refused_response`` drops what it still emits.
+    """
+    if not response.result.is_final:
+        worker._refused_client_ids.add(response.client_id)
+        worker.abort_request(response.client_id)
+    return ErrorResponse(response.client_id, str(error), response.request_id)
+
+
 def _drop_refused_response(worker, response: LlmResponse) -> bool:
     """Whether ``response`` belongs to a request already answered with an error.
 
@@ -1925,13 +1958,7 @@ def _maybe_wrap_response(
     try:
         logprobs_result = _get_logprobs(worker, response)
     except IncompleteContextLogitsError as error:
-        # Fail only this request, and stop the engine generating for a client
-        # that has already been answered.
-        if not response.result.is_final:
-            worker._refused_client_ids.add(response.client_id)
-            worker.abort_request(response.client_id)
-        return ErrorResponse(response.client_id, str(error),
-                             response.request_id)
+        return _refuse_request(worker, response, error)
     # Reading perf metrics deserializes the whole result, and the executor fills
     # them only for requests that asked; an untracked request is always read.
     generation_result = worker._results.get(response.client_id)

@@ -1,0 +1,797 @@
+// SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+// SPDX-License-Identifier: Apache-2.0
+//
+// The engine contract: the interface between serve (the serving frontends) and the engine, which
+// both sides depend on and which depends on neither. Released with the engine, no compatibility
+// promised across versions; field numbers stay put where possible. Where a comment says "today",
+// it names what the LLM API's executor does for the same thing.
+//
+// TensorRT-LLM's executor implements the Submit and Steps messages of this contract between its
+// frontends and rank 0: a frontend sends rank 0 a SubmitBatch, and rank 0 sends each frontend one
+// StepOutput per step. A request or row that needs more than these messages carry keeps the
+// executor's own message format.
+//
+// Conventions:
+// - handle: a uint64 the frontend assigns (today's client_id).
+// - Hot columns: fixed-width packed repeated (fixed32 / sfixed32 / fixed64 / float / double), on the wire
+//   a contiguous little-endian array C++ and Rust can memcpy; the finish enum is a varint, 1 byte
+//   per row.
+// - No text on the wire: no prompt text, stop strings or detokenize options.
+// - Times: CLOCK_MONOTONIC nanoseconds, meaningful only within one machine.
+
+syntax = "proto3";
+
+package trtllm.engine.v1;
+
+service Engine {
+  rpc Hello(HelloRequest) returns (EngineInfo);         // handshake; then the engine's configuration is what EngineInfo says
+  rpc Submit(SubmitBatch) returns (SubmitAck);          // a batch of new requests
+  rpc Cancel(CancelBatch) returns (Ack);                // a batch of cancellations
+  rpc Steps(StepsRequest) returns (stream StepOutput);  // per frontend, one message per step from each output source
+  rpc Control(Command) returns (CommandReply);          // the listed commands; no "call any method by name"
+  rpc Events(EventsRequest) returns (stream EngineEvent);  // KV events, fatal errors
+}
+
+// ═══════════════════════════ Handshake ═══════════════════════════
+
+message HelloRequest {
+  string build_id = 1;
+  uint32 frontend_id = 2;  // receive only the outputs whose handle's high bits equal it
+}
+
+message EngineInfo {
+  string build_id = 1;
+  string engine_id = 2;
+  ModelInfo model = 3;
+  Limits limits = 4;
+  KvInfo kv = 5;
+  Parallelism parallel = 6;
+  Features features = 7;
+  DisaggInfo disagg = 8;            // today: get_disaggregated_params
+  StartupMetrics startup = 9;       // today: get_startup_metrics
+  repeated KvEventSource kv_event_sources = 10;  // today: the sources of OpenEngine discovery
+  repeated OutputSource output_sources = 11;     // empty: one source, 0, on this connection
+}
+
+message ModelInfo {
+  string name = 1;
+  string architecture = 2;
+  uint32 vocab_size = 3;
+  bool is_generation_model = 4;
+  bool is_encoder_decoder = 5;
+  bool encoder_only = 6;            // the encoder service of EPD (mm_encoder_only)
+}
+
+// The values the engine resolved. serve and the external interfaces (/server_info,
+// OpenEngine GetServerInfo) all use these
+message Limits {
+  uint32 max_seq_len = 1;
+  uint32 max_num_tokens = 2;
+  uint32 max_batch_size = 3;
+  uint32 max_beam_width = 4;        // today a request's beam width must equal it
+  uint32 max_draft_len = 5;         // 0 = no speculative decoding
+  uint32 max_logprobs = 6;
+}
+
+message KvInfo {
+  uint32 tokens_per_block = 1;
+  uint64 total_blocks = 2;
+  uint64 total_host_blocks = 3;
+  string event_hash_algo = 4;       // today /server_info and OpenEngine each report one, and they can differ
+  bool events_enabled = 5;
+}
+
+message Parallelism {
+  uint32 tp = 1;
+  uint32 pp = 2;
+  uint32 cp = 3;
+  uint32 ep = 4;
+  uint32 attention_dp = 5;          // attention DP ranks; 1 = off
+}
+
+message Features {
+  string guided_decoding_backend = 1;    // empty = no guided decoding
+  repeated string logits_processors = 2; // logits processor plugins registered in the engine
+  repeated string additional_outputs = 3;
+  bool routed_experts = 4;
+  bool watermark = 5;
+  bool lora = 6;
+  bool multimodal = 7;
+  repeated DisaggPhase disagg_phases = 8;  // the kinds of disagg request this engine takes
+}
+
+message DisaggInfo {
+  optional uint32 ctx_dp_rank = 1;       // unset with attention DP
+  repeated string ctx_info_endpoints = 2;
+}
+
+message StartupMetrics {                 // time per stage, seconds
+  double model_loader_s = 1;
+  double draft_model_loader_s = 2;
+  double initial_model_engine_s = 3;
+  double final_model_engine_s = 4;
+  double py_executor_s = 5;
+}
+
+message KvEventSource {
+  string endpoint = 1;                   // e.g. tcp://host:port
+  string topic = 2;
+  string replay_endpoint = 3;
+  uint32 attention_dp_rank = 4;
+  string encoding = 5;                   // msgpack today
+}
+
+// Where StepOutputs come from. An engine that gathers its rows in one place has one source; a
+// large one (attention DP across nodes) can have one per node or per DP group, so that no one
+// thread or hop gathers every row
+message OutputSource {
+  uint32 id = 1;                         // StepOutput.source
+  string endpoint = 2;                   // where to open this source's own Steps stream; empty: only through this connection
+}
+
+// ═══════════════════════════ Submit ═══════════════════════════
+
+message SubmitBatch {
+  repeated Request requests = 1;
+}
+
+message SubmitAck {
+  repeated Rejected rejected = 1;        // invalid requests caught on the spot; other errors come in StepOutput
+}
+
+message Rejected {
+  fixed64 handle = 1;
+  Error error = 2;
+}
+
+message Request {
+  fixed64 handle = 1;
+
+  // Input
+  repeated sfixed32 prompt = 2;          // token ids; multimodal placeholders already expanded
+  uint32 prompt_trimmed_prefix = 3;      // when a disagg decode request carries only the prompt's tail: the tokens left out before it
+  repeated sfixed32 encoder_input = 4;   // the encoder input of encoder-decoder models (BART / T5)
+  optional Multimodal multimodal = 5;
+
+  // How to generate
+  bool stream = 6;                       // false: one row at the end, with every token
+  Sampling sampling = 7;
+  Stopping stopping = 8;
+  OutputOptions output = 9;
+  optional GuidedDecoding guided = 10;
+  repeated LogitsProcessor logits_processors = 11;
+  optional ThinkingBudget thinking_budget = 12;
+  optional bool watermark = 13;          // unset: the engine's default; false opts this request out
+  optional Lora lora = 14;
+
+  // Scheduling and KV
+  Scheduling scheduling = 15;
+  KvOptions kv = 16;
+  optional Disagg disagg = 17;
+
+  bytes frontend_context = 18;           // opaque to the engine; it comes back on the request's first row
+}
+
+message Sampling {
+  // serve converts n / best_of / use_beam_search:
+  //   beam search: beam_width = best_of, num_sequences = n
+  //   sampling: beam_width = 1, num_sequences = best_of (a sub-request each, seeds counting up by 1)
+  // Picking n of best_of is done in serve
+  uint32 beam_width = 1;
+  uint32 num_sequences = 2;
+  repeated uint32 beam_width_array = 3;  // variable-width beam search, never decreasing
+  optional float temperature = 4;
+  optional uint32 top_k = 5;
+  optional float top_p = 6;
+  optional float top_p_min = 7;
+  optional int32 top_p_reset_ids = 8;
+  optional float top_p_decay = 9;
+  optional float min_p = 10;
+  optional uint64 seed = 11;
+  optional float repetition_penalty = 12;
+  optional float presence_penalty = 13;
+  optional float frequency_penalty = 14;
+  optional uint32 prompt_ignore_length = 15;
+  optional uint32 no_repeat_ngram_size = 16;
+  optional float length_penalty = 17;
+  optional int32 early_stopping = 18;
+  optional float beam_search_diversity_rate = 19;
+  optional TensorRef embedding_bias = 20;  // dense [vocab]; serve turns logit_bias into it
+  repeated TokenBias token_bias = 21;      // sparse: added to the named tokens' logits
+}
+
+message TokenBias {
+  sfixed32 id = 1;
+  double bias = 2;
+}
+
+message Stopping {
+  optional int32 max_new_tokens = 1;     // unset: up to max_seq_len; less BART's forced prefix; the engine truncates past max_seq_len and refuses 0 or less
+  uint32 min_new_tokens = 2;
+  optional int32 end_id = 3;             // unset = no eos; also the token min_new_tokens bans
+  bool ignore_eos = 4;                   // don't stop at end_id, but min_new_tokens still bans end_id
+  repeated TokenSeq stop = 5;            // stop_token_ids and stop strings both; serve tokenizes the strings
+  repeated TokenSeq bad = 6;
+}
+
+message TokenSeq {
+  repeated sfixed32 ids = 1;
+}
+
+message OutputOptions {
+  optional uint32 logprobs = 1;          // unset = none; 0 = the chosen token's only; k = and the top-k candidates
+  LogprobMode logprobs_mode = 2;
+  optional uint32 prompt_logprobs = 3;
+  bool context_logits = 4;
+  bool generation_logits = 5;
+  repeated string additional_outputs = 6;
+  bool routed_experts = 7;
+  bool perf_metrics = 8;                 // RequestTiming at the end
+  bool time_breakdown = 9;               // per-step timings at the end
+  bool decoding_stats = 10;              // decoding_iter, avg_decoded_tokens_per_iter and SpecDecodeStats on every row; without it, once per sequence in FinalInfo
+  bool logprobs_values_only = 11;        // with logprobs = 0: the chosen token's logprob without its rank
+  bool prompt_logprobs_values_only = 12; // with prompt_logprobs = 0: likewise
+  bool encoder_output = 13;              // keep the encoder's hidden states (encoder-only and encoder-decoder models)
+}
+
+enum LogprobMode {
+  LOGPROB_MODE_RAW = 0;
+  LOGPROB_MODE_PROCESSED = 1;
+}
+
+message GuidedDecoding {
+  oneof guide {
+    string json_schema = 1;
+    string regex = 2;
+    string ebnf_grammar = 3;
+    bool json_object = 4;
+    string structural_tag = 5;
+  }
+}
+
+// Today a Python callable goes over the wire; here, a plugin the engine registers by name
+message LogitsProcessor {
+  string name = 1;
+  bytes args = 2;                        // JSON
+}
+
+// Today a ThinkingBudgetLogitsProcessor the frontend inserts; here, a parameter the engine applies itself
+message ThinkingBudget {
+  uint32 budget = 1;
+  repeated sfixed32 start_ids = 2;       // the tokens that open reasoning
+  repeated sfixed32 end_ids = 3;         // the end marker forced in when the budget runs out
+}
+
+message Lora {
+  uint64 id = 1;                         // the same id with another path is refused
+  string path = 2;                       // loaded the first time the engine sees it
+  LoraFormat format = 3;
+}
+
+enum LoraFormat {
+  LORA_FORMAT_HF = 0;
+  LORA_FORMAT_NEMO = 1;
+}
+
+message Scheduling {
+  optional float priority = 1;           // [0, 1], default 0.5
+  optional uint32 attention_dp_rank = 2;
+  bool attention_dp_strict = 3;          // default false, i.e. today's attention_dp_relax = true
+  repeated AgentHop agent_hierarchy = 4;
+  string subagent_affinity_id = 5;
+  fixed64 arrival_time_ns = 6;           // when serve received the request; for metrics only
+}
+
+message AgentHop {
+  string name = 1;
+  int32 index = 2;
+}
+
+message KvOptions {
+  optional string cache_salt = 1;        // at most 256 bytes; an empty salt is a salt
+  string conversation_id = 2;            // attention DP affinity, KVCMv2 prefix retention
+  optional KvRetention retention = 3;
+  bytes kv_hints = 4;                    // a KvHintsEnvelope as JSON, at most 64 KiB; the engine hands it to disagg orchestration
+}
+
+message KvRetention {
+  repeated TokenRangeRetention ranges = 1;
+  optional uint32 decode_priority = 2;   // 0..100, default 35
+  optional uint32 decode_duration_ms = 3;
+  KvTransferMode transfer_mode = 4;      // KVCMv2 supports DRAM only
+  string directory = 5;
+}
+
+message TokenRangeRetention {
+  uint32 token_start = 1;
+  optional uint32 token_end = 2;         // unset = to the end
+  uint32 priority = 3;
+  optional uint32 duration_ms = 4;
+}
+
+enum KvTransferMode {
+  KV_TRANSFER_MODE_DRAM = 0;
+  KV_TRANSFER_MODE_GDS = 1;
+  KV_TRANSFER_MODE_POSIX_DEBUG_FALLBACK = 2;
+}
+
+// ── Multimodal ──
+// serve runs the model's input processor, which expands the prompt's placeholders. Of what it
+// makes, the items' layout is read by both sides; the model inputs are the engine's alone
+
+message Multimodal {
+  repeated MultimodalItem items = 1;     // in the order they appear in the prompt
+  Value model_inputs = 2;                // what the input processor made for the model (pixel values, grids, mRoPE positions, embedding masks...): no schema here, serve does not read it
+}
+
+message MultimodalItem {
+  repeated sfixed32 hash = 1;            // 8 int32, i.e. a 256-bit BLAKE3; for KV prefix reuse and KV events
+  optional string uuid = 2;              // the user's id for the item, which KV events report
+  uint32 position = 3;                   // the first placeholder token's position in the prompt
+  uint32 length = 4;                     // placeholder tokens, framing tokens included
+  repeated uint32 run_positions = 5;     // sparse layouts: the exact runs of placeholder tokens
+  repeated uint32 run_lengths = 6;
+}
+
+// ── disagg ──
+// serve picks the parts and their order. What one part hands the next travels through serve
+// sealed: serve passes it on unread (and may sign it); only the engine knows its format, and an
+// engine takes it only from its own build (EngineInfo.build_id). The KV itself moves between
+// workers (NIXL), not through here
+
+message Disagg {
+  DisaggPhase phase = 1;
+  optional DisaggScheduleStyle schedule = 2;  // unset: not given, which the engine takes as context-first
+  optional fixed64 disagg_request_id = 3;     // the global id both parts share, also the KV transfer's unique_rid
+  optional double orig_elapsed_s = 4;    // time since reaching the orchestrator; the decode part orders admission by it
+  bytes kv_import = 5;                   // a decode part: its prefill part's RowExtra.kv_export, unchanged
+  optional PrefillUsage prefill_usage = 6;  // a decode part: what its prefill part cost, as serve learned it
+  bytes encoder_import = 7;              // a prefill part of EPD: its encoder part's RowExtra.encoder_export, unchanged
+}
+
+enum DisaggPhase {
+  DISAGG_PHASE_BOTH = 0;
+  DISAGG_PHASE_CONTEXT_ONLY = 1;
+  DISAGG_PHASE_GENERATION_ONLY = 2;
+}
+
+enum DisaggScheduleStyle {
+  DISAGG_SCHEDULE_STYLE_CONTEXT_FIRST = 0;
+  DISAGG_SCHEDULE_STYLE_GENERATION_FIRST = 1;
+}
+
+message PrefillUsage {
+  uint32 prompt_tokens = 1;
+  uint32 cached_tokens = 2;
+}
+
+// A tree of plain values and tensors, for what one side packs for the other without a schema
+// here: the model inputs, and the engine's sealed handoffs
+message Value {
+  oneof kind {
+    bool none = 1;
+    bool flag = 2;
+    sint64 integer = 3;
+    double number = 4;
+    string text = 5;
+    bytes raw = 6;
+    TensorRef tensor = 7;
+    Values list = 8;
+    Values tuple = 9;
+    Fields map = 10;
+  }
+}
+
+message Values {
+  repeated Value items = 1;
+}
+
+message Fields {
+  repeated Field fields = 1;             // in order
+}
+
+message Field {
+  Value key = 1;
+  Value value = 2;
+}
+
+// ═══════════════════════════ Cancel ═══════════════════════════
+
+message CancelBatch {
+  repeated Cancel cancels = 1;
+  bool all = 2;                          // cancel all of this frontend's requests (pausing generation, shutting down)
+  CancelReason all_reason = 3;
+}
+
+message Cancel {
+  fixed64 handle = 1;                    // for a request that ended while its prefill KV is still held, cancelling frees it
+  CancelReason reason = 2;
+}
+
+enum CancelReason {
+  CANCEL_REASON_UNSPECIFIED = 0;
+  CANCEL_REASON_CLIENT_DISCONNECTED = 1;
+  CANCEL_REASON_STOP_STRING = 2;         // serve matched a stop string in the text
+  CANCEL_REASON_TERMINATED = 3;          // a post-processing hook's terminate
+  CANCEL_REASON_DEADLINE = 4;
+  CANCEL_REASON_SHUTDOWN = 5;
+}
+
+message Ack {}
+
+// ═══════════════════════════ Per-step output ═══════════════════════════
+
+message StepsRequest {
+  uint32 frontend_id = 1;
+  optional uint32 source = 2;            // only this output source's messages; unset: every source's, on this one stream
+}
+
+// Every sequence with output in one step of one output source, by column. A row is one sequence
+// of one request (a beam, or a sub-sequence when n > 1). Streaming requests have rows every step,
+// and serve decides how often to merge them into SSE; a non-streaming request has one row per
+// sequence, at its end.
+// All rows of a request come from one source, in step order; the messages of different sources
+// are in no order with each other.
+message StepOutput {
+  fixed64 step = 1;                      // the source's step
+  fixed64 emit_time_ns = 2;
+  uint32 source = 15;                    // OutputSource.id; 0 with one source
+
+  // Hot columns, one entry per row. Every column is fixed width, so on the wire it is one block of
+  // little-endian values that a reader can take as an array without decoding element by element.
+  repeated fixed64 handles = 3;
+  repeated fixed32 seq = 4;              // sequence index; the column is omitted when all are 0
+  repeated fixed32 offsets = 5;          // rows + 1; row i's tokens are tokens[offsets[i], offsets[i+1])
+  repeated sfixed32 tokens = 6;          // new tokens only, no prompt
+  repeated FinishReason finish = 7;      // 1 byte per row: FinishReason values stay below 128
+  repeated sfixed32 stop_index = 8;      // with finish = STOP_SEQUENCE, the index into Stopping.stop, else -1; omitted when no row has one
+  repeated fixed32 replace_from = 9;     // beam search: the output position this row's tokens overwrite from (today the whole beam each time, i.e. 0); 0xFFFFFFFF: the row appends (a row that is not a beam); omitted without beam rows
+
+  // Optional columns: the whole column is present when one row's request asked for it, and the
+  // other rows have placeholders
+  TokenLogprobs logprobs = 10;           // OutputOptions.logprobs, aligned with tokens
+  repeated double cum_logprobs = 11;     // OutputOptions.logprobs, one per row: the cumulative logprob up to this step (beams, picking n of best_of), summed in double
+  // OutputOptions.decoding_stats, one per row: the request's counters as they stand at this step
+  repeated fixed32 decoding_iter = 12;   // the iterations the request has run
+  repeated float avg_decoded_tokens_per_iter = 14;  // its tokens per iteration, above 1 with speculative decoding
+
+  // Extras: only a few rows have them
+  repeated RowExtra extras = 13;
+}
+
+enum FinishReason {
+  FINISH_REASON_NOT_FINISHED = 0;
+  FINISH_REASON_END_ID = 1;
+  FINISH_REASON_STOP_SEQUENCE = 2;
+  FINISH_REASON_LENGTH = 3;
+  FINISH_REASON_TIMED_OUT = 4;
+  FINISH_REASON_CANCELLED = 5;
+  FINISH_REASON_ERROR = 6;               // the error is in the extras' error
+  FINISH_REASON_CONTEXT_DONE = 7;        // a disagg prefill part is done; the handoff is in the extras' kv_export
+}
+
+// Logprobs aligned by token. The number of top-k candidates may differ per token; offsets split them
+message TokenLogprobs {
+  repeated float logprobs = 1;           // the chosen token's logprob
+  repeated fixed32 ranks = 2;            // the chosen token's rank in the whole vocabulary; 0 = not computed (OutputOptions.logprobs_values_only)
+  repeated fixed32 topk_offsets = 3;     // tokens + 1
+  repeated sfixed32 topk_ids = 4;
+  repeated float topk_logprobs = 5;
+  repeated sfixed32 ids = 6;             // the chosen tokens, where no tokens column gives them (prompt logprobs: the prompt from its second token, then the first output token)
+}
+
+message RowExtra {
+  uint32 row = 1;                        // its row in the hot columns
+  optional PromptInfo prompt_info = 2;   // the sequence's first row
+  optional FinalInfo final_info = 3;     // when this sequence ends
+  bytes kv_export = 4;                   // a prefill part's last row: what its decode part needs, for serve to pass on (Disagg.kv_import); set when the request goes on in a decode part
+  bytes encoder_export = 5;              // an encoder part's last row: what its prefill part needs, for serve to pass on (Disagg.encoder_import)
+  optional Error error = 6;              // with FINISH_REASON_ERROR
+  // context_logits (the sequence's first row), generation_logits, and "<group>/<name>" for the
+  // additional outputs and routed_experts
+  map<string, TensorRef> tensors = 7;
+  optional SpecDecodeStats spec = 8;     // OutputOptions.decoding_stats: the first and last rows, and every row once the sequence has drafted
+  optional RequestTiming timing = 9;     // every row, with OutputOptions.perf_metrics
+  optional bool request_done = 10;       // a request with several sequences: whether this row ends the request
+  repeated string output_groups = 11;    // the groups of tensors this row has, also when they are empty: additional_context_outputs, additional_generation_outputs
+  bytes frontend_context = 12;           // the request's first row: Request.frontend_context
+}
+
+message PromptInfo {
+  uint32 cached_tokens = 1;              // prompt tokens the prefix cache hit
+  TokenLogprobs prompt_logprobs = 2;     // aligned with the prompt
+  uint32 ctx_computed_tokens = 3;        // prompt tokens the context chunks pushed through the model
+  int32 ctx_first_begin = 4;             // where the first context chunk began, -1 without one
+  uint32 ctx_num_chunks = 5;             // context chunks the prompt took
+  optional PrefillUsage prefill_usage = 6;  // a decode part that learned its prefill part's usage with the KV (generation-first)
+}
+
+// The request-level counters again, as they stand at the sequence's end
+message FinalInfo {
+  uint32 cached_tokens = 1;
+  optional SpecDecodeStats spec = 2;     // without OutputOptions.decoding_stats, once the sequence has drafted
+  reserved 3;
+  optional TimeBreakdown breakdown = 4;  // OutputOptions.time_breakdown
+  optional PrefillUsage prefill_usage = 5;  // as in PromptInfo
+  uint32 ctx_computed_tokens = 6;
+  int32 ctx_first_begin = 7;
+  uint32 ctx_num_chunks = 8;
+  optional float avg_decoded_tokens_per_iter = 9;  // without OutputOptions.decoding_stats
+  optional uint32 decoding_iter = 10;    // without OutputOptions.decoding_stats
+}
+
+message SpecDecodeStats {
+  repeated uint32 drafted_per_pos = 1;
+  repeated uint32 accepted_per_pos = 2;  // cumulative over the prefix
+  uint64 total_drafted = 3;              // 0: has not drafted
+  uint64 total_accepted = 4;
+}
+
+message RequestTiming {
+  fixed64 arrival_ns = 1;
+  fixed64 first_scheduled_ns = 2;
+  fixed64 first_token_ns = 3;
+  fixed64 last_token_ns = 4;
+  fixed64 kv_transfer_start_ns = 5;
+  fixed64 kv_transfer_end_ns = 6;
+  uint64 kv_transfer_bytes = 7;          // today's kv_cache_size
+  uint32 kv_blocks_allocated = 8;
+  uint32 kv_blocks_new = 9;
+  uint32 kv_blocks_reused = 10;
+  uint32 kv_blocks_missed = 11;
+  optional uint32 first_iter = 12;
+  optional uint32 last_iter = 13;
+  float kv_cache_hit_rate = 14;
+  optional uint32 iter = 15;
+  float spec_acceptance_rate = 16;
+  uint32 spec_accepted_tokens = 17;
+  uint32 spec_draft_tokens = 18;
+}
+
+message TimeBreakdown {
+  repeated StepTiming steps = 1;
+  repeated StepTiming ctx_chunks = 2;
+  optional double ctx_gpu_forward_ms = 3;  // summed over the chunks
+  optional double ctx_gpu_sample_ms = 4;
+}
+
+message StepTiming {
+  optional uint32 iter = 1;              // generation steps only
+  fixed64 forward_start_ns = 2;
+  fixed64 forward_end_ns = 3;
+  fixed64 sample_start_ns = 4;
+  fixed64 sample_end_ns = 5;
+  optional double gpu_forward_ms = 6;    // unset: not measured yet
+  optional double gpu_sample_ms = 7;
+  fixed64 token_ns = 8;
+}
+
+message Error {
+  ErrorCode code = 1;
+  string message = 2;
+}
+
+enum ErrorCode {
+  ERROR_CODE_UNSPECIFIED = 0;
+  ERROR_CODE_INVALID_REQUEST = 1;
+  ERROR_CODE_CONTEXT_TOO_LONG = 2;
+  ERROR_CODE_UNSUPPORTED = 3;            // the engine lacks the capability: guided decoding, routed experts, etc.
+  ERROR_CODE_LORA_CONFLICT = 4;
+  ERROR_CODE_KV_TRANSFER_FAILED = 5;
+  ERROR_CODE_KV_TRANSFER_TIMEOUT = 6;
+  ERROR_CODE_INCOMPLETE_CONTEXT_LOGITS = 7;  // prompt logprobs asked for, but the prefix hit the cache
+  ERROR_CODE_INTERNAL = 8;
+  ERROR_CODE_ENGINE_DEAD = 9;
+}
+
+// ═══════════════════════════ Tensors ═══════════════════════════
+
+// Shared memory or CUDA IPC within one machine; across machines, inline only.
+// The rules are today's SharedTensor's: the receiver consumes or releases every exported
+// handle exactly once, and a handle is valid only while the producer process lives
+message TensorRef {
+  DType dtype = 1;
+  repeated uint64 shape = 2;
+  oneof data {
+    bytes inline_data = 3;
+    ShmRef shm = 4;
+    CudaIpcRef cuda_ipc = 5;
+  }
+  optional int32 device = 6;             // inline data: the CUDA device the producer held it on, where the receiver puts it; unset: host memory
+}
+
+message ShmRef {
+  string name = 1;
+  uint64 offset = 2;
+  uint64 size = 3;
+}
+
+message CudaIpcRef {
+  int32 device = 1;
+  bytes mem_handle = 2;
+  uint64 offset = 3;
+  uint64 size = 4;
+  bytes event_handle = 5;
+  bytes ref_counter_handle = 6;
+  uint64 ref_counter_offset = 7;
+}
+
+enum DType {
+  DTYPE_UNSPECIFIED = 0;
+  DTYPE_F32 = 1;
+  DTYPE_F16 = 2;
+  DTYPE_BF16 = 3;
+  DTYPE_FP8_E4M3 = 4;
+  DTYPE_I64 = 5;
+  DTYPE_I32 = 6;
+  DTYPE_I8 = 7;
+  DTYPE_U8 = 8;
+  DTYPE_BOOL = 9;
+}
+
+// ═══════════════════════════ Commands ═══════════════════════════
+
+message Command {
+  oneof cmd {
+    GetStats get_stats = 1;
+    GetKvEvents get_kv_events = 2;
+    Empty get_kv_load = 3;
+    Empty get_memory_status = 4;
+    MemoryTags sleep = 5;
+    MemoryTags wakeup = 6;
+    UpdateWeights update_weights = 7;
+    Empty reset_prefix_cache = 8;
+    Empty wait_idle = 9;
+    StartProfile start_profile = 10;
+    Empty stop_profile = 11;
+    TruncateKv truncate_kv = 12;
+    Empty get_transceiver_state = 13;
+    Empty health = 14;
+    Empty shutdown = 15;
+  }
+}
+
+message CommandReply {
+  oneof reply {
+    Ack ok = 1;
+    Error error = 2;
+    Stats stats = 3;
+    KvEventBatch kv_events = 4;
+    KvLoad kv_load = 5;
+    MemoryStatus memory_status = 6;
+    bytes transceiver_state = 7;         // CacheState + CommState, passed unchanged to disagg orchestration
+    Health health = 8;
+  }
+}
+
+message Empty {}
+
+message GetStats {
+  uint32 max_iterations = 1;             // take at most this many steps from the buffer
+}
+
+message Stats {
+  repeated string iteration_stats_json = 1;  // today's IterationStats JSON for now, not unpacked here
+}
+
+message GetKvEvents {
+  uint32 timeout_ms = 1;
+}
+
+message KvLoad {
+  fixed64 time_ns = 1;
+  uint64 used_blocks = 2;
+  uint64 total_blocks = 3;
+  repeated RankLoad ranks = 4;
+}
+
+message RankLoad {
+  uint32 rank = 1;
+  uint32 running_requests = 2;
+  uint64 used_blocks = 3;
+  uint64 total_blocks = 4;
+}
+
+message MemoryTags {
+  repeated string tags = 1;              // sampler, drafter, kv_cache, model_weights, etc.
+}
+
+message MemoryStatus {
+  string state = 1;                      // running / parking / parked / waking / failed
+  repeated string parked_tags = 2;
+}
+
+// Today only Ray can use it, sending pickled rebuild functions; here, explicit tensor references
+message UpdateWeights {
+  repeated WeightShard shards = 1;
+  bool finalize = 2;                     // after the last shard: post-load hook, reset the prefix cache, restore CUDA graphs
+}
+
+message WeightShard {
+  string device_uuid = 1;
+  map<string, TensorRef> params = 2;
+}
+
+message StartProfile {
+  string output_dir = 1;
+  uint32 num_steps = 2;
+  uint32 start_step = 3;
+  repeated string activities = 4;        // CPU, GPU, CUDA_PROFILER
+}
+
+// Resource governor: truncate a conversation's KV
+message TruncateKv {
+  repeated sfixed32 messages = 1;
+  uint32 tokens_to_keep = 2;
+}
+
+message Health {
+  bool healthy = 1;
+  optional Error fatal = 2;
+}
+
+// ═══════════════════════════ Events ═══════════════════════════
+
+message EventsRequest {}
+
+message EngineEvent {
+  oneof event {
+    KvEventBatch kv = 1;
+    Error fatal = 2;                     // the engine cannot recover; serve fails every request in flight
+  }
+}
+
+message KvEventBatch {
+  fixed64 time_ns = 1;
+  uint32 attention_dp_rank = 2;
+  repeated KvEvent events = 3;
+}
+
+message KvEvent {
+  fixed64 event_id = 1;
+  uint32 window_size = 2;
+  uint32 layer_group = 3;
+  oneof data {
+    KvCreated created = 4;
+    KvStored stored = 5;
+    KvRemoved removed = 6;
+    KvUpdated updated = 7;
+    Empty all_cleared = 8;
+  }
+}
+
+message KvCreated {
+  repeated uint32 blocks_per_level = 1;
+}
+
+message KvStored {
+  fixed64 parent_hash = 1;
+  repeated KvBlock blocks = 2;
+}
+
+message KvBlock {
+  fixed64 hash = 1;
+  repeated sfixed32 tokens = 2;
+  repeated sfixed32 token_extra_ids = 3;
+  string cache_salt = 4;
+  uint32 cache_level = 5;
+  uint32 priority = 6;
+  uint64 lora_id = 7;
+  repeated MultimodalKey mm_keys = 8;
+}
+
+message MultimodalKey {
+  repeated sfixed32 hash = 1;
+  uint32 start_offset = 2;
+  string uuid = 3;
+}
+
+message KvRemoved {
+  repeated fixed64 hashes = 1;
+}
+
+message KvUpdated {
+  fixed64 hash = 1;
+  optional uint32 cache_level = 2;
+  optional uint32 priority = 3;
+}
