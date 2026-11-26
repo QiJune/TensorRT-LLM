@@ -73,7 +73,6 @@ from tensorrt_llm.llmapi.reasoning_parser import (BaseReasoningParser,
                                                   ReasoningParserResult)
 from tensorrt_llm.llmapi.thinking_budget import \
     add_thinking_budget_logits_processor
-from tensorrt_llm.llmapi.tokenizer import TokenizerBase, TransformersTokenizer
 from tensorrt_llm.logger import logger
 from tensorrt_llm.serve.chat_utils import (VALID_MESSAGE_CONTENT_MM_PART_TYPES,
                                            parse_chat_messages_coroutines,
@@ -103,6 +102,7 @@ from tensorrt_llm.serve.tool_parser.base_tool_parser import (
 from tensorrt_llm.serve.tool_parser.core_types import ToolCallItem
 from tensorrt_llm.serve.tool_parser.tool_parser_factory import ToolParserFactory
 from tensorrt_llm.serve.web_search import load_web_search_config
+from tensorrt_llm.tokenizer import TokenizerBase, TransformersTokenizer
 from tensorrt_llm.tokenizer.deepseek_v4 import DeepseekV4Tokenizer
 from tensorrt_llm.tokenizer.deepseek_v32 import DeepseekV32Tokenizer
 

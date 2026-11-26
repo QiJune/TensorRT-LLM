@@ -109,7 +109,7 @@ def _reap_retires(timeout: float = 60.0) -> None:
 
 def _worker_start_time(pid: int) -> bytes | None:
     """Read a worker's kernel start time without loading TRT-LLM eagerly."""
-    from tensorrt_llm.llmapi.mpi_session import _process_start_time
+    from tensorrt_llm.executor.mpi_session import _process_start_time
 
     return _process_start_time(pid)
 
@@ -308,7 +308,7 @@ class SessionReuseCache:
         pending = [n for n in _ALL_PATCH_TARGETS if n in sys.modules and n not in self._patched]
         if not pending:
             return
-        from tensorrt_llm.llmapi.mpi_session import MpiPoolSession as real_cls
+        from tensorrt_llm.executor.mpi_session import MpiPoolSession as real_cls
 
         cache = self
 

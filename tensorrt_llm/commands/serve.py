@@ -55,6 +55,8 @@ from tensorrt_llm.commands._serve_stability import stability_option
 from tensorrt_llm.commands.mooncake import mooncake_master, mooncake_pool_report
 from tensorrt_llm.commands.utils import (collect_explicit_cli_keys,
                                          get_is_diffusion_only_model)
+from tensorrt_llm.executor.mpi_session import find_free_ipc_addr
+from tensorrt_llm.executor.startup_checks import no_visible_gpu_error
 from tensorrt_llm.executor.utils import MAX_NUM_FRONTENDS, LlmLauncherEnvs
 from tensorrt_llm.inputs.multimodal import MultimodalServerConfig
 from tensorrt_llm.llmapi.disagg_utils import (
@@ -67,10 +69,8 @@ from tensorrt_llm.llmapi.llm_args import (SERVE_CLI_CONFIG_FIELDS,
                                           KvCacheConnectorConfig, SleepConfig,
                                           TorchLlmArgs, build_cli_config)
 from tensorrt_llm.llmapi.llm_utils import update_llm_args_with_extra_dict
-from tensorrt_llm.llmapi.mpi_session import find_free_ipc_addr
 from tensorrt_llm.llmapi.reasoning_parser import (ReasoningParserFactory,
                                                   resolve_auto_reasoning_parser)
-from tensorrt_llm.llmapi.startup_checks import no_visible_gpu_error
 from tensorrt_llm.logger import logger, severity_map
 from tensorrt_llm.mapping import CpType
 from tensorrt_llm.serve import OpenAIDisaggServer, OpenAIServer
@@ -3492,9 +3492,9 @@ def _launch_disaggregated_leader(sub_comm, instance_idx: int, config_file: str,
     global _child_p_global  # Declare usage of global variable
     # Assuming logger and mpi_rank are available from module imports or passed in
     from tensorrt_llm._utils import mpi_rank
+    from tensorrt_llm.executor.mpi_session import split_mpi_env
     from tensorrt_llm.llmapi.mgmn_leader_node import \
         launch_server_main as launch_remote_mpi_session_server
-    from tensorrt_llm.llmapi.mpi_session import split_mpi_env
 
     # This mimics the behavior of trtllm-llmapi-launch
     # TODO: Make the port allocation atomic

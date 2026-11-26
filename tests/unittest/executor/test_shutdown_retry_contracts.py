@@ -53,7 +53,9 @@ def _extract_class(source, class_name, methods, namespace, bases=()):
 
 
 _uses_collective_shutdown = _extract_function(
-    _ROOT / "tensorrt_llm/llmapi/_load_balance_env.py", "uses_collective_shutdown", {"Any": object}
+    _ROOT / "tensorrt_llm/executor/_load_balance_env.py",
+    "uses_collective_shutdown",
+    {"Any": object},
 )
 
 
@@ -128,7 +130,7 @@ class _FakeRay:
 
 def _ray_executor(ray, per_layer_dynamic=True):
     cls = _extract_class(
-        _ROOT / "tensorrt_llm/executor/ray/executor.py",
+        _ROOT / "tensorrt_llm/llmapi/engine_client/ray_executor.py",
         "RayExecutor",
         {"shutdown", "_shutdown_workers_collectively"},
         {

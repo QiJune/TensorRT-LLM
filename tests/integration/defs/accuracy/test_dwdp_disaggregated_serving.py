@@ -28,7 +28,7 @@ from defs.common import get_free_port_in_ci as get_free_port
 from defs.common import get_ucx_tls
 from tensorrt_llm.llmapi import CompletionOutput, RequestOutput, SamplingParams
 from tensorrt_llm.llmapi.llm_args import LlmArgs
-from tensorrt_llm.llmapi.tokenizer import load_hf_tokenizer
+from tensorrt_llm.tokenizer import load_hf_tokenizer
 
 from ..conftest import llm_models_root, skip_post_blackwell_ultra, skip_pre_blackwell
 from ..trt_test_alternative import popen

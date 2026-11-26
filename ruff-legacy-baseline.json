@@ -328,7 +328,7 @@
     "D212": 1,
     "E722": 1
   },
-  "tensorrt_llm/executor/ray/executor.py": {
+  "tensorrt_llm/llmapi/engine_client/ray_executor.py": {
     "D205": 1,
     "D212": 2,
     "E712": 1
@@ -423,7 +423,7 @@
     "D410": 1,
     "D411": 1
   },
-  "tensorrt_llm/llmapi/mpi_session.py": {
+  "tensorrt_llm/executor/mpi_session.py": {
     "D200": 1,
     "D205": 1,
     "D415": 1

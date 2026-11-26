@@ -73,11 +73,10 @@ from ..mapping import CpType, Mapping
 from ..models.modeling_utils import QuantAlgo, QuantConfig
 from ..sampling_params import BatchedLogitsProcessor
 from ..tokenizer import TOKENIZER_ALIASES  # noqa: F401
-from ..tokenizer import load_custom_tokenizer
+from ..tokenizer import TokenizerBase, load_custom_tokenizer, tokenizer_factory
 from ..usage.config import UsageContext  # noqa: F401
 from ..usage.config import TelemetryConfig, TelemetryField
 from ..watermark.config import WatermarkConfig
-from .tokenizer import TokenizerBase, tokenizer_factory
 from .utils import (StrictBaseModel, generate_api_docs_as_docstring,
                     get_type_repr)
 

@@ -37,13 +37,13 @@ from tensorrt_llm.llmapi.engine_client.result import GenerationResultBase
 from tensorrt_llm.llmapi.llm import BaseLLM
 from tensorrt_llm.llmapi.llm_args import DynamicBatchConfig, SchedulerConfig
 from tensorrt_llm.llmapi.llm_utils import _ParallelConfig
-from tensorrt_llm.llmapi.tokenizer import (TokenizerBase, TransformersTokenizer,
-                                           load_hf_tokenizer)
 from tensorrt_llm.sampling_params import LogitsProcessor, SamplingParams
 from tensorrt_llm.serve.openai_protocol import CompletionRequest, StreamOptions
 from tensorrt_llm.serve.openai_server import OpenAIServer
 from tensorrt_llm.serve.postprocess_handlers import (ChatPostprocArgs,
                                                      chat_stream_post_processor)
+from tensorrt_llm.tokenizer import (TokenizerBase, TransformersTokenizer,
+                                    load_hf_tokenizer)
 
 # isort: off
 from gc_utils import assert_resource_freed

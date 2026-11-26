@@ -356,7 +356,7 @@ addresses, and restores or initializes contents according to `SleepConfig`.
 Principal implementation locations are:
 
 - Synchronous API: `tensorrt_llm/llmapi/llm.py`
-- Asynchronous API: `tensorrt_llm/_torch/async_llm.py`
+- Asynchronous API: `tensorrt_llm/llmapi/async_llm.py`
 - Serving and authentication: `tensorrt_llm/serve/openai_server.py` and
   `tensorrt_llm/serve/runtime_control_auth.py`
 - Workers: `tensorrt_llm/executor/base_worker.py` and

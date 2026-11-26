@@ -15,18 +15,18 @@
 """Compatibility shim for ``tensorrt_llm.executor.ray_executor``.
 
 Will be removed once all usages are migrated to
-``tensorrt_llm.executor.ray.executor``.
+``tensorrt_llm.llmapi.engine_client.ray_executor``.
 
 DO NOT ADD ANYTHING TO THIS FILE.
 """
 
 import warnings
 
-from tensorrt_llm.executor.ray.executor import RayExecutor  # noqa: F401
+from tensorrt_llm.llmapi.engine_client.ray_executor import RayExecutor  # noqa: F401
 
 warnings.warn(
     "tensorrt_llm.executor.ray_executor has moved to "
-    "tensorrt_llm.executor.ray.executor and will be removed in a future "
+    "tensorrt_llm.llmapi.engine_client.ray_executor and will be removed in a future "
     "release.",
     FutureWarning,
     stacklevel=2,

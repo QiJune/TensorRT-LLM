@@ -8,7 +8,7 @@ from types import SimpleNamespace
 import pytest
 
 from tensorrt_llm import _bootstrap
-from tensorrt_llm.llmapi import mpi_session
+from tensorrt_llm.executor import mpi_session
 
 pytestmark = pytest.mark.cpu_only
 

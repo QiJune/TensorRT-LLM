@@ -5,8 +5,8 @@
 from collections.abc import Sequence
 from typing import Any, List, Optional
 
-from ..llmapi.llm import LLM
-from ..llmapi.llm_args import ExecutorMemoryType, RayPlacementConfig, RuntimeMemoryStatus
+from .llm import LLM
+from .llm_args import ExecutorMemoryType, RayPlacementConfig, RuntimeMemoryStatus
 
 
 class AsyncLLM(LLM):
@@ -107,7 +107,6 @@ class AsyncLLM(LLM):
 
     async def update_weights(self, weights: dict[str, str]):
         """Update the weights of the LLM asynchronously.
-
 
         Args:
             weights: Dictionary mapping device UUIDs to IPC handles for weight tensors.

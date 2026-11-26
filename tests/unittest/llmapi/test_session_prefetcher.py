@@ -181,7 +181,7 @@ def test_take_wrong_size_in_flight_waits_before_miss(prefetcher, monkeypatch):
 
 def test_shadow_wait_budget_tracks_identity_timeout(monkeypatch):
     fake_mpi_session = types.SimpleNamespace(_identity_barrier_timeout=lambda: 125.0)
-    monkeypatch.setitem(sys.modules, "tensorrt_llm.llmapi.mpi_session", fake_mpi_session)
+    monkeypatch.setitem(sys.modules, "tensorrt_llm.executor.mpi_session", fake_mpi_session)
     assert (
         session_prefetcher._shadow_build_wait_timeout()
         == 125 + session_prefetcher._SHADOW_BUILD_FINISH_GRACE
@@ -189,7 +189,7 @@ def test_shadow_wait_budget_tracks_identity_timeout(monkeypatch):
 
 
 def test_shadow_wait_budget_handles_partially_loaded_mpi_module(monkeypatch):
-    monkeypatch.setitem(sys.modules, "tensorrt_llm.llmapi.mpi_session", types.SimpleNamespace())
+    monkeypatch.setitem(sys.modules, "tensorrt_llm.executor.mpi_session", types.SimpleNamespace())
     monkeypatch.setenv("TRTLLM_MPI_IDENTITY_TIMEOUT", "625")
     assert (
         session_prefetcher._shadow_build_wait_timeout()
@@ -320,7 +320,7 @@ def test_factory_dead_shadow_builds_fresh_pool(prefetcher, monkeypatch) -> None:
 def test_prefetched_worker_identity_check_rejects_dead_or_recycled_pid(monkeypatch) -> None:
     starts = {101: b"start-a", 102: b"start-b"}
     fake_mpi_session = types.SimpleNamespace(_process_start_time=starts.get)
-    monkeypatch.setitem(sys.modules, "tensorrt_llm.llmapi.mpi_session", fake_mpi_session)
+    monkeypatch.setitem(sys.modules, "tensorrt_llm.executor.mpi_session", fake_mpi_session)
     pool = types.SimpleNamespace(
         n_workers=2,
         _worker_identities=((101, b"start-a"), (102, b"start-b")),
@@ -621,7 +621,7 @@ def test_install_wraps_seam_in_isinstance_transparent_shim(prefetcher, monkeypat
     # The patched seam must stay a real TYPE: proxy.py's killed-worker
     # detection runs isinstance(x, MpiPoolSession) against this attribute,
     # and a bare function there raises TypeError (the #16338 breakage class).
-    mpi_mod = pytest.importorskip("tensorrt_llm.llmapi.mpi_session")
+    mpi_mod = pytest.importorskip("tensorrt_llm.executor.mpi_session")
     fake = types.ModuleType("fake_seam_mod")
     fake.MpiPoolSession = mpi_mod.MpiPoolSession
     monkeypatch.setitem(sys.modules, "fake_seam_mod", fake)
@@ -644,7 +644,7 @@ def test_patch_targets_cover_all_library_construction_sites():
     root = Path(tensorrt_llm.__file__).parent
     # mpi_session.py defines the class (and the MGMN server path, which
     # legitimately builds its own pool outside the bare-LLM() seams).
-    exempt = {"tensorrt_llm.llmapi.mpi_session"}
+    exempt = {"tensorrt_llm.executor.mpi_session"}
     offenders = []
     for py in root.rglob("*.py"):
         if re.search(r"(?<![\w.])MpiPoolSession\(", py.read_text(errors="ignore")):

@@ -16,7 +16,7 @@ from ...executor.utils import (ErrorResponse, bucket_responses_by_frontend,
                                is_llm_response)
 from ...logger import logger
 from ...sampling_params import SamplingParams
-from ..tokenizer import TransformersTokenizer, load_hf_tokenizer
+from ...tokenizer import TransformersTokenizer, load_hf_tokenizer
 from ..utils import print_traceback_on_error
 from .postprocessor_hook import load_post_processor_hook
 

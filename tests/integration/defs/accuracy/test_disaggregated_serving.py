@@ -49,8 +49,9 @@ from tensorrt_llm.llmapi.llm_args import (DFlashDecodingConfig,
                                           DSparkDecodingConfig,
                                           Eagle3DecodingConfig, LlmArgs,
                                           MTPDecodingConfig)
-from tensorrt_llm.llmapi.tokenizer import DeepseekV4Tokenizer, load_hf_tokenizer
 from tensorrt_llm.quantization import QuantAlgo
+from tensorrt_llm.tokenizer import load_hf_tokenizer
+from tensorrt_llm.tokenizer.deepseek_v4 import DeepseekV4Tokenizer
 
 from ..conftest import (get_device_count, llm_models_root, parametrize_with_ids,
                         skip_no_hopper, skip_no_rubin, skip_pre_blackwell,

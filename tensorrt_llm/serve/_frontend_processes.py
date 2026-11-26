@@ -17,7 +17,7 @@ import time
 from collections.abc import Callable, Iterator
 from typing import NamedTuple
 
-from tensorrt_llm.llmapi.mpi_session import split_mpi_env
+from tensorrt_llm.executor.mpi_session import split_mpi_env
 from tensorrt_llm.logger import logger
 
 

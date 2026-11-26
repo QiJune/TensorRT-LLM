@@ -31,7 +31,7 @@ import yaml
 from defs.trt_test_alternative import (is_linux, is_windows, print_info,
                                        print_warning)
 
-from tensorrt_llm.llmapi.mpi_session import get_mpi_world_size
+from tensorrt_llm.executor.mpi_session import get_mpi_world_size
 
 from ..conftest import get_device_count, get_gpu_device_list, llm_models_root
 from ._model_paths import HF_MODEL_PATH, LORA_MODEL_PATH, MODEL_PATH_DICT

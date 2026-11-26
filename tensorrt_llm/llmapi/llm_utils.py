@@ -15,6 +15,8 @@ from .._utils import global_mpi_rank, local_mpi_rank, mpi_rank
 from ..bindings.executor import (CapacitySchedulerPolicy, ContextChunkingPolicy,
                                  KvCacheRetentionConfig)
 # yapf: enable
+from ..executor.mpi_session import MpiSession
+# yapf: enable
 from ..logger import logger
 from ..models.modeling_utils import QuantAlgo, QuantConfig
 from ..models.quant_config_utils import \
@@ -23,6 +25,7 @@ from ..quantization.modelopt_config import (is_modelopt_quant_config,
                                             read_modelopt_quant_config,
                                             reject_checkpoint_nvfp4_plus,
                                             warn_if_inline_diverges)
+from ..tokenizer import TransformersTokenizer, load_hf_tokenizer
 # yapf: disable
 from .llm_args import (CalibConfig, CudaGraphConfig, DecodeCudaGraphConfig,
                        DFlashDecodingConfig, DraftTargetDecodingConfig,
@@ -33,9 +36,6 @@ from .llm_args import (CalibConfig, CudaGraphConfig, DecodeCudaGraphConfig,
                        UserProvidedDecodingConfig, _ModelWrapper,
                        _ParallelConfig, update_llm_args_with_extra_dict,
                        update_llm_args_with_extra_options)
-# yapf: enable
-from .mpi_session import MpiSession
-from .tokenizer import TransformersTokenizer, load_hf_tokenizer
 # TODO[chunweiy]: move the following symbols back to utils scope, and remove the following import
 from .utils import download_hf_model, print_traceback_on_error
 

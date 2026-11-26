@@ -37,14 +37,14 @@ from tensorrt_llm._utils import nvtx_range_debug
 from tensorrt_llm.executor.ray.utils import unwrap_ray_errors
 from tensorrt_llm.logger import logger
 
-from ...llmapi._load_balance_env import uses_collective_shutdown
-from ...llmapi.engine_client.executor import GenerationExecutor
-from ...llmapi.engine_client.result import GenerationResult
-from ...llmapi.engine_client.rpc_proxy_mixin import RpcExecutorMixin
-from ...llmapi.utils import logger_debug
-from ..request import GenerationRequest
-from ..utils import PostprocWorkerConfig, RequestError
-from .gpu_worker import RayGPUWorker, RayWorkerWrapper
+from ...executor._load_balance_env import uses_collective_shutdown
+from ...executor.ray.gpu_worker import RayGPUWorker, RayWorkerWrapper
+from ...executor.request import GenerationRequest
+from ...executor.utils import PostprocWorkerConfig, RequestError
+from ..utils import logger_debug
+from .executor import GenerationExecutor
+from .result import GenerationResult
+from .rpc_proxy_mixin import RpcExecutorMixin
 
 __all__ = [
     "RayExecutor",

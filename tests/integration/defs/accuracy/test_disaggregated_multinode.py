@@ -44,7 +44,7 @@ from test_common.cluster_env import apply_ucx_env
 
 from tensorrt_llm.llmapi import CompletionOutput, RequestOutput, SamplingParams
 from tensorrt_llm.llmapi.llm_args import DSparkDecodingConfig, LlmArgs
-from tensorrt_llm.llmapi.tokenizer import DeepseekV4Tokenizer
+from tensorrt_llm.tokenizer.deepseek_v4 import DeepseekV4Tokenizer
 
 from ..conftest import get_device_memory, llm_models_root, skip_pre_blackwell
 from .accuracy_core import GSM8K, LlmapiAccuracyTestHarness

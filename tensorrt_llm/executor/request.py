@@ -29,9 +29,9 @@ from tensorrt_llm.kv_hints.protocol import snapshot_kv_hints
 from ..conversation_params import ConversationParams
 from ..disaggregated_params import DisaggregatedParams
 from ..llmapi.llm_utils import KvCacheRetentionConfig
-from ..llmapi.tokenizer import TransformersTokenizer
 from ..sampling_params import SamplingParams
 from ..scheduling_params import SchedulingParams
+from ..tokenizer import TransformersTokenizer
 
 if TYPE_CHECKING:
     from ..llmapi.engine_client.result import GenerationResultBase

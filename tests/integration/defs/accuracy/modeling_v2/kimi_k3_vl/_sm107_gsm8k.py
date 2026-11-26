@@ -46,7 +46,7 @@ from tensorrt_llm.llmapi import (
     SamplingParams,
 )
 from tensorrt_llm.llmapi.llm_args import LlmArgs
-from tensorrt_llm.llmapi.tokenizer import load_hf_tokenizer
+from tensorrt_llm.tokenizer import load_hf_tokenizer
 
 from ....conftest import llm_models_root
 from ...accuracy_core import GSM8K, LlmapiAccuracyTestHarness

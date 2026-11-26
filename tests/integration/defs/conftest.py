@@ -622,7 +622,7 @@ def skip_by_device_count(request):
 
 def get_mpi_world_size() -> int:
     """Lazy wrapper so conftest import does not load MPI bindings."""
-    from tensorrt_llm.llmapi.mpi_session import \
+    from tensorrt_llm.executor.mpi_session import \
         get_mpi_world_size as _get_mpi_world_size
     return _get_mpi_world_size()
 

@@ -19,7 +19,7 @@ from tensorrt_llm._torch.pyexecutor.llm_request import LlmRequest
 from tensorrt_llm._utils import mpi_comm, mpi_rank, mpi_world_size
 from tensorrt_llm.bindings.executor import FinishReason
 from tensorrt_llm.bindings.internal.batch_manager import LlmRequestType
-from tensorrt_llm.llmapi.mpi_session import MpiPoolSession
+from tensorrt_llm.executor.mpi_session import MpiPoolSession
 
 # isort: off
 from utils.llm_data import llm_models_root
@@ -936,9 +936,11 @@ def _load_ray_executor(monkeypatch: pytest.MonkeyPatch) -> type:
     gpu_worker.RayWorkerWrapper = MagicMock()
     for name, module in dependencies.items():
         monkeypatch.setitem(sys.modules, name, module)
-    source = Path(base_worker.__file__).parent / "ray" / "executor.py"
+    source = Path(
+        importlib.util.find_spec("tensorrt_llm.llmapi.engine_client").origin
+    ).parent / "ray_executor.py"
     spec = importlib.util.spec_from_file_location(
-        "tensorrt_llm.executor.ray._submit_test", source)
+        "tensorrt_llm.llmapi.engine_client._submit_test", source)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.RayExecutor

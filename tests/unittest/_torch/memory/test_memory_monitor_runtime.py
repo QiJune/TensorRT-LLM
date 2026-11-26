@@ -188,7 +188,7 @@ def test_an_encode_only_llm_reports_its_own_process(monkeypatch):
 def test_async_llm_gathers_every_workers_reports():
     import asyncio
 
-    from tensorrt_llm._torch.async_llm import AsyncLLM
+    from tensorrt_llm.llmapi.async_llm import AsyncLLM
 
     async def collective_rpc(method):
         assert method == "get_memory_report"

@@ -31,10 +31,10 @@ from strenum import StrEnum
 from tensorrt_llm._utils import mpi_rank
 from tensorrt_llm.llmapi.utils import enable_llm_debug, logger_debug
 
-from ..llmapi.mpi_session import (MpiCommSession, MpiPoolSession, MpiSession,
-                                  RemoteMpiCommSessionClient)
 from ..llmapi.utils import logger_debug
 from ..logger import logger
+from .mpi_session import (MpiCommSession, MpiPoolSession, MpiSession,
+                          RemoteMpiCommSessionClient)
 
 
 class LlmLauncherEnvs(StrEnum):

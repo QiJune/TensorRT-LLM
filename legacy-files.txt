@@ -327,7 +327,7 @@ tensorrt_llm/llmapi/engine_client/executor.py
 tensorrt_llm/executor/ipc.py
 tensorrt_llm/llmapi/engine_client/postproc_worker.py
 tensorrt_llm/llmapi/engine_client/proxy.py
-tensorrt_llm/executor/ray/executor.py
+tensorrt_llm/llmapi/engine_client/ray_executor.py
 tensorrt_llm/executor/ray/gpu_worker.py
 tensorrt_llm/executor/ray/stub.py
 tensorrt_llm/executor/ray/utils.py
@@ -357,7 +357,7 @@ tensorrt_llm/llmapi/llm_utils.py
 tensorrt_llm/llmapi/mgmn_leader_node.py
 tensorrt_llm/llmapi/mgmn_worker_node.py
 tensorrt_llm/llmapi/mm_encoder.py
-tensorrt_llm/llmapi/mpi_session.py
+tensorrt_llm/executor/mpi_session.py
 tensorrt_llm/llmapi/reasoning_parser.py
 tensorrt_llm/llmapi/serialization.py
 tensorrt_llm/llmapi/tokenizer.py

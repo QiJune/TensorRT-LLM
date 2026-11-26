@@ -42,6 +42,9 @@ from tensorrt_llm.logger import logger
 from ..._torch.pyexecutor.llm_request import release_undelivered_response
 from ..._utils import customized_gc_thresholds, mpi_rank, nvtx_range_debug
 from ...executor.ipc import FusedIpcQueue, IpcQueue
+from ...executor.mpi_session import (MpiCommSession, MpiPoolSession, MpiSession,
+                                     RemoteMpiCommSessionClient,
+                                     validate_session_world_size)
 from ...executor.request import (CancellingRequest, GenerationRequest,
                                  StartProfileRequest, StopProfileRequest)
 from ...executor.rpc import RPCClient
@@ -59,9 +62,6 @@ from ...executor.worker import GenerationExecutorWorker, worker_main
 from ...executor.worker_process_monitor import (WorkerProcessIdentity,
                                                 WorkerProcessMonitor)
 from ..llm_args import TorchLlmArgs
-from ..mpi_session import (MpiCommSession, MpiPoolSession, MpiSession,
-                           RemoteMpiCommSessionClient,
-                           validate_session_world_size)
 from ..tracer import enable_llm_tracer, get_tracer, global_tracer
 from ..utils import (AsyncQueue, ManagedThread, _SyncQueue, enable_llm_debug,
                      logger_debug, print_colored)

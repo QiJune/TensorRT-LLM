@@ -35,7 +35,7 @@ from ..llmapi.engine_client.result import (DetokenizedGenerationResultBase,
 from ..llmapi.reasoning_parser import (BaseReasoningParser,
                                        ReasoningParserFactory,
                                        ReasoningParserResult)
-from ..llmapi.tokenizer import TransformersTokenizer
+from ..tokenizer import TransformersTokenizer
 # yapf: disable
 from .chat_utils import make_tool_call_id
 from .harmony_adapter import (handle_non_streaming_response,

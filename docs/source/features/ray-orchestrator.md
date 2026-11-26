@@ -33,7 +33,7 @@ Currently available:
 - Integration with RLHF frameworks, such as [Verl](https://github.com/volcengine/verl) and [NVIDIA NeMo-RL](https://github.com/NVIDIA-NeMo/RL).
 
 ## Architecture
-This feature introduces new classes such as [RayExecutor](source:tensorrt_llm/executor/ray/executor.py) and [RayGPUWorker](source:tensorrt_llm/executor/ray/gpu_worker.py) for Ray actor lifecycle management and distributed inference. In Ray mode, collective ops run on [torch.distributed](https://docs.pytorch.org/tutorials/beginner/dist_overview.html) without MPI. We welcome contributions to improve and extend this support.
+This feature introduces new classes such as [RayExecutor](source:tensorrt_llm/llmapi/engine_client/ray_executor.py) and [RayGPUWorker](source:tensorrt_llm/executor/ray/gpu_worker.py) for Ray actor lifecycle management and distributed inference. In Ray mode, collective ops run on [torch.distributed](https://docs.pytorch.org/tutorials/beginner/dist_overview.html) without MPI. We welcome contributions to improve and extend this support.
 
 ![Ray orchestrator architecture](https://github.com/NVIDIA/TensorRT-LLM/raw/main/docs/source/media/ray_orchestrator_architecture.jpg)
 

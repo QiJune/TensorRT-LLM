@@ -10,8 +10,8 @@ import torch
 
 from tensorrt_llm._errors import ResourceError
 from tensorrt_llm._startup_errors import classify_startup_error
+from tensorrt_llm.executor import startup_checks
 from tensorrt_llm.executor.base_worker import BaseWorker
-from tensorrt_llm.llmapi import startup_checks
 from tensorrt_llm.llmapi.llm_args import Nvfp4GemmConfig, _ParallelConfig
 from tensorrt_llm.models.modeling_utils import QuantConfig
 from tensorrt_llm.quantization.mode import QuantAlgo

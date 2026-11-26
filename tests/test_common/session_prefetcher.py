@@ -120,7 +120,7 @@ def _shadow_build_wait_timeout() -> float:
     ``mpi_session`` before it can construct a pool, so the live lower-level
     setting is present by the time ``take()`` waits on that build.
     """
-    mpi_session = sys.modules.get("tensorrt_llm.llmapi.mpi_session")
+    mpi_session = sys.modules.get("tensorrt_llm.executor.mpi_session")
     timeout_fn = getattr(mpi_session, "_identity_barrier_timeout", None)
     identity_timeout = timeout_fn() if timeout_fn is not None else _fallback_identity_timeout()
     return identity_timeout + _SHADOW_BUILD_FINISH_GRACE
@@ -306,7 +306,7 @@ def _prefetched_workers_alive(session: object) -> bool:
     identities = getattr(session, "_worker_identities", ())
     if len(identities) != getattr(session, "n_workers", None):
         return False
-    mpi_session = sys.modules.get("tensorrt_llm.llmapi.mpi_session")
+    mpi_session = sys.modules.get("tensorrt_llm.executor.mpi_session")
     process_start_time = getattr(mpi_session, "_process_start_time", None)
     if process_start_time is None:
         return False
@@ -336,7 +336,7 @@ def _reap_dead_pool(session: object) -> None:
         # what actually reclaims the survivors' GPU memory, and it must run
         # whatever abandon() did. Surface it instead of passing silently.
         _log(f"[session-prefetch] WARNING: abandon() failed on a part-dead pool: {exc!r}")
-    mpi_session = sys.modules.get("tensorrt_llm.llmapi.mpi_session")
+    mpi_session = sys.modules.get("tensorrt_llm.executor.mpi_session")
     process_start_time = getattr(mpi_session, "_process_start_time", None)
     if process_start_time is None:
         return
@@ -467,7 +467,7 @@ class SessionPrefetcher:
 
             if mpi_disabled():
                 return
-            from tensorrt_llm.llmapi.mpi_session import MpiPoolSession
+            from tensorrt_llm.executor.mpi_session import MpiPoolSession
 
             snapshot = _spawn_snapshot()  # workers freeze env+sys.path at spawn
             # wait_shutdown: see _make_factory — every pool this layer hands
@@ -637,7 +637,7 @@ class SessionPrefetcher:
         pending = [n for n in _PATCH_TARGETS if n in sys.modules and n not in self._patched]
         if not pending:
             return
-        from tensorrt_llm.llmapi.mpi_session import MpiPoolSession as real_cls
+        from tensorrt_llm.executor.mpi_session import MpiPoolSession as real_cls
 
         factory = self._make_factory(real_cls)
         for name in pending:

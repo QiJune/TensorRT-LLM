@@ -24,8 +24,8 @@ from typing import Literal
 import click
 
 from tensorrt_llm.executor.ipc import ZeroMqQueue
+from tensorrt_llm.executor.mpi_session import RemoteMpiCommSessionClient
 from tensorrt_llm.executor.utils import get_spawn_proxy_process_ipc_hmac_key_env
-from tensorrt_llm.llmapi.mpi_session import RemoteMpiCommSessionClient
 from tensorrt_llm.llmapi.utils import print_colored
 from tensorrt_llm.sampling_params import SamplingParams
 

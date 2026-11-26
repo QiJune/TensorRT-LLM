@@ -28,10 +28,10 @@ from tensorrt_llm.llmapi.engine_client.postproc_worker import PostprocWorker
 from tensorrt_llm.llmapi.engine_client.proxy import GenerationExecutorProxy
 from tensorrt_llm.llmapi.engine_client.result import (
     DetokenizedGenerationResultBase, GenerationResult, GenerationResultBase)
-from tensorrt_llm.llmapi.tokenizer import TransformersTokenizer
 from tensorrt_llm.llmapi.utils import AsyncQueue
 from tensorrt_llm.metrics import MetricNames
 from tensorrt_llm.sampling_params import SamplingParams
+from tensorrt_llm.tokenizer import TransformersTokenizer
 
 # isort: off
 from utils.llm_data import llm_models_root

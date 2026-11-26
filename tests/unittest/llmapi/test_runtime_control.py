@@ -24,8 +24,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from tensorrt_llm import LLM
-from tensorrt_llm._torch.async_llm import AsyncLLM
 from tensorrt_llm.llmapi import RuntimeMemoryStatus, SleepConfig
+from tensorrt_llm.llmapi.async_llm import AsyncLLM
 from tensorrt_llm.serve.openai_server import OpenAIServer
 from tensorrt_llm.serve.runtime_control_auth import (
     RUNTIME_CONTROL_NONCE_HEADER,

@@ -39,7 +39,6 @@ from starlette.routing import Mount
 from transformers import AutoProcessor
 
 from tensorrt_llm._startup import _StartupTimer
-from tensorrt_llm._torch.async_llm import AsyncLLM
 from tensorrt_llm._torch.shared_tensor import SharedTensorContainer
 from tensorrt_llm._utils import EnergyMonitor
 from tensorrt_llm.checkpoint_format import CheckpointFormat
@@ -60,6 +59,7 @@ from tensorrt_llm.inputs.registry import BaseMultimodalInputProcessor
 from tensorrt_llm.inputs.utils import ConversationMessage
 from tensorrt_llm.llmapi import DisaggregatedParams as LlmDisaggregatedParams
 from tensorrt_llm.llmapi import MultimodalEncoder, SchedulingParams, tracing
+from tensorrt_llm.llmapi.async_llm import AsyncLLM
 from tensorrt_llm.llmapi.disagg_utils import (DisaggClusterConfig,
                                               MetadataServerConfig, ServerRole)
 from tensorrt_llm.llmapi.engine_client.executor import CppExecutorError

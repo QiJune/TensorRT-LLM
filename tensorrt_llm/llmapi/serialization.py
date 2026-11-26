@@ -104,7 +104,7 @@ BASE_EXAMPLE_CLASSES = {
         "DynamicBatchConfig", "MoeLoadBalancerConfig",
         "MoePerLayerDynamicLoadBalancerConfig", "MoeWarmupPlacementConfig"
     ],
-    "tensorrt_llm.llmapi.mpi_session": ["RemoteTask"],
+    "tensorrt_llm.executor.mpi_session": ["RemoteTask"],
     "tensorrt_llm.llmapi.tokenizer": ["TransformersTokenizer"],
     "tensorrt_llm._torch.peft.lora.config": ["LoraConfig"],
     "tensorrt_llm.mapping": ["Mapping"],

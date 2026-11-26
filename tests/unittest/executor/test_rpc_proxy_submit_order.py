@@ -75,7 +75,7 @@ _MixinProxy.__abstractmethods__ = frozenset()
 def _proxy_classes():
     classes = [_MixinProxy]
     if importlib.util.find_spec("ray") is not None:
-        from tensorrt_llm.executor.ray.executor import RayExecutor
+        from tensorrt_llm.llmapi.engine_client.ray_executor import RayExecutor
 
         classes.append(RayExecutor)
     return classes
