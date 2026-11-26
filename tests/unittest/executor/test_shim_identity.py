@@ -16,8 +16,9 @@
 
 The old paths kept are the ones code outside the repository imports: the names the
 ``tensorrt_llm.executor`` package exported, ``executor.result`` (Dynamo, see
-``tests/unittest/dynamo/test_imports.py``) and ``executor.postprocessor_hook`` (shown in the
-documentation).
+``tests/unittest/dynamo/test_imports.py``), and ``executor.postprocessor_hook`` and
+``_torch.async_llm`` (shown in the documentation). The Ray paths are checked by
+``test_shim_ray.py``, which needs Ray.
 """
 
 from pathlib import Path
@@ -75,6 +76,7 @@ _MOVED = (
     ),
     ("tensorrt_llm.executor.result", "tensorrt_llm.executor.logprobs", _LOGPROB_NAMES),
     ("tensorrt_llm.executor.postprocessor_hook", f"{_CLIENT}.postprocessor_hook", _HOOK_NAMES),
+    ("tensorrt_llm._torch.async_llm", "tensorrt_llm.llmapi.async_llm", ("AsyncLLM",)),
 )
 
 SHIM_ROWS = tuple(

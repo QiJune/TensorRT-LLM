@@ -35,9 +35,12 @@ pytestmark = pytest.mark.cpu_only
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
-# Old paths that re-export moved names; test_shim_identity.py checks them.
+# Old paths that re-export moved names; test_shim_identity.py and test_shim_ray.py check them.
 _SHIM_MODULES = (
+    "tensorrt_llm._torch.async_llm",
     "tensorrt_llm.executor.postprocessor_hook",
+    "tensorrt_llm.executor.ray.executor",
+    "tensorrt_llm.executor.ray_executor",
     "tensorrt_llm.executor.result",
 )
 
@@ -54,9 +57,8 @@ _ENGINE_INTERNALS = tuple(
     )
 )
 
-# The engine's imports of the engine client. The worker is also the in-process
-# GenerationExecutor and returns GenerationResults, rank 0 starts the postprocess workers, and
-# Ray's executor still lives beside its GPU workers.
+# The engine's imports of the LLM API's client side. The worker is also the in-process
+# GenerationExecutor and returns GenerationResults, and rank 0 starts the postprocess workers.
 _ENGINE_USES_CLIENT = frozenset(
     {
         ("tensorrt_llm.executor.base_worker", f"{_CLIENT}.executor", "GenerationExecutor"),
@@ -64,9 +66,6 @@ _ENGINE_USES_CLIENT = frozenset(
         ("tensorrt_llm.executor.base_worker", f"{_CLIENT}.result", "GenerationResult"),
         ("tensorrt_llm.executor.base_worker", f"{_CLIENT}.result", "ResponseWrapper"),
         ("tensorrt_llm.executor.base_worker", f"{_CLIENT}.result", "get_metrics_dict"),
-        ("tensorrt_llm.executor.ray.executor", f"{_CLIENT}.executor", "GenerationExecutor"),
-        ("tensorrt_llm.executor.ray.executor", f"{_CLIENT}.result", "GenerationResult"),
-        ("tensorrt_llm.executor.ray.executor", f"{_CLIENT}.rpc_proxy_mixin", "RpcExecutorMixin"),
         ("tensorrt_llm.executor.ray.gpu_worker", f"{_CLIENT}.result", "GenerationResult"),
         ("tensorrt_llm.executor.rpc_worker_mixin", f"{_CLIENT}.postproc_worker", "PostprocWorker"),
         (
@@ -77,14 +76,21 @@ _ENGINE_USES_CLIENT = frozenset(
         ("tensorrt_llm.executor.worker", f"{_CLIENT}.postproc_worker", "PostprocWorker"),
         ("tensorrt_llm.executor.worker", f"{_CLIENT}.postproc_worker", "postproc_worker_main"),
         ("tensorrt_llm.executor.worker", f"{_CLIENT}.proxy", "_check_collective_rpc_guard"),
+        # tensorrt_llm._torch.LLM, kept for callers that import the LLM class from there.
+        ("tensorrt_llm._torch.llm", "tensorrt_llm.llmapi.llm", "_TorchLLM"),
     }
 )
 
 CONTRACTS = (
     Contract(
-        name="the engine does not import the engine client",
+        name="the engine does not import the LLM API's client side",
         importers=("tensorrt_llm.executor", "tensorrt_llm._torch"),
-        forbidden=(_CLIENT,),
+        forbidden=(
+            _CLIENT,
+            "tensorrt_llm.llmapi.async_llm",
+            "tensorrt_llm.llmapi.llm",
+            "tensorrt_llm.llmapi.tokenizer",
+        ),
         allowed=_ENGINE_USES_CLIENT,
         fix=(
             "Define what the engine and its clients share in tensorrt_llm.executor (request.py, "

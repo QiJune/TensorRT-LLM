@@ -38,7 +38,8 @@ pytestmark = pytest.mark.skipif(
 FORWARDS: dict[str, str] = {
     "tensorrt_llm._ray_utils": "tensorrt_llm.executor.ray.utils",
     "tensorrt_llm.ray_stub": "tensorrt_llm.executor.ray.stub",
-    "tensorrt_llm.executor.ray_executor": "tensorrt_llm.executor.ray.executor",
+    "tensorrt_llm.executor.ray_executor": "tensorrt_llm.llmapi.engine_client.ray_executor",
+    "tensorrt_llm.executor.ray.executor": "tensorrt_llm.llmapi.engine_client.ray_executor",
     "tensorrt_llm.executor.ray_gpu_worker": "tensorrt_llm.executor.ray.gpu_worker",
 }
 
