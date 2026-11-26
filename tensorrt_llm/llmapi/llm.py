@@ -45,14 +45,10 @@ from .._utils import nvtx_range_debug
 from ..bindings import steady_clock_now
 from ..conversation_params import ConversationParams
 from ..disaggregated_params import DisaggregatedParams
-from ..executor import (DetokenizedGenerationResultBase, GenerationExecutor,
-                        GenerationResult, IterationResult, LoRARequest,
-                        PostprocWorkerConfig, PromptAdapterRequest)
-from ..executor.postproc_worker import PostprocParams
-from ..executor.postprocessor_hook import (PostProcessorHook,
-                                           load_post_processor_hook)
-from ..executor.request import DEFAULT_REQUEST_PRIORITY
-from ..executor.utils import (RequestError, create_mpi_comm_session,
+from ..executor.request import (DEFAULT_REQUEST_PRIORITY, LoRARequest,
+                                PostprocParams, PromptAdapterRequest)
+from ..executor.utils import (PostprocWorkerConfig, RequestError,
+                              create_mpi_comm_session,
                               get_spawn_proxy_process_env)
 from ..inputs import (PromptInputs, TokensPrompt, create_input_processor,
                       create_input_processor_with_hash,
@@ -61,6 +57,11 @@ from ..logger import logger
 from ..sampling_params import LogitsProcessor, SamplingParams
 from ..scheduling_params import SchedulingParams
 from ._load_balance_env import LAUNCH_QUEUES_ENV, configure_moe_launch_queues
+from .engine_client.executor import GenerationExecutor
+from .engine_client.postprocessor_hook import (PostProcessorHook,
+                                               load_post_processor_hook)
+from .engine_client.result import (DetokenizedGenerationResultBase,
+                                   GenerationResult, IterationResult)
 from .llm_args import (ENCODER_RUNNER_MANAGED_INPUTS,
                        TORCH_LLMARGS_EXPLICIT_DOCSTRING,
                        TORCH_LLMARGS_REMOVED_ARGS, ExecutorMemoryType,
@@ -1446,7 +1447,7 @@ class BaseLLM:
             timeout (float, optional): Max wait time in seconds when retrieving stats from queue. Defaults to 2.
 
         Returns:
-            tensorrt_llm.executor.result.IterationResult: An async iterable object containing runtime stats.
+            tensorrt_llm.llmapi.engine_client.result.IterationResult: An async iterable object containing runtime stats.
         """
         if self._encode_only:
             raise RuntimeError(
@@ -1499,7 +1500,7 @@ class BaseLLM:
             timeout (float, optional): Max wait time in seconds when retrieving events from queue. Defaults to 2.
 
         Returns:
-            tensorrt_llm.executor.result.IterationResult: An async iterable object containing runtime events.
+            tensorrt_llm.llmapi.engine_client.result.IterationResult: An async iterable object containing runtime events.
         """
         if self._encode_only:
             raise RuntimeError(

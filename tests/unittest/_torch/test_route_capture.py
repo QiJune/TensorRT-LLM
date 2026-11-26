@@ -203,7 +203,7 @@ def test_llm_args_enable_flag_present_and_defaults_false():
 
 
 def test_completion_output_routed_experts_property():
-    from tensorrt_llm.executor.result import CompletionOutput
+    from tensorrt_llm.llmapi.engine_client.result import CompletionOutput
 
     # None when not present.
     assert CompletionOutput(index=0).routed_experts is None

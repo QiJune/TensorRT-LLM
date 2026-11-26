@@ -16,19 +16,19 @@ import json
 import threading
 from typing import List, Optional, Union
 
-from ..llmapi._load_balance_env import uses_collective_shutdown
-from ..llmapi.mpi_session import (MpiPoolSession, MpiSession,
-                                  validate_session_world_size)
-from ..llmapi.utils import logger_debug, print_colored
-from ..logger import logger
+from ...executor.rpc.rpc_common import RPCError
+from ...executor.rpc_worker import RpcWorker
+from ...executor.utils import (PostprocWorkerConfig, create_mpi_comm_session,
+                               get_spawn_proxy_process_env)
+from ...logger import logger
+from .._load_balance_env import uses_collective_shutdown
+from ..mpi_session import (MpiPoolSession, MpiSession,
+                           validate_session_world_size)
+from ..utils import logger_debug, print_colored
 from .executor import GenerationExecutor
-from .postproc_worker import PostprocWorkerConfig
 from .proxy import _check_collective_rpc_guard
 from .result import IterationResult
-from .rpc.rpc_common import RPCError
 from .rpc_proxy_mixin import RpcExecutorMixin
-from .rpc_worker import RpcWorker
-from .utils import create_mpi_comm_session, get_spawn_proxy_process_env
 
 
 class GenerationExecutorRpcProxy(RpcExecutorMixin, GenerationExecutor):
@@ -267,7 +267,7 @@ class GenerationExecutorRpcProxy(RpcExecutorMixin, GenerationExecutor):
         Rank-0 RPC shim.  ``sleep`` and ``wakeup`` are allowed for
         ``model_world_size > 1``; all other methods require
         ``model_world_size == 1``.  See
-        :meth:`~tensorrt_llm.executor.proxy.GenerationExecutorProxy.collective_rpc`
+        :meth:`~tensorrt_llm.llmapi.engine_client.proxy.GenerationExecutorProxy.collective_rpc`
         for details.
 
         Args:

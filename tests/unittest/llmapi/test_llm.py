@@ -30,9 +30,10 @@ import transformers
 from tensorrt_llm import LLM
 from tensorrt_llm._utils import AdjustedSteadyClock
 from tensorrt_llm.bindings import executor as tllm
-from tensorrt_llm.executor import GenerationResultBase, RequestError
+from tensorrt_llm.executor.utils import RequestError
 from tensorrt_llm.llmapi import (KvCacheConfig, KvCacheRetentionConfig,
                                  RequestOutput, SADecodingConfig)
+from tensorrt_llm.llmapi.engine_client.result import GenerationResultBase
 from tensorrt_llm.llmapi.llm import BaseLLM
 from tensorrt_llm.llmapi.llm_args import DynamicBatchConfig, SchedulerConfig
 from tensorrt_llm.llmapi.llm_utils import _ParallelConfig
@@ -1564,7 +1565,7 @@ def test_openai_completion_list_prompt_stream_reuses_stream_metadata() -> None:
 def run_llm_with_postprocess_parallel_and_result_handler(
         streaming, backend, tp_size: int = 1):
     # avoid import error when running in CI
-    from tensorrt_llm.executor.postproc_worker import PostprocParams
+    from tensorrt_llm.executor.request import PostprocParams
     from tensorrt_llm.serve.postprocess_handlers import (
         ChatPostprocArgs, chat_stream_post_processor)
 

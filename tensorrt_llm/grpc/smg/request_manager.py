@@ -30,7 +30,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from tensorrt_llm.disaggregated_params import DisaggregatedParams
 from tensorrt_llm.executor.request import LoRARequest, PromptAdapterRequest
-from tensorrt_llm.executor.result import GenerationResult
+from tensorrt_llm.llmapi.engine_client.result import GenerationResult
 from tensorrt_llm.llmapi.llm_utils import KvCacheRetentionConfig
 from tensorrt_llm.logger import logger
 from tensorrt_llm.sampling_params import GuidedDecodingParams, SamplingParams

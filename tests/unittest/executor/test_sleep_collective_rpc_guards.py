@@ -142,9 +142,9 @@ class TestV1PrefixCacheInvalidation:
 def _make_proxy(cls_name, model_world_size=1, rpc_client=None):
     """Construct an IPC or RPC proxy shell without triggering ZMQ/MPI init."""
     if cls_name == "ipc":
-        from tensorrt_llm.executor.proxy import GenerationExecutorProxy as Cls
+        from tensorrt_llm.llmapi.engine_client.proxy import GenerationExecutorProxy as Cls
     else:
-        from tensorrt_llm.executor.rpc_proxy import GenerationExecutorRpcProxy as Cls
+        from tensorrt_llm.llmapi.engine_client.rpc_proxy import GenerationExecutorRpcProxy as Cls
     p = object.__new__(Cls)
     if cls_name == "ipc":
         p.workers_started = False

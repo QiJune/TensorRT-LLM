@@ -43,8 +43,8 @@ from test_common.moe_tactics import (cutedsl_grouped_gemm_moe_tactic,
                                      sm100f_moe_tactic_or_cutlass)
 
 from tensorrt_llm.evaluate import LongBenchV2 as LongBenchV2Evaluator
-from tensorrt_llm.executor.result import GenerationResultBase
 from tensorrt_llm.llmapi import CompletionOutput, RequestOutput, SamplingParams
+from tensorrt_llm.llmapi.engine_client.result import GenerationResultBase
 from tensorrt_llm.llmapi.llm_args import (DFlashDecodingConfig,
                                           DSparkDecodingConfig,
                                           Eagle3DecodingConfig, LlmArgs,

@@ -28,8 +28,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from tensorrt_llm.executor.result import CompletionOutput
 from tensorrt_llm.inputs.tokenization import tokenize_prompt
+from tensorrt_llm.llmapi.engine_client.result import CompletionOutput
 from tensorrt_llm.serve.openai_disagg_service import _ctx_usage_info
 from tensorrt_llm.serve.openai_protocol import (
     PromptTokensDetails,

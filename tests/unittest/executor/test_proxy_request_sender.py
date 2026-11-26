@@ -14,12 +14,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from tensorrt_llm.executor.proxy import (
+from tensorrt_llm.executor.worker import _incoming_requests
+from tensorrt_llm.llmapi.engine_client.proxy import (
     GenerationExecutorProxy,
     _create_request_sender,
     _RequestSender,
 )
-from tensorrt_llm.executor.worker import _incoming_requests
 
 pytestmark = pytest.mark.cpu_only
 

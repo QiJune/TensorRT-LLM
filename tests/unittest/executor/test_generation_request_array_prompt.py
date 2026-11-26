@@ -84,7 +84,7 @@ def test_num_prompt_tokens_reads_the_int32_buffer_without_a_list():
 
 @pytest.mark.parametrize("prompt_logprobs", [None, [-1.0, -2.0]])
 def test_record_stats_counts_prompt_tokens(prompt_logprobs):
-    from tensorrt_llm.executor.result import CompletionOutput, GenerationResult
+    from tensorrt_llm.llmapi.engine_client.result import CompletionOutput, GenerationResult
     from tensorrt_llm.metrics import MetricNames, RequestEventTiming
 
     ids = _ids()
@@ -113,8 +113,8 @@ def test_record_stats_counts_prompt_tokens(prompt_logprobs):
 def test_do_tracing_reports_prompt_tokens_without_building_the_list(monkeypatch):
     import contextlib
 
-    from tensorrt_llm.executor.result import CompletionOutput, GenerationResult
     from tensorrt_llm.llmapi import tracing
+    from tensorrt_llm.llmapi.engine_client.result import CompletionOutput, GenerationResult
     from tensorrt_llm.metrics import RequestEventTiming
 
     class _Span:

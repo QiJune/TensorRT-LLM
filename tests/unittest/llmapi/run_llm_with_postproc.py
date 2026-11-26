@@ -6,7 +6,7 @@ from typing import Optional
 import click
 
 from tensorrt_llm import LLM
-from tensorrt_llm.executor.postproc_worker import PostprocParams
+from tensorrt_llm.executor.request import PostprocParams
 from tensorrt_llm.llmapi import KvCacheConfig, SamplingParams
 from tensorrt_llm.llmapi.utils import print_colored
 from tensorrt_llm.serve.postprocess_handlers import (ChatPostprocArgs,

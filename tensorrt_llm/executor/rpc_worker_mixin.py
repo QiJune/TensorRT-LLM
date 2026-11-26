@@ -82,8 +82,8 @@ class RpcWorkerMixin:
 
         import zmq
 
+        from ..llmapi.engine_client.postproc_worker import PostprocWorker, postproc_worker_main
         from .ipc import IpcQueue
-        from .postproc_worker import PostprocWorker, postproc_worker_main
 
         num = self.postproc_config.num_postprocess_workers
         assert num > 0

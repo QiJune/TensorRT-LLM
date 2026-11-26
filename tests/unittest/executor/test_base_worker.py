@@ -28,10 +28,11 @@ from utils.util import skip_single_gpu
 
 from tensorrt_llm.executor import base_worker
 from tensorrt_llm.executor.base_worker import BaseWorker
+from tensorrt_llm.executor.logprobs import LogProbsResult
 from tensorrt_llm.executor.request import GenerationRequest, LoRARequest
-from tensorrt_llm.executor.result import GenerationResult, LogProbsResult
-from tensorrt_llm.executor.rpc_proxy_mixin import RpcExecutorMixin
 from tensorrt_llm.executor.utils import RequestError
+from tensorrt_llm.llmapi.engine_client.result import GenerationResult
+from tensorrt_llm.llmapi.engine_client.rpc_proxy_mixin import RpcExecutorMixin
 from tensorrt_llm.llmapi.llm_args import TorchLlmArgs
 from tensorrt_llm.sampling_params import LogprobParams, SamplingParams
 
@@ -56,8 +57,9 @@ def test_response_metrics_are_deserialized_only_when_requested(
         SimpleNamespace(sampling_params=SimpleNamespace(
             return_perf_metrics=return_metrics))
     }
-    monkeypatch.setattr("tensorrt_llm.executor.result._build_perf_metrics_dict",
-                        lambda value: value)
+    monkeypatch.setattr(
+        "tensorrt_llm.llmapi.engine_client.result._build_perf_metrics_dict",
+        lambda value: value)
 
     wrapped = base_worker._maybe_wrap_response(
         SimpleNamespace(_results=results), response)

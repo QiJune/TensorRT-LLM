@@ -6,10 +6,12 @@ from tensorrt_llm.checkpoint_format import CheckpointFormat
 from .._torch.async_llm import AsyncLLM
 from ..conversation_params import ConversationParams
 from ..disaggregated_params import DisaggregatedParams, DisaggScheduleStyle
-from ..executor import CompletionOutput, LoRARequest, RequestError
+from ..executor.request import LoRARequest
+from ..executor.utils import RequestError
 from ..kv_hints import KvHintAction, KvHintsEnvelope, KvHintsInput
 from ..sampling_params import GuidedDecodingParams, SamplingParams
 from ..scheduling_params import SchedulingParams
+from .engine_client.result import CompletionOutput
 from .llm import LLM, RequestOutput
 # yapf: disable
 from .llm_args import (AttentionDpConfig, AutoDecodingConfig,

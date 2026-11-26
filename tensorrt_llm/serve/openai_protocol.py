@@ -2240,7 +2240,7 @@ def _deserialize_first_gen_log_probs(
     """
     if serialized is None:
         return None
-    from tensorrt_llm.executor.result import Logprob
+    from tensorrt_llm.executor.logprobs import Logprob
     result = []
     for i, pos in enumerate(serialized):
         if isinstance(pos, (float, int)):

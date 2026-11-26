@@ -79,8 +79,8 @@ class EndpointLLM:
         self._pool = ThreadPoolExecutor(max_workers=16)
 
     def _complete(self, prompt: str, sampling: Any) -> Any:
-        from tensorrt_llm.executor.result import GenerationResultBase
         from tensorrt_llm.llmapi import CompletionOutput, RequestOutput
+        from tensorrt_llm.llmapi.engine_client.result import GenerationResultBase
 
         class Result(GenerationResultBase):
             """A finished generation built from an endpoint's answer."""

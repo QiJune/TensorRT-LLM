@@ -114,7 +114,7 @@ Encoder and LLM forward Params are execution views.
 | `tensorrt_llm/llmapi/llm_args.py` | Complete configuration schema (Pydantic) |
 | `tensorrt_llm/llmapi/llm_utils.py` | Model loading, model-specific default overrides |
 | `tensorrt_llm/models/modeling_utils.py` | Base classes for all models (`PretrainedConfig`, `PretrainedModel`) |
-| `tensorrt_llm/executor/executor.py` | Execution abstraction (`GenerationExecutor`) |
+| `tensorrt_llm/llmapi/engine_client/executor.py` | Execution abstraction (`GenerationExecutor`) |
 | `tensorrt_llm/models/automodel.py` | Auto-discovery and model registry |
 | `tensorrt_llm/_torch/models/` | PyTorch backend model implementations (distinct from the top-level `models/` package) |
 | `tensorrt_llm/_torch/attention/ATTENTION_DEVELOPER_GUIDE.md` | Attention, MLA, backend families, sparse backends, metadata contracts, and KV-cache behavior - **read before modifying anything under `tensorrt_llm/_torch/attention/`** |

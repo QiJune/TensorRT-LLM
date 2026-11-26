@@ -30,12 +30,12 @@ from tensorrt_llm._startup_errors import (
     log_startup_error,
     wrap_worker_startup_error,
 )
-from tensorrt_llm.executor import EngineDeadError
-from tensorrt_llm.executor import proxy as proxy_module
 from tensorrt_llm.executor import worker as worker_module
-from tensorrt_llm.executor.proxy import GenerationExecutorProxy
-from tensorrt_llm.executor.result import GenerationResult
+from tensorrt_llm.executor.utils import EngineDeadError
 from tensorrt_llm.executor.worker_process_monitor import WorkerProcessIdentity
+from tensorrt_llm.llmapi.engine_client import proxy as proxy_module
+from tensorrt_llm.llmapi.engine_client.proxy import GenerationExecutorProxy
+from tensorrt_llm.llmapi.engine_client.result import GenerationResult
 
 
 def test_engine_dead_error_is_importable_and_carries_root_cause():
@@ -490,7 +490,9 @@ def test_submit_rechecks_engine_death_after_registration(monkeypatch):
         proxy._engine_dead = True
         return fake_result
 
-    monkeypatch.setattr("tensorrt_llm.executor.proxy.GenerationResult", fake_generation_result)
+    monkeypatch.setattr(
+        "tensorrt_llm.llmapi.engine_client.proxy.GenerationResult", fake_generation_result
+    )
 
     with pytest.raises(EngineDeadError):
         proxy.submit(_FakeRequest())

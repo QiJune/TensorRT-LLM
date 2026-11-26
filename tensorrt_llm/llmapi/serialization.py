@@ -83,21 +83,21 @@ BASE_EXAMPLE_CLASSES = {
     "tensorrt_llm.checkpoint_format": ["CheckpointFormat"],
     "tensorrt_llm.disaggregated_params": ["DisaggregatedParams"],
     "tensorrt_llm.inputs.multimodal": ["MultimodalInput"],
-    "tensorrt_llm.executor.postproc_worker": [
-        "PostprocArgs", "PostprocParams", "PostprocWorkerConfig",
-        "PostprocWorker.Input", "PostprocWorker.Output"
-    ],
+    "tensorrt_llm.executor.logprobs": ["Logprob", "LogProbsResult"],
     "tensorrt_llm.executor.request": [
-        "CancellingRequest", "GenerationRequest", "LoRARequest",
-        "PromptAdapterRequest"
+        "CancellingRequest", "GenerationRequest", "LoRARequest", "PostprocArgs",
+        "PostprocParams", "PromptAdapterRequest"
     ],
-    "tensorrt_llm.executor.result": [
+    "tensorrt_llm.executor.utils":
+    ["ErrorResponse", "PostprocWorkerConfig", "WorkerCommIpcAddrs"],
+    "tensorrt_llm.executor.worker": ["GenerationExecutorWorker", "worker_main"],
+    "tensorrt_llm.llmapi.engine_client.postproc_worker":
+    ["PostprocWorker.Input", "PostprocWorker.Output"],
+    "tensorrt_llm.llmapi.engine_client.result": [
         "CompletionOutput", "DetokenizedGenerationResultBase",
         "GenerationResult", "GenerationResultBase", "IterationResult",
-        "Logprob", "LogProbsResult", "ResponseWrapper"
+        "ResponseWrapper"
     ],
-    "tensorrt_llm.executor.utils": ["ErrorResponse", "WorkerCommIpcAddrs"],
-    "tensorrt_llm.executor.worker": ["GenerationExecutorWorker", "worker_main"],
     "tensorrt_llm.llmapi.llm_args": [
         "_ParallelConfig", "CalibConfig", "CapacitySchedulerPolicy",
         "CheckpointIOPolicy", "KvCacheConfig", "SchedulerConfig", "LoadFormat",

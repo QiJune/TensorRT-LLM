@@ -33,7 +33,7 @@ from tensorrt_llm._torch.flashinfer_utils import IS_FLASHINFER_AVAILABLE
 from tensorrt_llm._utils import nvtx_range, prefer_pinned
 from tensorrt_llm.bindings.executor import FinishReason
 from tensorrt_llm.bindings.internal.batch_manager import add_new_tokens_to_requests
-from tensorrt_llm.executor.result import Logprob
+from tensorrt_llm.executor.logprobs import Logprob
 from tensorrt_llm.logger import logger
 
 from ...utils import torch_multi_arange

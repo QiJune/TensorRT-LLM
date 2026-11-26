@@ -2,7 +2,7 @@ import os
 
 import openai
 
-from tensorrt_llm.executor import GenerationExecutor
+from tensorrt_llm.llmapi.engine_client.executor import GenerationExecutor
 from tensorrt_llm.scaffolding import TaskStatus
 from tensorrt_llm.scaffolding.contrib.mcp.chat_task import ChatTask
 

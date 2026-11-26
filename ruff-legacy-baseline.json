@@ -299,7 +299,7 @@
     "D300": 4,
     "D415": 2
   },
-  "tensorrt_llm/executor/executor.py": {
+  "tensorrt_llm/llmapi/engine_client/executor.py": {
     "D205": 3,
     "D210": 1,
     "D410": 3,
@@ -313,7 +313,7 @@
     "D300": 4,
     "D415": 1
   },
-  "tensorrt_llm/executor/postproc_worker.py": {
+  "tensorrt_llm/llmapi/engine_client/postproc_worker.py": {
     "D200": 1,
     "D202": 1,
     "D205": 1,
@@ -321,7 +321,7 @@
     "D212": 2,
     "D300": 7
   },
-  "tensorrt_llm/executor/proxy.py": {
+  "tensorrt_llm/llmapi/engine_client/proxy.py": {
     "D202": 1,
     "D205": 1,
     "D208": 3,
@@ -339,7 +339,7 @@
     "D212": 1,
     "D300": 1
   },
-  "tensorrt_llm/executor/result.py": {
+  "tensorrt_llm/llmapi/engine_client/result.py": {
     "D200": 3,
     "D205": 1,
     "F402": 1
@@ -364,7 +364,7 @@
     "D210": 1,
     "D212": 3
   },
-  "tensorrt_llm/executor/rpc_proxy.py": {
+  "tensorrt_llm/llmapi/engine_client/rpc_proxy.py": {
     "D205": 1,
     "D415": 1
   },

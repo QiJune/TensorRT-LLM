@@ -321,7 +321,7 @@ class _RpcClient:
 
 def _rpc_proxy(per_layer_dynamic=True):
     cls = _extract_class(
-        _ROOT / "tensorrt_llm/executor/rpc_proxy.py",
+        _ROOT / "tensorrt_llm/llmapi/engine_client/rpc_proxy.py",
         "GenerationExecutorRpcProxy",
         {"_uses_collective_shutdown", "shutdown_remote", "shutdown", "_shutdown_rank_local"},
         {

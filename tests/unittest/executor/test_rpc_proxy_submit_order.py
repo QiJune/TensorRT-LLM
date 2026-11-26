@@ -13,9 +13,9 @@ import types
 
 import pytest
 
-from tensorrt_llm.executor.executor import GenerationExecutor
 from tensorrt_llm.executor.request import GenerationRequest
-from tensorrt_llm.executor.rpc_proxy_mixin import RpcExecutorMixin
+from tensorrt_llm.llmapi.engine_client.executor import GenerationExecutor
+from tensorrt_llm.llmapi.engine_client.rpc_proxy_mixin import RpcExecutorMixin
 from tensorrt_llm.sampling_params import SamplingParams
 
 pytestmark = pytest.mark.cpu_only

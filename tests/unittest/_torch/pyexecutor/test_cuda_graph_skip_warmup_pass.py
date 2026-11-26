@@ -33,7 +33,7 @@ from tensorrt_llm._torch.pyexecutor.executor_request_queue import (
     RequestQueueItem,
 )
 from tensorrt_llm._torch.pyexecutor.resource_manager import ResourceManager
-from tensorrt_llm.executor.result import Logprob
+from tensorrt_llm.executor.logprobs import Logprob
 from tensorrt_llm.llmapi import CudaGraphConfig, KvCacheConfig
 
 # A flip needs a near tie: top two logprobs within two BF16 logit steps (1/8 at logits 16-32).

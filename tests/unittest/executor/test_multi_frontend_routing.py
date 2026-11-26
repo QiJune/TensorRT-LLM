@@ -167,7 +167,7 @@ class TestClassicFrontendProxyEndToEnd:
         import zmq
 
         from tensorrt_llm.executor.ipc import IpcQueue
-        from tensorrt_llm.executor.proxy import GenerationExecutorFrontendProxy
+        from tensorrt_llm.llmapi.engine_client.proxy import GenerationExecutorFrontendProxy
 
         hmac_key = os.urandom(32)
         request_addr = f"ipc://{os.path.join(tmpdir, 'request.sock')}"

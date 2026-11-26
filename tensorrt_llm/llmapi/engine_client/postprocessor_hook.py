@@ -18,7 +18,7 @@ import importlib
 import logging
 from typing import List, Optional, Protocol, runtime_checkable
 
-from .._errors import ConfigInputError
+from ..._errors import ConfigInputError
 
 __all__ = [
     "PostProcessorHookAction",

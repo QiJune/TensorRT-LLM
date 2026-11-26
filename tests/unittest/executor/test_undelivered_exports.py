@@ -23,11 +23,11 @@ from tensorrt_llm.executor.base_worker import (
     BaseWorker,
     _drop_refused_response,
 )
-from tensorrt_llm.executor.executor import GenerationExecutor
-from tensorrt_llm.executor.proxy import GenerationExecutorProxy
-from tensorrt_llm.executor.result import ResponseWrapper
-from tensorrt_llm.executor.rpc_proxy_mixin import RpcExecutorMixin
 from tensorrt_llm.executor.utils import ErrorResponse
+from tensorrt_llm.llmapi.engine_client.executor import GenerationExecutor
+from tensorrt_llm.llmapi.engine_client.proxy import GenerationExecutorProxy
+from tensorrt_llm.llmapi.engine_client.result import ResponseWrapper
+from tensorrt_llm.llmapi.engine_client.rpc_proxy_mixin import RpcExecutorMixin
 
 pytestmark = pytest.mark.cpu_only
 

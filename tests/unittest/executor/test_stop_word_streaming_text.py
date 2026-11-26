@@ -33,7 +33,7 @@ from tokenizers.models import WordLevel
 from transformers import PreTrainedTokenizerFast
 
 from tensorrt_llm.bindings import executor as tllm
-from tensorrt_llm.executor.result import DetokenizedGenerationResultBase
+from tensorrt_llm.llmapi.engine_client.result import DetokenizedGenerationResultBase
 from tensorrt_llm.sampling_params import SamplingParams
 from tensorrt_llm.tokenizer import TransformersTokenizer
 

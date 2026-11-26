@@ -17,7 +17,7 @@ from google.protobuf import struct_pb2
 from google.protobuf.json_format import MessageToDict
 
 from tensorrt_llm.disaggregated_params import DisaggregatedParams, DisaggScheduleStyle
-from tensorrt_llm.executor.result import Logprob
+from tensorrt_llm.executor.logprobs import Logprob
 from tensorrt_llm.llmapi.disagg_utils import MIN_GLOBAL_ID
 
 from .bindings import generation_pb2, kv_pb2

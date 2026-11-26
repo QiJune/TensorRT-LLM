@@ -1374,7 +1374,7 @@ def launch_visual_gen_server(
     "detokenization and before the per-endpoint response formatter (e.g. "
     "'my_pkg.guardrail.MyPostProcessorHook'). The class must be importable "
     "and picklable, take no constructor arguments, and be callable as "
-    "'__call__(chunk) -> verdict' (see tensorrt_llm.executor.postprocessor_hook). "
+    "'__call__(chunk) -> verdict' (see tensorrt_llm.llmapi.engine_client.postprocessor_hook). "
     "It runs once per output, per streaming chunk, and may rewrite, "
     "suppress, or terminate the output; it owns its own per-request state.",
     status="prototype")

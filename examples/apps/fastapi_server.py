@@ -19,8 +19,9 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from tensorrt_llm import LLM
-from tensorrt_llm.executor import CppExecutorError, RequestError
+from tensorrt_llm.executor.utils import RequestError
 from tensorrt_llm.llmapi import KvCacheConfig, SamplingParams
+from tensorrt_llm.llmapi.engine_client.executor import CppExecutorError
 
 TIMEOUT_KEEP_ALIVE = 5  # seconds.
 

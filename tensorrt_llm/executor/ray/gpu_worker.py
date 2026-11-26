@@ -34,14 +34,14 @@ from ... import TorchLlmArgs
 from ...llmapi._load_balance_env import (LAUNCH_QUEUES_ENV,
                                          configure_moe_launch_queues,
                                          uses_collective_shutdown)
+from ...llmapi.engine_client.result import GenerationResult
 from ...llmapi.llm_args import BaseLlmArgs, ExecutorMemoryType
 from ...llmapi.tokenizer import TokenizerBase
 from ...llmapi.utils import configure_cpu_affinity
 from ..base_worker import BaseWorker
-from ..postproc_worker import PostprocWorkerConfig
 from ..request import GenerationRequest
-from ..result import GenerationResult
 from ..rpc_worker_mixin import RpcWorkerMixin
+from ..utils import PostprocWorkerConfig
 
 if TYPE_CHECKING:
     from tensorrt_llm.logger import Logger

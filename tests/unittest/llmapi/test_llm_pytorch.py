@@ -13,9 +13,11 @@ import pytest
 
 from tensorrt_llm import LLM
 from tensorrt_llm.disaggregated_params import DisaggregatedParams
-from tensorrt_llm.executor import GenerationExecutorWorker, RequestError
-from tensorrt_llm.executor.rpc_proxy import GenerationExecutorRpcProxy
+from tensorrt_llm.executor import GenerationExecutorWorker
+from tensorrt_llm.executor.utils import RequestError
 from tensorrt_llm.llmapi import CacheTransceiverConfig, KvCacheConfig
+from tensorrt_llm.llmapi.engine_client.rpc_proxy import \
+    GenerationExecutorRpcProxy
 from tensorrt_llm.llmapi.llm_args import (NGramDecodingConfig, SchedulerConfig,
                                           WaitingQueuePolicy)
 from tensorrt_llm.metrics import MetricNames
@@ -890,9 +892,10 @@ def test_llm_with_proxy_error():
 
     # Test that the error is properly caught and re-raised by LLM
     # We patch GenerationExecutor.create directly to return our failing worker
-    with patch('tensorrt_llm.executor.executor.GenerationExecutor.create',
-               side_effect=lambda *args, **kwargs: FailingExecutorWorker(
-                   *args, **kwargs)):
+    with patch(
+            'tensorrt_llm.llmapi.engine_client.executor.GenerationExecutor.create',
+            side_effect=lambda *args, **kwargs: FailingExecutorWorker(
+                *args, **kwargs)):
         with pytest.raises(
                 RuntimeError,
                 match="Mock GenerationExecutorWorker initialization failed"):

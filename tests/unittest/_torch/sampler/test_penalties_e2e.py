@@ -23,9 +23,9 @@ from utils.llm_data import llm_models_root
 
 from tensorrt_llm import LLM, SamplingParams
 from tensorrt_llm._torch.models.checkpoints import HfCheckpointLoader
-from tensorrt_llm.executor.result import CompletionOutput, GenerationResult
 from tensorrt_llm.llmapi import CudaGraphConfig, NGramDecodingConfig
 from tensorrt_llm.llmapi import KvCacheConfig as TRT_KvCacheConfig
+from tensorrt_llm.llmapi.engine_client.result import CompletionOutput, GenerationResult
 
 
 @pytest.fixture(scope="module")

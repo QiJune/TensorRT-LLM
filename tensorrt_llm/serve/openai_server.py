@@ -44,9 +44,8 @@ from tensorrt_llm._torch.shared_tensor import SharedTensorContainer
 from tensorrt_llm._utils import EnergyMonitor
 from tensorrt_llm.checkpoint_format import CheckpointFormat
 # yapf: disable
-from tensorrt_llm.executor import CppExecutorError
-from tensorrt_llm.executor.postproc_worker import PostprocArgs, PostprocParams
-from tensorrt_llm.executor.request import DEFAULT_REQUEST_PRIORITY
+from tensorrt_llm.executor.request import (DEFAULT_REQUEST_PRIORITY,
+                                           PostprocArgs, PostprocParams)
 from tensorrt_llm.executor.rpc import RPCError
 from tensorrt_llm.executor.utils import (CONTEXT_LENGTH_EXCEEDED_CODE,
                                          is_context_length_exceeded_message)
@@ -63,6 +62,7 @@ from tensorrt_llm.llmapi import DisaggregatedParams as LlmDisaggregatedParams
 from tensorrt_llm.llmapi import MultimodalEncoder, SchedulingParams, tracing
 from tensorrt_llm.llmapi.disagg_utils import (DisaggClusterConfig,
                                               MetadataServerConfig, ServerRole)
+from tensorrt_llm.llmapi.engine_client.executor import CppExecutorError
 from tensorrt_llm.llmapi.llm import LLM, PreprocessedInputs, RequestOutput
 from tensorrt_llm.llmapi.reasoning_parser import ReasoningParserFactory
 from tensorrt_llm.llmapi.thinking_budget import \
@@ -328,7 +328,8 @@ def _record_generator_termination(generator) -> None:
     reporting_source = "self"
     termination_kind = "exception"
     try:
-        from tensorrt_llm.executor.proxy import GenerationExecutorProxy
+        from tensorrt_llm.llmapi.engine_client.proxy import \
+            GenerationExecutorProxy
 
         if isinstance(getattr(generator, "_executor", None),
                       GenerationExecutorProxy):

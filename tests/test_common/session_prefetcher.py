@@ -66,8 +66,8 @@ from test_common._session_utils import _isinstance_transparent_shim, _spawn_snap
 # test_patch_targets_cover_all_library_construction_sites keeps this list
 # honest against new construction sites appearing in the library.
 _PATCH_TARGETS = (
-    "tensorrt_llm.executor.proxy",
-    "tensorrt_llm.executor.rpc_proxy",
+    "tensorrt_llm.llmapi.engine_client.proxy",
+    "tensorrt_llm.llmapi.engine_client.rpc_proxy",
     "tensorrt_llm.llmapi.llm",
 )
 

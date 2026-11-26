@@ -274,7 +274,7 @@ def test_worker_thread_allocation_is_named_after_the_running_step(monkeypatch):
 @pytest.mark.cpu_only
 def test_llm_returns_each_workers_report():
     from tensorrt_llm import LLM
-    from tensorrt_llm.executor.proxy import _check_collective_rpc_guard
+    from tensorrt_llm.llmapi.engine_client.proxy import _check_collective_rpc_guard
 
     llm = object.__new__(LLM)
     llm._encode_only = False

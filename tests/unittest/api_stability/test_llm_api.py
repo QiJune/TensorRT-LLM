@@ -7,10 +7,10 @@ from api_stability_core import (ApiStabilityTestHarness, ClassSnapshot,
 
 from tensorrt_llm import LLM
 from tensorrt_llm.bindings import executor as tllme
-from tensorrt_llm.executor.result import IterationResult
 from tensorrt_llm.llmapi import (CalibConfig, CompletionOutput,
                                  ConversationParams, GuidedDecodingParams,
                                  QuantConfig, RequestOutput)
+from tensorrt_llm.llmapi.engine_client.result import IterationResult
 from tensorrt_llm.sampling_params import (BatchedLogitsProcessor,
                                           LogitsProcessor, SamplingParams)
 

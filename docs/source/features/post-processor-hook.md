@@ -17,7 +17,7 @@ This feature is a prototype and its interface may change in a future release.
 ```
 
 For the interface definitions referenced below, see
-[`tensorrt_llm/executor/postprocessor_hook.py`](../../../tensorrt_llm/executor/postprocessor_hook.py).
+[`tensorrt_llm/llmapi/engine_client/postprocessor_hook.py`](../../../tensorrt_llm/llmapi/engine_client/postprocessor_hook.py).
 
 ## Enabling the hook
 
@@ -48,7 +48,7 @@ The hook works the same with or without the out-of-process post-processing worke
 A hook implements a single method, `__call__(self, chunk) -> verdict`:
 
 ```python
-from tensorrt_llm.executor.postprocessor_hook import (
+from tensorrt_llm.llmapi.engine_client.postprocessor_hook import (
     PostProcessorHookChunk,
     PostProcessorHookVerdict,
     emit,
@@ -66,7 +66,7 @@ class MyPostProcessorHook:
 
 The payload handed to the hook for one output chunk — `request_id`, `output_index`, `text_diff`,
 `text`, `token_ids_diff`, `is_final`, `aborted`, and `streaming`. See the `PostProcessorHookChunk`
-dataclass in [`postprocessor_hook.py`](../../../tensorrt_llm/executor/postprocessor_hook.py)
+dataclass in [`postprocessor_hook.py`](../../../tensorrt_llm/llmapi/engine_client/postprocessor_hook.py)
 for the authoritative field-by-field descriptions.
 
 ### Verdicts
@@ -88,7 +88,7 @@ Verdicts are **per chunk**: `suppress()` withholds the current chunk, and `termi
 A stateless hook that upper-cases every chunk:
 
 ```python
-from tensorrt_llm.executor.postprocessor_hook import PostProcessorHookChunk, PostProcessorHookVerdict, emit
+from tensorrt_llm.llmapi.engine_client.postprocessor_hook import PostProcessorHookChunk, PostProcessorHookVerdict, emit
 
 
 class UpperCaseHook:
@@ -102,7 +102,7 @@ This hook accumulates text per request (keyed by `request_id`), stops the stream
 phrase appears, and releases its state when the request finishes:
 
 ```python
-from tensorrt_llm.executor.postprocessor_hook import (
+from tensorrt_llm.llmapi.engine_client.postprocessor_hook import (
     PostProcessorHookChunk, PostProcessorHookVerdict, emit, terminate,
 )
 
@@ -132,7 +132,7 @@ class BannedPhraseGuard:
 A hook that withholds all client-visible text:
 
 ```python
-from tensorrt_llm.executor.postprocessor_hook import PostProcessorHookChunk, PostProcessorHookVerdict, suppress
+from tensorrt_llm.llmapi.engine_client.postprocessor_hook import PostProcessorHookChunk, PostProcessorHookVerdict, suppress
 
 
 class SuppressHook:

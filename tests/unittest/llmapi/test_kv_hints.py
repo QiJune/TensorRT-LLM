@@ -364,8 +364,8 @@ def test_generation_request_pickle_preserves_snapshot() -> None:
 
 def test_proxy_batching_preserves_hint_snapshots() -> None:
     """Batched worker transport preserves hints, fallback and prompt tokens."""
-    from tensorrt_llm.executor.proxy import GenerationExecutorProxy, _RequestSender
     from tensorrt_llm.executor.worker import _incoming_requests
+    from tensorrt_llm.llmapi.engine_client.proxy import GenerationExecutorProxy, _RequestSender
 
     hints = _hints()
     request = _request(hints)
@@ -409,7 +409,7 @@ def test_no_hint_and_legacy_request_state_default_to_none() -> None:
 
 def test_executor_admits_hint_snapshot() -> None:
     """Executor admission passes hints into the real GenerationRequest."""
-    from tensorrt_llm.executor.executor import GenerationExecutor
+    from tensorrt_llm.llmapi.engine_client.executor import GenerationExecutor
 
     executor = MagicMock()
     GenerationExecutor.generate_async(

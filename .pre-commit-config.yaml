@@ -345,21 +345,16 @@ common-files: &common_files |
         tensorrt_llm/evaluate/mmlu.py |
         tensorrt_llm/executor/__init__.py |
         tensorrt_llm/executor/base_worker.py |
-        tensorrt_llm/executor/executor.py |
         tensorrt_llm/executor/ipc.py |
-        tensorrt_llm/executor/postproc_worker.py |
-        tensorrt_llm/executor/proxy.py |
         tensorrt_llm/executor/ray/executor.py |
         tensorrt_llm/executor/ray/gpu_worker.py |
         tensorrt_llm/executor/ray/stub.py |
         tensorrt_llm/executor/ray/utils.py |
         tensorrt_llm/executor/request.py |
-        tensorrt_llm/executor/result.py |
         tensorrt_llm/executor/rpc/__init__.py |
         tensorrt_llm/executor/rpc/rpc_client.py |
         tensorrt_llm/executor/rpc/rpc_common.py |
         tensorrt_llm/executor/rpc/rpc_server.py |
-        tensorrt_llm/executor/rpc_proxy.py |
         tensorrt_llm/executor/rpc_worker.py |
         tensorrt_llm/executor/utils.py |
         tensorrt_llm/executor/worker.py |
@@ -372,6 +367,11 @@ common-files: &common_files |
         tensorrt_llm/inputs/utils.py |
         tensorrt_llm/llmapi/__init__.py |
         tensorrt_llm/llmapi/disagg_utils.py |
+        tensorrt_llm/llmapi/engine_client/executor.py |
+        tensorrt_llm/llmapi/engine_client/postproc_worker.py |
+        tensorrt_llm/llmapi/engine_client/proxy.py |
+        tensorrt_llm/llmapi/engine_client/result.py |
+        tensorrt_llm/llmapi/engine_client/rpc_proxy.py |
         tensorrt_llm/llmapi/kv_cache_type.py |
         tensorrt_llm/llmapi/llm.py |
         tensorrt_llm/llmapi/llm_args.py |
@@ -1067,21 +1067,16 @@ legacy-files: &legacy_files |
         tensorrt_llm/evaluate/mmlu.py |
         tensorrt_llm/executor/__init__.py |
         tensorrt_llm/executor/base_worker.py |
-        tensorrt_llm/executor/executor.py |
         tensorrt_llm/executor/ipc.py |
-        tensorrt_llm/executor/postproc_worker.py |
-        tensorrt_llm/executor/proxy.py |
         tensorrt_llm/executor/ray/executor.py |
         tensorrt_llm/executor/ray/gpu_worker.py |
         tensorrt_llm/executor/ray/stub.py |
         tensorrt_llm/executor/ray/utils.py |
         tensorrt_llm/executor/request.py |
-        tensorrt_llm/executor/result.py |
         tensorrt_llm/executor/rpc/__init__.py |
         tensorrt_llm/executor/rpc/rpc_client.py |
         tensorrt_llm/executor/rpc/rpc_common.py |
         tensorrt_llm/executor/rpc/rpc_server.py |
-        tensorrt_llm/executor/rpc_proxy.py |
         tensorrt_llm/executor/rpc_worker.py |
         tensorrt_llm/executor/utils.py |
         tensorrt_llm/executor/worker.py |
@@ -1094,6 +1089,11 @@ legacy-files: &legacy_files |
         tensorrt_llm/inputs/utils.py |
         tensorrt_llm/llmapi/__init__.py |
         tensorrt_llm/llmapi/disagg_utils.py |
+        tensorrt_llm/llmapi/engine_client/executor.py |
+        tensorrt_llm/llmapi/engine_client/postproc_worker.py |
+        tensorrt_llm/llmapi/engine_client/proxy.py |
+        tensorrt_llm/llmapi/engine_client/result.py |
+        tensorrt_llm/llmapi/engine_client/rpc_proxy.py |
         tensorrt_llm/llmapi/kv_cache_type.py |
         tensorrt_llm/llmapi/llm.py |
         tensorrt_llm/llmapi/llm_args.py |

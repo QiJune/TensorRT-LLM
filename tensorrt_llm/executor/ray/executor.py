@@ -38,13 +38,12 @@ from tensorrt_llm.executor.ray.utils import unwrap_ray_errors
 from tensorrt_llm.logger import logger
 
 from ...llmapi._load_balance_env import uses_collective_shutdown
+from ...llmapi.engine_client.executor import GenerationExecutor
+from ...llmapi.engine_client.result import GenerationResult
+from ...llmapi.engine_client.rpc_proxy_mixin import RpcExecutorMixin
 from ...llmapi.utils import logger_debug
-from ..executor import GenerationExecutor
-from ..postproc_worker import PostprocWorkerConfig
 from ..request import GenerationRequest
-from ..result import GenerationResult
-from ..rpc_proxy_mixin import RpcExecutorMixin
-from ..utils import RequestError
+from ..utils import PostprocWorkerConfig, RequestError
 from .gpu_worker import RayGPUWorker, RayWorkerWrapper
 
 __all__ = [

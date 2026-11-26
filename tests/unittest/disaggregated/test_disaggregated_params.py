@@ -21,8 +21,9 @@ import torch
 
 from tensorrt_llm.bindings import executor as tllm
 from tensorrt_llm.disaggregated_params import DisaggregatedParams
-from tensorrt_llm.executor.result import GenerationResultBase, Logprob
+from tensorrt_llm.executor.logprobs import Logprob
 from tensorrt_llm.inputs.multimodal import MultimodalInputLayout
+from tensorrt_llm.llmapi.engine_client.result import GenerationResultBase
 from tensorrt_llm.sampling_params import SamplingParams
 
 pytestmark = pytest.mark.cpu_only

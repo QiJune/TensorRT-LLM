@@ -36,7 +36,7 @@ from tensorrt_llm._torch.pyexecutor.scheduler.adp_router import (
 )
 from tensorrt_llm._utils import get_global_steady_clock_now_in_seconds
 from tensorrt_llm.disaggregated_params import DisaggregatedParams as LlmDisaggregatedParams
-from tensorrt_llm.executor.result import Logprob
+from tensorrt_llm.executor.logprobs import Logprob
 from tensorrt_llm.llmapi.disagg_utils import (
     ConditionalDisaggConfig,
     DisaggClusterConfig,

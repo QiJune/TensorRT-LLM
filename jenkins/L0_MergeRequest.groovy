@@ -1964,6 +1964,7 @@ def getMultiGpuFileChanged(pipeline, testFilter, globalVars)
         "tensorrt_llm/inputs/registry.py",
         "tensorrt_llm/inputs/tokenization.py",
         "tensorrt_llm/llmapi/disagg_utils.py",
+        "tensorrt_llm/llmapi/engine_client/",
         "tensorrt_llm/llmapi/mgmn_leader_node.py",
         "tensorrt_llm/llmapi/mgmn_worker_node.py",
         "tensorrt_llm/llmapi/mpi_session.py",

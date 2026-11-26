@@ -26,8 +26,8 @@ features that do are refused by the config.
 
 from typing import Optional
 
-from ..disaggregated_params import DisaggScheduleStyle
-from ..logger import logger
+from ...disaggregated_params import DisaggScheduleStyle
+from ...logger import logger
 
 
 def _is_set(value, neutral) -> bool:

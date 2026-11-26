@@ -9,7 +9,7 @@ supplied to ``trtllm-serve --post_processor_hook`` and reconstructed by referenc
 the post-processing worker process.
 """
 
-from tensorrt_llm.executor.postprocessor_hook import (
+from tensorrt_llm.llmapi.engine_client.postprocessor_hook import (
     PostProcessorHookChunk,
     PostProcessorHookVerdict,
     emit,

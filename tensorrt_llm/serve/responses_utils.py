@@ -57,8 +57,7 @@ from transformers.utils.chat_template_utils import render_jinja_template
 from tensorrt_llm._utils import \
     get_steady_clock_now_in_seconds  # noqa: F401  (re-export)
 from tensorrt_llm._utils import AdjustedSteadyClock
-from tensorrt_llm.executor import (EngineDeadError, GenerationResult,
-                                   RequestError)
+from tensorrt_llm.executor.utils import EngineDeadError, RequestError
 from tensorrt_llm.inputs import PromptInputs, prompt_inputs
 from tensorrt_llm.inputs.chat_template_guard import \
     unreferenced_chat_template_kwargs
@@ -67,6 +66,7 @@ from tensorrt_llm.inputs.utils import (rendered_hf_chat_template_source,
                                        resolve_hf_chat_template)
 from tensorrt_llm.llmapi import SamplingParams
 from tensorrt_llm.llmapi.disagg_utils import get_usage_tokens_from_ctx
+from tensorrt_llm.llmapi.engine_client.result import GenerationResult
 from tensorrt_llm.llmapi.llm import RequestOutput
 from tensorrt_llm.llmapi.reasoning_parser import (BaseReasoningParser,
                                                   ReasoningParserFactory,

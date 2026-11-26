@@ -22,6 +22,7 @@ import sys
 import threading
 import traceback
 from concurrent.futures import ProcessPoolExecutor
+from dataclasses import dataclass
 from queue import Empty, Queue
 from typing import Any, Callable, List, NamedTuple, Optional
 
@@ -261,6 +262,21 @@ class IntraProcessQueue:
                 self.queue.not_empty.wait(timeout=timeout)
                 return self.queue._qsize() > 0
             return False
+
+
+@dataclass
+class PostprocWorkerConfig:
+    """The config for the postprocess worker."""
+    num_postprocess_workers: int = 0
+    postprocess_tokenizer_dir: Optional[str] = None
+    # Dotted import path of the user post-processing hook, or
+    # None. NOTE: distinct from ``PostprocParams.post_processor``, which is the
+    # per-endpoint response *formatter* (a Callable), not this hook.
+    post_processor_hook: Optional[str] = None
+
+    @property
+    def enabled(self) -> bool:
+        return self.num_postprocess_workers > 0
 
 
 class WorkerCommIpcAddrs(NamedTuple):

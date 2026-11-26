@@ -36,7 +36,8 @@ import pytest
 import torch
 
 from tensorrt_llm.bindings import executor as tllm
-from tensorrt_llm.executor.result import GenerationResultBase, Logprob
+from tensorrt_llm.executor.logprobs import Logprob
+from tensorrt_llm.llmapi.engine_client.result import GenerationResultBase
 from tensorrt_llm.sampling_params import SamplingParams
 
 pytestmark = pytest.mark.cpu_only
@@ -159,7 +160,7 @@ def test_end_id_finish_is_untouched():
 @pytest.mark.parametrize("streaming", [False, True])
 @pytest.mark.parametrize("beam_search", [False, True])
 def test_sampler_logprobs_survive_prompt_response_wrapper(streaming, beam_search):
-    from tensorrt_llm.executor.result import LogProbsResult
+    from tensorrt_llm.executor.logprobs import LogProbsResult
 
     params = SamplingParams(n=2 if beam_search else 1, use_beam_search=beam_search, logprobs=1)
     result = GenerationResultBase(id=0, sampling_params=params)

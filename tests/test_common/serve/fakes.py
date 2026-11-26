@@ -43,9 +43,9 @@ from tokenizers.pre_tokenizers import Whitespace
 from transformers import PreTrainedTokenizerFast
 
 from tensorrt_llm._torch.async_llm import AsyncLLM
-from tensorrt_llm.executor.result import GenerationResultBase
 from tensorrt_llm.inputs.registry import DefaultInputProcessor
 from tensorrt_llm.llmapi import MultimodalEncoder
+from tensorrt_llm.llmapi.engine_client.result import GenerationResultBase
 from tensorrt_llm.llmapi.llm import LLM, PreprocessedInputs
 from tensorrt_llm.llmapi.tokenizer import TransformersTokenizer
 from tensorrt_llm.sampling_params import SamplingParams

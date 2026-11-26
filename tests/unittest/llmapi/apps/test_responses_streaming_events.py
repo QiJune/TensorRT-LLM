@@ -36,7 +36,7 @@ from starlette.requests import ClientDisconnect
 
 import tensorrt_llm.serve.responses_utils as responses_utils
 from tensorrt_llm._utils import AdjustedSteadyClock
-from tensorrt_llm.executor import EngineDeadError, RequestError
+from tensorrt_llm.executor.utils import EngineDeadError, RequestError
 from tensorrt_llm.serve.openai_protocol import ResponsesRequest
 from tensorrt_llm.serve.responses_utils import (
     ClosingStreamingResponse,

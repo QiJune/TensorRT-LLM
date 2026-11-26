@@ -12,7 +12,7 @@ must drop those late responses via ``self._results.get(client_id)`` rather than
 
 from types import SimpleNamespace
 
-from tensorrt_llm.executor.proxy import GenerationExecutorProxy
+from tensorrt_llm.llmapi.engine_client.proxy import GenerationExecutorProxy
 
 
 class _FakeResultQueue:

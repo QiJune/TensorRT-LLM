@@ -5,7 +5,8 @@ import time
 import pytest
 from test_base_worker import create_fake_llm_args
 
-from tensorrt_llm.executor.rpc_proxy import GenerationExecutorRpcProxy
+from tensorrt_llm.llmapi.engine_client.rpc_proxy import \
+    GenerationExecutorRpcProxy
 from tensorrt_llm.llmapi.llm_args import KvCacheConfig
 from tensorrt_llm.llmapi.tokenizer import TransformersTokenizer
 from tensorrt_llm.llmapi.utils import logger_debug

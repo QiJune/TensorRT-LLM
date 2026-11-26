@@ -476,10 +476,10 @@ async def _rpc_shutdown() -> None:
     """An unanswered stats RPC must time out or release its caller on close."""
     import threading
 
-    from tensorrt_llm.executor.proxy import GenerationExecutorProxy
     from tensorrt_llm.executor.rpc import RPCCancelled, RPCClient, RPCServer, RPCTimeout
     from tensorrt_llm.executor.rpc.rpc_common import get_unique_ipc_addr
-    from tensorrt_llm.executor.rpc_proxy import GenerationExecutorRpcProxy
+    from tensorrt_llm.llmapi.engine_client.proxy import GenerationExecutorProxy
+    from tensorrt_llm.llmapi.engine_client.rpc_proxy import GenerationExecutorRpcProxy
 
     for mode in (
         "deadline",

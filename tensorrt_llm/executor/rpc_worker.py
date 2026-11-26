@@ -16,9 +16,9 @@ from ..llmapi.llm_args import BaseLlmArgs
 from ..llmapi.tokenizer import TokenizerBase
 from ..logger import set_level
 from .base_worker import BaseWorker
-from .postproc_worker import PostprocWorkerConfig
 from .rpc import RPCServer
 from .rpc_worker_mixin import RpcWorkerMixin
+from .utils import PostprocWorkerConfig
 
 _RPC_SHUTDOWN_RETRY = "retry"
 _RPC_SHUTDOWN_COMMIT = "commit"

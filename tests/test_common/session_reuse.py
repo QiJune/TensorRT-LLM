@@ -62,13 +62,13 @@ from test_common.grouped_test_utils import reset_worker_torch_compile_state, sub
 # The only places in the library that construct MpiPoolSession for a bare
 # LLM(...); tests passing their own _mpi_session never reach these lines.
 _PATCH_TARGETS = (
-    "tensorrt_llm.executor.proxy",
+    "tensorrt_llm.llmapi.engine_client.proxy",
     "tensorrt_llm.llmapi.llm",
 )
 # RPC executors that construct their own pool use a drain-then-build factory.
 # LLM creates its pool earlier and needs the per-test opt-out described above
 # to avoid carrying IPC thread-local state into RPC engine setup.
-_RPC_PATCH_TARGET = "tensorrt_llm.executor.rpc_proxy"
+_RPC_PATCH_TARGET = "tensorrt_llm.llmapi.engine_client.rpc_proxy"
 _ALL_PATCH_TARGETS = _PATCH_TARGETS + (_RPC_PATCH_TARGET,)
 
 

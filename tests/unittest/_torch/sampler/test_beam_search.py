@@ -47,10 +47,11 @@ from tensorrt_llm._torch.pyexecutor.sampler.beam_search import (
 from tensorrt_llm.bindings.executor import FinishReason
 from tensorrt_llm.bindings.internal.batch_manager import \
     LlmRequest as CppLlmRequest
-from tensorrt_llm.executor import RequestError
-from tensorrt_llm.executor.result import CompletionOutput, GenerationResult
+from tensorrt_llm.executor.utils import RequestError
 from tensorrt_llm.llmapi import (CacheTransceiverConfig, CudaGraphConfig,
                                  KvCacheConfig)
+from tensorrt_llm.llmapi.engine_client.result import (CompletionOutput,
+                                                      GenerationResult)
 from tensorrt_llm.sampling_params import LogitsProcessor
 
 
