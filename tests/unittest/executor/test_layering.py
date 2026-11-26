@@ -12,13 +12,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-"""Import directions between the engine host and its clients.
+"""Import directions between the engine and its frontend.
 
-``tensorrt_llm.executor`` is the engine host. It also defines what its clients exchange with it:
-the requests, the responses and errors, and the queues and calls. The LLM API's client of the
-engine (``tensorrt_llm.llmapi.engine_client``) and the serving frontends import those; the engine
-does not import its clients. A contract forbids imports by module prefix; a baseline allowance
-records the imports that existed when the contract was written and only shrinks.
+The engine is ``tensorrt_llm.executor`` (the engine host) and ``tensorrt_llm._torch``; the frontend
+is ``tensorrt_llm.serve``, ``tensorrt_llm.llmapi``, ``tensorrt_llm.grpc`` and
+``tensorrt_llm.commands``. The frontend imports the engine, including the requests, responses and
+queues ``tensorrt_llm.executor`` defines for its clients; the engine does not import the frontend,
+so that the frontend can be replaced as a whole. A contract forbids imports by module prefix; a
+baseline allowance records the imports that existed when the contract was written and only shrinks.
 """
 
 from pathlib import Path
@@ -57,9 +58,20 @@ _ENGINE_INTERNALS = tuple(
     )
 )
 
-# The engine's imports of the LLM API's client side. The worker is also the in-process
-# GenerationExecutor and returns GenerationResults, and rank 0 starts the postprocess workers.
-_ENGINE_USES_CLIENT = frozenset(
+# The configuration and the helpers both sides use still live in the LLM API package; the engine
+# reads them until the engine's configuration becomes part of its contract.
+_SHARED_FOR_NOW = (
+    "tensorrt_llm.llmapi.llm_args",
+    "tensorrt_llm.llmapi.llm_utils",
+    "tensorrt_llm.llmapi.tracer",
+    "tensorrt_llm.llmapi.utils",
+)
+
+# The engine's other imports of the frontend. The worker is also the in-process GenerationExecutor
+# and returns GenerationResults; rank 0 starts the postprocess workers; a precompile pool reuses
+# the process-group helpers of the multi-node launcher's guard script; PyExecutor creation starts
+# the OpenEngine node service; and tensorrt_llm._torch.LLM is kept as an alias of the LLM class.
+_ENGINE_USES_FRONTEND = frozenset(
     {
         ("tensorrt_llm.executor.base_worker", f"{_CLIENT}.executor", "GenerationExecutor"),
         ("tensorrt_llm.executor.base_worker", f"{_CLIENT}.postproc_worker", "PostprocWorker"),
@@ -73,26 +85,41 @@ _ENGINE_USES_CLIENT = frozenset(
         ),
         ("tensorrt_llm.executor.worker", f"{_CLIENT}.postproc_worker", "PostprocWorker"),
         ("tensorrt_llm.executor.worker", f"{_CLIENT}.postproc_worker", "postproc_worker_main"),
-        # tensorrt_llm._torch.LLM, kept for callers that import the LLM class from there.
+        (
+            "tensorrt_llm._torch.attention.backends.fmha.prims_ts_precompile",
+            "tensorrt_llm.llmapi._llmapi_process_guard",
+            "_child_finished",
+        ),
+        (
+            "tensorrt_llm._torch.attention.backends.fmha.prims_ts_precompile",
+            "tensorrt_llm.llmapi._llmapi_process_guard",
+            "_cleanup_group",
+        ),
+        (
+            "tensorrt_llm._torch.pyexecutor.py_executor_creator",
+            "tensorrt_llm.grpc.openengine.node",
+            "initialize_node_discovery",
+        ),
         ("tensorrt_llm._torch.llm", "tensorrt_llm.llmapi.llm", "_TorchLLM"),
     }
 )
 
 CONTRACTS = (
     Contract(
-        name="the engine does not import the LLM API's client side",
+        name="the engine does not import the frontend",
         importers=("tensorrt_llm.executor", "tensorrt_llm._torch"),
         forbidden=(
-            _CLIENT,
-            "tensorrt_llm.llmapi.async_llm",
-            "tensorrt_llm.llmapi.llm",
-            "tensorrt_llm.llmapi.tokenizer",
+            "tensorrt_llm.commands",
+            "tensorrt_llm.grpc",
+            "tensorrt_llm.llmapi",
+            "tensorrt_llm.serve",
         ),
-        allowed=_ENGINE_USES_CLIENT,
+        allowed=_ENGINE_USES_FRONTEND,
         fix=(
-            "Define what the engine and its clients share in tensorrt_llm.executor (request.py, "
-            "utils.py, logprobs.py) and import it from there. The baseline only shrinks: delete "
-            "an allowance when its import goes away."
+            "The frontend (serve, llmapi, grpc, commands) imports the engine, not the other way "
+            "round. Put what both use in the engine (tensorrt_llm.executor) or in a module outside "
+            "the frontend packages. The baseline only shrinks: delete an allowance when its import "
+            "goes away."
         ),
     ),
     Contract(
@@ -113,10 +140,18 @@ CONTRACTS = (
 )
 
 
+def _reads_shared_module(edge) -> bool:
+    return any(edge.imported == m or edge.imported.startswith(m + ".") for m in _SHARED_FOR_NOW)
+
+
 @pytest.fixture(scope="module")
 def edges():
     graph = build_import_graph(REPO_ROOT / "tensorrt_llm", "tensorrt_llm")
-    return [edge for edge in graph if edge.importer not in _SHIM_MODULES]
+    return [
+        edge
+        for edge in graph
+        if edge.importer not in _SHIM_MODULES and not _reads_shared_module(edge)
+    ]
 
 
 def test_contracts_hold(edges):
