@@ -65,6 +65,7 @@ def _replace_at_worker_on_background_error(response):
     worker = SimpleNamespace(
         enable_postprocess_parallel=False,
         _refused_client_ids=set(),
+        _engine_wire_active=False,
         _error_queue=errors,
         frontend_result_queues=None,
         result_queue=SimpleNamespace(put=sent.extend),

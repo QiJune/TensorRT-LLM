@@ -25,6 +25,7 @@ from ...executor.logprobs import Logprob, SimpleTokenLogprobs, TokenLogprobs
 from ...executor.utils import (EngineDeadError, ErrorResponse, ResponseWrapper,
                                _build_perf_metrics_dict, has_event_loop,
                                is_llm_response)
+from ...executor.wire import decode_first_gen_logprobs, decode_prefill_usage
 from ...logger import logger
 from ...metrics import MetricNames, RequestEventTiming
 from ...metrics.perf import (FINISH_REASON_LABEL, PerfMetricsCollector,
@@ -35,6 +36,7 @@ from ...sampling_params import LogprobParams, SamplingParams
 from ..tracer import global_tracer
 from ..utils import AsyncQueue, print_traceback_on_error
 from .postprocessor_hook import PostProcessorHook, apply_post_processor_hook
+from .proto_wire import StepRow, StepRowOutputs, StepRowResult, take_outputs
 
 if TYPE_CHECKING:
     from ...executor.request import GenerationRequest, PostprocParams
@@ -620,6 +622,79 @@ class GenerationResultBase:
             self._disaggregated_params.mrope_position_deltas_handle = (
                 mrope_position_deltas_handle)
 
+    def _handle_step_row(self, row: StepRowResult) -> None:
+        """Handle a row of the proto wire (proto_wire.py) as an LlmResponse's result.
+
+        Every pickled response carries the request-level counters; a row carries
+        them only when they changed, so a row without them keeps the values this
+        sequence had.
+        """
+        self._done = row.is_final
+        if row.decoding_iter is not None:
+            self.decoding_iter = row.decoding_iter
+            self.avg_decoded_tokens_per_iter = row.avg_decoded_tokens_per_iter
+        if row.counters is not None:
+            (self.cached_tokens, self.ctx_computed_tokens, self.ctx_first_begin,
+             self.ctx_num_chunks) = row.counters
+        spec = row.spec
+        if spec is not None:
+            (self.per_pos_drafted, self.per_pos_accepted,
+             self.spec_dec_totals) = spec
+        else:
+            # unchanged since this sequence's last row, which set them here
+            spec = (self._outputs[row.sequence_index]._spec_dec_counters
+                    or _SpecDecCounters())
+        (row.per_pos_drafted, row.per_pos_accepted, row.spec_dec_totals) = spec
+        perf = row.request_perf_metrics
+        stats = (_build_perf_metrics_dict(perf) or None) if perf else None
+        logprobs_result = take_outputs(row) if isinstance(
+            row, StepRowOutputs) else None
+        if row.prefill_usage is not None:
+            self._take_ctx_usage(decode_prefill_usage(*row.prefill_usage))
+        kv = row.kv_export
+        if kv is not None:
+            self._take_context_phase(
+                ctx_request_id=kv["ctx_request_id"],
+                first_gen_tokens=kv["first_gen_tokens"],
+                draft_tokens=kv["draft_tokens"],
+                ctx_dp_rank=kv["ctx_dp_rank"],
+                ctx_info_endpoint=kv["ctx_info_endpoint"],
+                opaque_state=kv["opaque_state"],
+                remote_tail_start=kv.get("remote_tail_start"))
+        output_token_ids = row.output_token_ids
+        if (not self.sampling_params.exclude_input_from_output
+                and not getattr(self, "_streaming", False)):
+            # the rows carry new tokens only; a pickled Result puts the prompt first
+            prompt = self._generation_request.prompt_token_ids
+            output_token_ids = [prompt + ids for ids in output_token_ids]
+        if self.sampling_params.use_beam_search:
+            sequences = range(len(output_token_ids))
+        else:
+            sequences = (row.sequence_index, )
+        for sequence in sequences:
+            self._handle_sequence(row.finish_reasons,
+                                  row,
+                                  sequence,
+                                  logprobs_result,
+                                  stats,
+                                  output_token_ids=output_token_ids,
+                                  request_perf_metrics=perf)
+        if kv is not None:
+            handed = kv.get("first_gen_log_probs")
+            if handed is not None:
+                handed = decode_first_gen_logprobs(handed)
+            self._take_first_gen(handed)
+        if row.context_logits is not None:
+            self._context_logits = row.context_logits
+        if (encoder := row.encoder_export) is not None:
+            self._take_encoder_handles(
+                encoder.get("mm_embedding_handles"),
+                encoder.get("mrope_position_ids_handle"),
+                encoder.get("mrope_position_deltas_handle"))
+        if self._background_error_handler and (
+                handler := self._background_error_handler()):
+            handler()
+
     @print_traceback_on_error
     @nvtx_range_debug("handle_response",
                       color="red",
@@ -632,6 +707,11 @@ class GenerationResultBase:
         Args:
             response: Executor or postprocessing result for this request.
         """
+        if isinstance(response, StepRow) and response.error_msg is None:
+            # a row that ends its request with an error takes the error branch below
+            self._handle_step_row(response.result)
+            return
+
         req_perf_metrics_dict = None
         if isinstance(response, ResponseWrapper):
             req_perf_metrics_dict = response.request_perf_metrics

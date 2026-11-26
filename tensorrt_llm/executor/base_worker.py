@@ -49,6 +49,7 @@ from ..llmapi.tracer import global_tracer
 from ..llmapi.utils import _SyncQueue, configure_cpu_affinity, logger_debug
 from ..sampling_params import SamplingParams
 from ..tokenizer import TokenizerBase
+from . import engine_server
 from ._load_balance_env import (LAUNCH_QUEUES_ENV, configure_moe_launch_queues,
                                 uses_collective_shutdown)
 from .ipc import IpcQueue
@@ -151,6 +152,10 @@ class BaseWorker(GenerationExecutor):
         # Requests already answered with an error by _maybe_wrap_response and
         # aborted; their remaining engine responses are dropped.
         self._refused_client_ids: Set[int] = set()
+        # The proto wire (engine_server.py): whether rank 0 publishes rows
+        # as StepOutputs, and the requests whose rows it prepares in Python.
+        self._engine_wire_active = False
+        self._prepared_client_ids: set[int] = set()
         self._await_response_helper = AwaitResponseHelper(weakref.proxy(self))
         self._backend = None if llm_args is None else llm_args.backend
         self._lora_config = llm_args.lora_config if llm_args is not None else None
@@ -1688,6 +1693,11 @@ class AwaitResponseHelper:
         # bare ErrorResponse (a NamedTuple) would be splatted by extend().
         rsp_batch = []
 
+        if (self.worker._engine_wire_active
+                and not self.worker._has_background_error()):
+            responses = engine_server.publish(
+                self.worker, responses, self.enable_postprocprocess_parallel)
+
         for response in responses:
 
             if isinstance(response, ErrorResponse):
@@ -1731,6 +1741,8 @@ def _get_params_for_first_rsp(
            Optional["DisaggregatedParams"]]:
     res = worker._results.get(client_id, None)
     assert res is not None
+    if isinstance(res, engine_server.RequestEntry):
+        return engine_server.first_params(res)
     if not res._params_transmitted:
         res._params_transmitted = True
         return res.sampling_params, res.postproc_params, res.disaggregated_params

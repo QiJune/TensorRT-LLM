@@ -41,6 +41,7 @@ from tensorrt_llm.logger import logger
 
 from ..._torch.pyexecutor.llm_request import release_undelivered_response
 from ..._utils import customized_gc_thresholds, mpi_rank, nvtx_range_debug
+from ...executor import wire
 from ...executor.ipc import FusedIpcQueue, IpcQueue
 from ...executor.mpi_session import (MpiCommSession, MpiPoolSession, MpiSession,
                                      RemoteMpiCommSessionClient,
@@ -66,6 +67,7 @@ from ..llm_args import TorchLlmArgs
 from ..tracer import enable_llm_tracer, get_tracer, global_tracer
 from ..utils import (AsyncQueue, ManagedThread, _SyncQueue, enable_llm_debug,
                      logger_debug, print_colored)
+from . import proto_wire
 from .executor import GenerationExecutor
 from .postproc_worker import PostprocWorker
 from .prompt_tail import PromptTailPolicy
@@ -901,7 +903,11 @@ class GenerationExecutorProxy(GenerationExecutor):
             global_tracer().log_instant("IPC.get")
             if i is None:
                 return False
-            process_res(i)
+            if isinstance(i, wire.StepFrame):
+                for row in proto_wire.decode(i, self._results):
+                    process_res(row)
+            else:
+                process_res(i)
 
         if async_queues:
             try:
@@ -1193,6 +1199,9 @@ class GenerationExecutorProxy(GenerationExecutor):
         the request as it is now, and a request that cannot be pickled raises
         here.
         """
+        if wire.ENABLED and isinstance(request, GenerationRequest):
+            request = proto_wire.encode(request,
+                                        self.postproc_config.enabled) or request
         if self._request_sender is None:
             self.request_queue.put(request)
         else:

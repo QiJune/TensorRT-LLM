@@ -70,10 +70,16 @@ _SHARED_FOR_NOW = (
 # The engine's other imports of the frontend. The worker is also the in-process GenerationExecutor
 # and returns GenerationResults; rank 0 starts the postprocess workers; a precompile pool reuses
 # the process-group helpers of the multi-node launcher's guard script; PyExecutor creation starts
-# the OpenEngine node service; and tensorrt_llm._torch.LLM is kept as an alias of the LLM class.
+# the OpenEngine node service; rank 0 builds the thinking-budget logits processor a proto request
+# asks for; and tensorrt_llm._torch.LLM is kept as an alias of the LLM class.
 _ENGINE_USES_FRONTEND = frozenset(
     {
         ("tensorrt_llm.executor.base_worker", f"{_CLIENT}.executor", "GenerationExecutor"),
+        (
+            "tensorrt_llm.executor.engine_server",
+            "tensorrt_llm.llmapi.thinking_budget",
+            "ThinkingBudgetLogitsProcessor",
+        ),
         ("tensorrt_llm.executor.base_worker", f"{_CLIENT}.postproc_worker", "PostprocWorker"),
         ("tensorrt_llm.executor.base_worker", f"{_CLIENT}.result", "GenerationResult"),
         ("tensorrt_llm.executor.ray.gpu_worker", f"{_CLIENT}.result", "GenerationResult"),

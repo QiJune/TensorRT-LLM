@@ -36,6 +36,7 @@ from ..llmapi.llm_args import BaseLlmArgs, TorchLlmArgs
 from ..llmapi.tracer import VizTracer, set_global_tracer
 from ..llmapi.utils import ManagedThread, logger_debug, print_traceback_on_error
 from ..tokenizer import TokenizerBase
+from . import engine_server, wire
 from ._load_balance_env import (LAUNCH_QUEUES_ENV, configure_moe_launch_queues,
                                 uses_collective_shutdown)
 from .base_worker import BaseWorker, _init_hf_modules
@@ -708,6 +709,8 @@ def worker_main(
                             logger.warning(f"stop_profile rejected: {e}")
                             ack_err = str(e)
                         send_profile_ack("stop", ack_err, req)
+                    elif isinstance(req, wire.SubmitFrame):
+                        engine_server.submit(worker, req)
                     elif isinstance(req, GenerationRequest):
                         try:
                             worker.submit(req)
