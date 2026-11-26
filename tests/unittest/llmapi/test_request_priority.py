@@ -20,18 +20,25 @@ Tests cover priority propagation through:
   - GenerationExecutor.generate_async -> GenerationRequest
   - BaseLLM.generate (scalar and list priority)
   - BaseLLM.generate_async -> executor.generate_async
-  - BaseWorker._enqueue_request (default fallback to 0.5)
+  - proto_wire.encode + engine_server.submit -> the engine's request
   - executor_request_to_llm_request (no override)
 """
 
-from unittest.mock import MagicMock, patch
+import struct
+from unittest.mock import MagicMock
 
 import pytest
+from test_common.executor.fakes import fake_rank0
 
 from tensorrt_llm.executor.request import DEFAULT_REQUEST_PRIORITY, GenerationRequest
 from tensorrt_llm.sampling_params import SamplingParams
 
 pytestmark = pytest.mark.cpu_only
+
+
+def _float32(value: float) -> float:
+    """Return ``value`` as engine.proto and the executor's Request hold a priority: a float32."""
+    return struct.unpack("f", struct.pack("f", value))[0]
 
 
 # ---------------------------------------------------------------------------
@@ -136,32 +143,20 @@ class TestGenerationExecutorPriorityPropagation:
 
 
 # ---------------------------------------------------------------------------
-# BaseWorker._enqueue_request  -  priority default of 0.5
+# proto_wire.encode + engine_server.submit  -  the engine's request
 # ---------------------------------------------------------------------------
 
 
-class TestBaseWorkerPriorityDefault:
-    """Verify that BaseWorker passes request.priority to tllm.Request."""
+class TestRank0RequestPriority:
+    """Verify that rank 0 gives the engine's request the GenerationRequest's priority."""
 
-    def _captured_tllm_request_priority(self, request_priority):
-        """Run _enqueue_request with a mocked engine.
+    def _enqueued_request_priority(self, request_priority):
+        """Submit a request's frame to a fake rank 0.
 
-        Returns the priority value that was passed to tllm.Request.
+        Returns the priority of the request rank 0 enqueued.
         """
-        import tensorrt_llm.executor.base_worker as bw_mod
-
-        captured = {}
-
-        class CapturingRequest:
-            def __init__(self, *args, **kwargs):
-                captured["priority"] = kwargs.get("priority")
-                # Mimic minimal interface used by _enqueue_request
-                self.py_num_logprobs = None
-                self.py_lora_path = None
-                self.py_logprobs_mode = None
-
-            def __setattr__(self, name, value):
-                object.__setattr__(self, name, value)
+        from tensorrt_llm.executor import engine_server
+        from tensorrt_llm.llmapi.engine_client import proto_wire
 
         req = GenerationRequest(
             prompt_token_ids=[1, 2, 3],
@@ -170,39 +165,26 @@ class TestBaseWorkerPriorityDefault:
         )
         req.set_id(42)
 
-        # Build a minimal mock worker.
-        # max_seq_len=None causes _deduce_max_tokens to return max_tokens early
-        # (via the "cannot be deduced" path), avoiding arithmetic on MagicMocks.
-        worker = MagicMock()
-        worker.llm_args = MagicMock()
-        worker.llm_args.max_beam_width = 1
-        worker.llm_args.return_perf_metrics = False
-        worker.max_seq_len = None
-        worker.engine = MagicMock()
-        worker.engine.enqueue_request = MagicMock(return_value=42)
+        worker = fake_rank0()
+        engine_server.submit(worker, proto_wire.encode(req, postprocess=False), raise_errors=True)
 
-        with patch.object(bw_mod.tllm, "Request", CapturingRequest):
-            # Call the unbound method directly with our mock worker as self
-            from tensorrt_llm.executor.base_worker import BaseWorker
-
-            BaseWorker._enqueue_request(worker, req, result_wait_queue=None)
-
-        return captured.get("priority")
+        (enqueued,) = worker.engine.enqueued
+        return enqueued.request.priority
 
     def test_explicit_priority_is_forwarded(self):
-        priority = self._captured_tllm_request_priority(0.8)
-        assert priority == 0.8
+        priority = self._enqueued_request_priority(0.8)
+        assert priority == _float32(0.8)
 
     def test_default_priority_is_half(self):
-        priority = self._captured_tllm_request_priority(DEFAULT_REQUEST_PRIORITY)
+        priority = self._enqueued_request_priority(DEFAULT_REQUEST_PRIORITY)
         assert priority == DEFAULT_REQUEST_PRIORITY
 
     def test_low_priority_is_forwarded(self):
-        priority = self._captured_tllm_request_priority(0.1)
-        assert priority == 0.1
+        priority = self._enqueued_request_priority(0.1)
+        assert priority == _float32(0.1)
 
     def test_high_priority_is_forwarded(self):
-        priority = self._captured_tllm_request_priority(1.0)
+        priority = self._enqueued_request_priority(1.0)
         assert priority == 1.0
 
 

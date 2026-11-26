@@ -67,11 +67,12 @@ _SHARED_FOR_NOW = (
     "tensorrt_llm.llmapi.utils",
 )
 
-# The engine's other imports of the frontend. The worker is also the in-process GenerationExecutor
-# and returns GenerationResults; rank 0 starts the postprocess workers; a precompile pool reuses
-# the process-group helpers of the multi-node launcher's guard script; PyExecutor creation starts
-# the OpenEngine node service; rank 0 builds the thinking-budget logits processor a proto request
-# asks for; and tensorrt_llm._torch.LLM is kept as an alias of the LLM class.
+# The engine's other imports of the frontend. The worker is also the in-process GenerationExecutor:
+# it returns GenerationResults and encodes and decodes the wire as a frontend does. Rank 0 starts
+# the postprocess workers; a precompile pool reuses the process-group helpers of the multi-node
+# launcher's guard script; PyExecutor creation starts the OpenEngine node service; rank 0 builds
+# the thinking-budget logits processor a proto request asks for; and tensorrt_llm._torch.LLM is
+# kept as an alias of the LLM class.
 _ENGINE_USES_FRONTEND = frozenset(
     {
         ("tensorrt_llm.executor.base_worker", f"{_CLIENT}.executor", "GenerationExecutor"),
@@ -82,7 +83,8 @@ _ENGINE_USES_FRONTEND = frozenset(
         ),
         ("tensorrt_llm.executor.base_worker", f"{_CLIENT}.postproc_worker", "PostprocWorker"),
         ("tensorrt_llm.executor.base_worker", f"{_CLIENT}.result", "GenerationResult"),
-        ("tensorrt_llm.executor.ray.gpu_worker", f"{_CLIENT}.result", "GenerationResult"),
+        ("tensorrt_llm.executor.base_worker", _CLIENT, "proto_wire"),
+        ("tensorrt_llm.executor.ray.gpu_worker", _CLIENT, "proto_wire"),
         ("tensorrt_llm.executor.rpc_worker_mixin", f"{_CLIENT}.postproc_worker", "PostprocWorker"),
         (
             "tensorrt_llm.executor.rpc_worker_mixin",

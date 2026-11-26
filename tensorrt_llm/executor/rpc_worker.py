@@ -30,7 +30,7 @@ class RpcWorker(RpcWorkerMixin, BaseWorker):
 
     Actions:
         - `setup_engine`: Setup the engine.
-        - `submit`: Submit a request to the worker.
+        - `submit_frame`: Submit a frame of requests to the worker.
         - `fetch_responses`: Fetch the latest responses from engine.
         - `fetch_stats`: Fetch the latest stats from engine.
         - `fetch_kv_cache_events`: Fetch the latest kv cache events from engine.

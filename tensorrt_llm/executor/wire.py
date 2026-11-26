@@ -1,22 +1,15 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""The executor's proto wire (the engine contract, tensorrt_llm/contracts/engine/v1/engine.proto).
+"""The executor's wire (the engine contract, tensorrt_llm/contracts/engine/v1/engine.proto).
 
-Off by default; with ``TLLM_PROTO_WIRE=1``, a request the proto carries goes from the proxy to
-rank 0 as a ``SubmitBatch``, and rank 0 sends its rows back as one ``StepOutput`` per step and
-frontend instead of one pickled ``LlmResponse`` per row. Any other request, and any response the
-proto cannot carry, keeps the pickled path. The proto bytes ride in the existing queues, which
-still sign every message.
-
-This module is what both sides use: the switch, the frames, the native codec
-(tensorrt_llm.bindings.internal.engine_wire, which holds the GIL only to read and build Python
-objects), and the conversions both sides make, as ``encode_*``/``decode_*`` pairs. The frontend's
-half is llmapi/engine_client/proto_wire.py, rank 0's engine_server.py.
+What both sides use: the frames that carry the contract's messages through the executor's
+queues, the native codec (tensorrt_llm.bindings.internal.engine_wire, which holds the GIL only to
+read and build Python objects), and the conversions both sides make, as ``encode_*``/``decode_*``
+pairs. The frontend's half is llmapi/engine_client/proto_wire.py, rank 0's engine_server.py.
 """
 
 import dataclasses
 import functools
-import os
 import pickle  # nosec B403
 from types import ModuleType
 from typing import TYPE_CHECKING, NamedTuple, Optional
@@ -25,12 +18,11 @@ import torch
 
 from ..disaggregated_params import DisaggregatedParams, DisaggScheduleStyle
 from ..sampling_params import LogprobMode, SamplingParams
+from .logprobs import Logprob
 
 if TYPE_CHECKING:
     from ..inputs.multimodal import MultimodalParams
     from .request import PostprocParams
-
-ENABLED = os.environ.get("TLLM_PROTO_WIRE", "0") == "1"
 
 # engine.proto's DType values
 DTYPES = {
@@ -43,6 +35,7 @@ DTYPES = {
     torch.int8: 7,
     torch.uint8: 8,
     torch.bool: 9,
+    torch.float64: 10,
 }
 _TORCH_DTYPES = {code: dtype for dtype, code in DTYPES.items()}
 
@@ -88,41 +81,57 @@ def native() -> ModuleType:
 
 
 class SubmitFrame:
-    """A ``SubmitBatch`` from a proxy to rank 0, and the client ids of its requests."""
+    """A ``SubmitBatch`` from a frontend to rank 0.
 
-    __slots__ = ("data", "client_ids")
+    ``client_ids`` are its requests'; ``objects`` the Python objects its messages refer to
+    (Value.object), which travel pickled beside them; ``refusal`` the error rank 0 refuses the
+    requests with instead.
+    """
 
-    def __init__(self, data: bytes, client_ids: tuple):
+    __slots__ = ("data", "client_ids", "objects", "refusal")
+
+    def __init__(
+        self,
+        data: bytes,
+        client_ids: tuple,
+        objects: Optional[list] = None,
+        refusal: Optional[str] = None,
+    ):
         self.data = data
         self.client_ids = client_ids
+        self.objects = objects
+        self.refusal = refusal
 
     def __reduce__(self):
-        return SubmitFrame, (self.data, self.client_ids)
+        return SubmitFrame, (self.data, self.client_ids, self.objects, self.refusal)
 
 
 class StepFrame:
-    """One step's ``StepOutput`` for one frontend."""
+    """One step's ``StepOutput`` for one frontend, and the tensor bytes it names (TensorRef.buffer)."""
 
-    __slots__ = ("data",)
+    __slots__ = ("data", "buffers")
 
-    def __init__(self, data: bytes):
+    def __init__(self, data: bytes, buffers: Optional[list] = None):
         self.data = data
+        self.buffers = buffers
 
     def __reduce__(self):
-        return StepFrame, (self.data,)
+        return StepFrame, (self.data, self.buffers)
 
 
 class FrontendContext(NamedTuple):
     """What a postprocess worker builds a request's record from.
 
     The frontend sends it with the request (Request.frontend_context), and the request's first
-    row brings it back, as the first Input of a pickled request carries these params.
+    row brings it back. ``prompt_token_ids`` is the prompt of a request whose outputs start with
+    it, else None.
     """
 
     sampling_params: SamplingParams
     postproc_params: Optional["PostprocParams"]
     streaming: bool
     disaggregated_params: Optional[DisaggregatedParams]
+    prompt_token_ids: Optional[list]
 
 
 def encode_frontend_context(context: FrontendContext) -> bytes:
@@ -155,7 +164,8 @@ def device_tensor(dtype: int, shape: list, data: bytes, device: Optional[int]) -
 def tensor_ref(tensor: torch.Tensor) -> Optional[tuple]:
     """engine.proto's (dtype, shape, bytes, device) of ``tensor``; None for a dtype it has no name for.
 
-    The bytes go inline, with the CUDA device the tensor was on, where the frontend puts it back.
+    The device is the CUDA device the tensor was on, where the receiver puts it back. The bytes go
+    inline in a request, and beside the message in a StepOutput.
     """
     dtype = DTYPES.get(tensor.dtype)
     if dtype is None:
@@ -207,9 +217,6 @@ def encode_first_gen_logprobs(entries: list) -> list:
 
 def decode_first_gen_logprobs(entries: list) -> list:
     """The inverse of ``encode_first_gen_logprobs``."""
-    # result.py imports this module
-    from .logprobs import Logprob
-
     return [
         entry
         if isinstance(entry, float)
@@ -271,9 +278,9 @@ def decode_disagg(disagg: tuple) -> DisaggregatedParams:
 def encode_multimodal(params: "MultimodalParams") -> tuple:
     """engine.proto's Multimodal of a request's MultimodalParams: (items, model inputs).
 
-    An item is (hash, uuid, position, length, run positions, run lengths). The frontend sends
-    only a layout the items can say: one item at least, uuids when one is set, runs when there
-    is one.
+    An item is (hash, uuid, position, length, run positions, run lengths). The layout goes as
+    ``decode_multimodal`` rebuilds it: no items as no layout, uuids that are all None and runs
+    that are all empty as none at all.
     """
     mm = params.multimodal_input
     if mm is None:

@@ -19,15 +19,16 @@ import os
 import threading
 from typing import Callable, List, Optional
 
-from ..._torch.pyexecutor.llm_request import release_undelivered_response
 from ..._utils import nvtx_range_debug
+from ...executor import wire
 from ...executor.request import GenerationRequest
 from ...executor.rpc import RPCClient
 from ...executor.rpc.rpc_common import get_unique_ipc_addr
-from ...executor.utils import ErrorResponse, RequestError, is_llm_response
+from ...executor.utils import ErrorResponse, RequestError
 from ...logger import logger
 from ..tracer import global_tracer
 from ..utils import _SyncQueue
+from . import proto_wire
 from .postproc_worker import PostprocWorker
 from .result import GenerationResult
 
@@ -120,7 +121,8 @@ class RpcExecutorMixin:
         # submit is a fire-and-forget operation, don't need to wait for response
         try:
             with nvtx_range_debug("RPCExecutor.submit", color="green", category="Proxy"):
-                self.rpc_client.submit(request).remote(need_response=False)
+                frame = proto_wire.encode(request, self.postproc_config.enabled)
+                self.rpc_client.submit_frame(frame).remote(need_response=False)
         except Exception:
             # The request never reached the worker: drop the registration so
             # the id does not linger in _results.
@@ -135,13 +137,16 @@ class RpcExecutorMixin:
 
         def process_res(res: list):
             for r in res:
+                if isinstance(r, wire.StepFrame):
+                    process_res(proto_wire.decode(r, self._results))
+                    continue
                 client_id = r.client_id
                 nonlocal event_loop
                 nonlocal async_queues
 
                 if client_id not in self._results:
                     logger.warning(f"Received response for unknown client_id: {client_id}")
-                    release_undelivered_response(r)
+                    proto_wire.release_undelivered(r)
                     continue
 
                 queue = self._results[client_id].queue
@@ -158,7 +163,7 @@ class RpcExecutorMixin:
                 # carry their own is_final, mirroring the classic proxy's
                 # dispatch_result_task handling.
                 if (
-                    (is_llm_response(r) and r.result.is_final)
+                    (isinstance(r, proto_wire.StepRow) and r.result.is_final)
                     or isinstance(r, ErrorResponse)
                     or (isinstance(r, PostprocWorker.Output) and r.is_final)
                 ):

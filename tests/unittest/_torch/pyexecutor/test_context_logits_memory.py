@@ -188,10 +188,11 @@ def test_prompt_logprobs_survive_batch_dependent_projection_switch(
 ) -> None:
     from tensorrt_llm._torch.modules.context_logits import context_logits_scope
     from tensorrt_llm._torch.pyexecutor.handle_logits import HandleLogits
-    from tensorrt_llm.executor.base_worker import (
+    from tensorrt_llm.executor.engine_server import (
         IncompleteContextLogitsError,
-        _compute_pytorch_prompt_logprobs,
+        _compute_prompt_logprobs,
     )
+    from tensorrt_llm.sampling_params import LogprobParams
 
     # Compare chunk boundaries with full FP32 accumulation on every GEMM shape.
     monkeypatch.setattr(torch.backends.cuda.matmul, "allow_tf32", False)
@@ -244,27 +245,19 @@ def test_prompt_logprobs_survive_batch_dependent_projection_switch(
     assert projected_rows == ([32, 22, 1] if legacy_first else [32, 5, 1])
     targets = request.get_tokens(0)[1:] + [13]
     expected = compute_prompt_logprobs(3, reference.cpu(), targets).prompt
-    response = SimpleNamespace(
-        request_id=0,
-        result=SimpleNamespace(
-            context_logits=None,
-            context_prompt_logprob_rows=request.py_result.context_prompt_logprob_rows,
-            context_prompt_last_logprobs=request.py_result.context_prompt_last_logprobs,
-            get_result=lambda: SimpleNamespace(output_token_ids=[[13]]),
-        ),
+    result = SimpleNamespace(
+        context_logits=None,
+        context_prompt_logprob_rows=request.py_result.context_prompt_logprob_rows,
+        context_prompt_last_logprobs=request.py_result.context_prompt_last_logprobs,
+        get_result=lambda: SimpleNamespace(output_token_ids=[[13]]),
     )
-    generation = SimpleNamespace(
-        _streaming=True,
-        _logprob_params=SimpleNamespace(prompt_logprobs=3, prompt_logprobs_simple_format=False),
-        _generation_request=SimpleNamespace(prompt_token_ids=request.get_tokens(0)),
-    )
-    actual = _compute_pytorch_prompt_logprobs(generation, response)
-    assert_logprobs_equal(actual.prompt, expected)
+    params = LogprobParams(prompt_logprobs=3)
+    actual = _compute_prompt_logprobs(params, request.get_tokens(0), result)
+    assert_logprobs_equal(actual, expected)
     # Rows that skip a reused prefix cannot be aligned with the prompt.
-    response.result.context_prompt_logprob_rows = request.py_result.context_prompt_logprob_rows[1:]
-    generation._cached_prompt_logprobs = None
+    result.context_prompt_logprob_rows = request.py_result.context_prompt_logprob_rows[1:]
     with pytest.raises(IncompleteContextLogitsError, match="all 91 prompt tokens"):
-        _compute_pytorch_prompt_logprobs(generation, response)
+        _compute_prompt_logprobs(params, request.get_tokens(0), result)
     assert request.py_result.context_logits is None
     assert request.py_result._context_logits._storage is None
 
@@ -408,10 +401,13 @@ def test_decoder_keeps_graph_replay_unless_bounded_projection_is_active(
 @pytest.mark.cpu_only
 def test_short_compact_prompt_logprobs_fail_only_their_request() -> None:
     """Rows that skip a reused KV prefix cannot be aligned, so the request fails."""
-    from unittest.mock import Mock
+    from test_common.executor.fakes import fake_rank0
 
-    from tensorrt_llm.executor.base_worker import _maybe_wrap_response
+    from tensorrt_llm.executor import engine_server
+    from tensorrt_llm.executor.request import GenerationRequest
     from tensorrt_llm.executor.utils import ErrorResponse
+    from tensorrt_llm.llmapi.engine_client import proto_wire
+    from tensorrt_llm.sampling_params import SamplingParams
 
     def response(is_final: bool) -> SimpleNamespace:
         return SimpleNamespace(
@@ -428,21 +424,19 @@ def test_short_compact_prompt_logprobs_fail_only_their_request() -> None:
             ),
         )
 
-    generation = SimpleNamespace(
-        _streaming=False,
-        _logprob_params=SimpleNamespace(
-            prompt_logprobs=0, prompt_logprobs_simple_format=False, drop_context_logits=True
-        ),
-        _generation_request=SimpleNamespace(prompt_token_ids=[1, 2, 3, 4]),
-        clear_logprob_params=Mock(),
-    )
-    worker = SimpleNamespace(
-        _results={7: generation}, _refused_client_ids=set(), abort_request=Mock()
-    )
+    # rank 0's record of a request for its prompt logprobs, a frontend's request
+    request = GenerationRequest([1, 2, 3, 4], SamplingParams(max_tokens=4, prompt_logprobs=0))
+    request.set_id(7)
+    worker = fake_rank0()
+    engine_server.submit(worker, proto_wire.encode(request, postprocess=False), raise_errors=True)
+    responses = [response(is_final=False)]
 
-    wrapped = _maybe_wrap_response(worker, response(is_final=False))
+    prepared = engine_server._prepare(worker, responses, {7})
 
-    assert isinstance(wrapped, ErrorResponse)
-    assert "all 4 prompt tokens, got 2" in wrapped.error_msg
-    worker.abort_request.assert_called_once_with(7)
+    assert prepared == [None]
+    (error,) = responses
+    assert isinstance(error, ErrorResponse)
+    assert error.request_id == 70
+    assert "all 4 prompt tokens, got 2" in error.error_msg
+    assert worker.aborted == [7]
     assert worker._refused_client_ids == {7}

@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
+# SPDX-License-Identifier: Apache-2.0
 """submit() must register the GenerationResult before the RPC send.
 
 The response loop runs on another thread and handle_responses() drops any
@@ -12,7 +14,11 @@ import importlib.util
 import types
 
 import pytest
+from test_common.executor.fakes import executor_requests, fake_rank0
 
+from tensorrt_llm._torch.pyexecutor.llm_request import FinishReason
+from tensorrt_llm._torch.pyexecutor.response_utils import prepare_response
+from tensorrt_llm.executor import engine_server
 from tensorrt_llm.executor.request import GenerationRequest
 from tensorrt_llm.llmapi.engine_client.executor import GenerationExecutor
 from tensorrt_llm.llmapi.engine_client.rpc_proxy_mixin import RpcExecutorMixin
@@ -21,41 +27,39 @@ from tensorrt_llm.sampling_params import SamplingParams
 pytestmark = pytest.mark.cpu_only
 
 
-class _FinalResponse:
-    """Duck-typed final LlmResponse (is_llm_response keys on has_error)."""
-
-    def __init__(self, client_id: int):
-        self.client_id = client_id
-        self.result = types.SimpleNamespace(is_final=True)
-
-    def has_error(self) -> bool:
-        return False
-
-
 class _RacingRpcClient:
-    """rpc_client stand-in that answers synchronously inside the send.
+    """rpc_client stand-in whose rank 0 answers inside the send.
 
-    The final response is delivered before submit() can run anything that
-    follows the send: the extreme form of the response-thread race.
+    Rank 0 takes the frame, the request ends at once, and the proxy handles
+    its final row before submit() can run anything that follows the send: the
+    extreme form of the response-thread race.
     """
 
     def __init__(self, proxy):
         self._proxy = proxy
         self.sent = []
 
-    def submit(self, request):
+    def submit_frame(self, frame):
         client = self
 
         class _Call:
             def remote(self, need_response=False):
-                client.sent.append(request.id)
-                client._proxy.handle_responses([[_FinalResponse(request.id)]])
+                client.sent.extend(frame.client_ids)
+                rank0 = fake_rank0()
+                engine_server.submit(rank0, frame, raise_errors=True)
+                ((request,),) = executor_requests(rank0.engine.enqueued)
+                request.add_new_token(5, 0)
+                request.finish_by(FinishReason.LENGTH, 0)
+                rank0._await_response_helper.process_and_handle_responses(
+                    [prepare_response(request)]
+                )
+                client._proxy.handle_responses(rank0.result_queue.items)
 
         return _Call()
 
 
 class _FailingRpcClient:
-    def submit(self, request):
+    def submit_frame(self, frame):
         class _Call:
             def remote(self, need_response=False):
                 raise RuntimeError("send failed")
@@ -87,7 +91,7 @@ def _make_proxy(cls, rpc_client_factory):
     proxy = cls.__new__(cls)
     proxy._results = {}
     proxy._last_client_id = 0
-    proxy.postproc_config = types.SimpleNamespace(num_postprocess_workers=0)
+    proxy.postproc_config = types.SimpleNamespace(num_postprocess_workers=0, enabled=False)
     proxy.rpc_client = rpc_client_factory(proxy)
     return proxy
 
@@ -107,7 +111,7 @@ def test_response_arriving_during_send_is_delivered(cls):
     # The final response was delivered to the result queue instead of being
     # dropped as "unknown client_id" ...
     delivered = result.queue.get_nowait()
-    assert delivered.client_id == request.id
+    assert delivered.client_id == request.id and delivered.result.is_final
     # ... and, being final, the registration was released.
     assert request.id not in proxy._results
 

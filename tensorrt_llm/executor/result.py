@@ -31,8 +31,6 @@ _LAZY_NAMES = {
     "GenerationResultBase": "tensorrt_llm.llmapi.engine_client.result",
     "IterationResult": "tensorrt_llm.llmapi.engine_client.result",
     "PostprocWorker": "tensorrt_llm.llmapi.engine_client.result",
-    "ResponseWrapper": "tensorrt_llm.executor.utils",
-    "get_metrics_dict": "tensorrt_llm.executor.utils",
     "LogProbsResult": "tensorrt_llm.executor.logprobs",
     "Logprob": "tensorrt_llm.executor.logprobs",
     "SimpleTokenLogprobs": "tensorrt_llm.executor.logprobs",

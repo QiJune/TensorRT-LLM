@@ -25,6 +25,7 @@ import time
 from types import SimpleNamespace
 
 import pytest
+from test_common.executor.fakes import executor_requests, fake_rank0
 
 from tensorrt_llm.executor.utils import (
     FRONTEND_COUNTER_MASK,
@@ -78,7 +79,7 @@ def _response(client_id):
 
 
 class TestClassicResponseBucketing:
-    """The classic IPC path routes batches with bucket_responses_by_frontend."""
+    """The classic IPC path routes ErrorResponse batches with bucket_responses_by_frontend."""
 
     def test_buckets_by_namespace(self):
         responses = [
@@ -103,55 +104,86 @@ class TestClassicResponseBucketing:
         assert len(buckets[0]) == 1 and not buckets[1]
 
 
-class _LaneStub:
-    def __init__(self):
-        self.items = []
+class TestClassicLaneRouting:
+    """Rank 0 sends each response down the lane of the frontend its client id names.
 
-    def put(self, obj):
-        self.items.append(obj)
-
-
-class TestClassicSendRspLaneRouting:
-    """_send_rsp selects the origin frontend's lane on the non-postproc path."""
+    engine_server.publish puts a batch's rows in one StepFrame per frontend lane;
+    AwaitResponseHelper.handle_for_ipc_batched sends the ErrorResponses no request
+    entry waits for in one list per lane.
+    """
 
     @staticmethod
-    def _fake_worker(num_lanes):
-        pops = []
-        return SimpleNamespace(
-            result_queue=None,
-            postproc_queues=None,
-            frontend_result_queues=[_LaneStub() for _ in range(num_lanes)],
-            _pop_result=pops.append,
-        ), pops
+    def _submit(worker, client_id, **sampling):
+        """Submit a request to rank 0 as the frontend ``client_id`` names sends it."""
+        from tensorrt_llm.executor import engine_server
+        from tensorrt_llm.executor.request import GenerationRequest
+        from tensorrt_llm.llmapi.engine_client import proto_wire
+        from tensorrt_llm.sampling_params import SamplingParams
+
+        request = GenerationRequest([1, 2, 3], SamplingParams(**sampling), streaming=True)
+        request.set_id(client_id)
+        engine_server.submit(worker, proto_wire.encode(request, postprocess=False))
+        return request
+
+    def test_rows_route_to_origin_lane(self):
+        from tensorrt_llm._torch.pyexecutor.response_utils import prepare_response
+        from tensorrt_llm.executor.wire import StepFrame
+        from tensorrt_llm.llmapi.engine_client import proto_wire
+        from tensorrt_llm.llmapi.engine_client.result import GenerationResult
+
+        worker = fake_rank0(lanes=3)
+        # Frontend 7 has no lane among three, so its rows go to the launcher's.
+        client_ids_by_lane = {
+            0: [namespace_client_id(0, 1), namespace_client_id(7, 1)],
+            1: [namespace_client_id(1, 1), namespace_client_id(1, 2)],
+            2: [namespace_client_id(2, 1)],
+        }
+        results = {}
+        for client_ids in client_ids_by_lane.values():
+            for client_id in client_ids:
+                results[client_id] = GenerationResult(self._submit(worker, client_id))
+
+        # every request's first token
+        responses = []
+        for (request,) in executor_requests(worker.engine.enqueued):
+            request.add_new_token(5, 0)
+            responses.append(prepare_response(request))
+        worker._await_response_helper.handle_for_ipc_batched(responses)
+
+        for lane, client_ids in client_ids_by_lane.items():
+            # One StepFrame per lane for the whole batch.
+            ((frame,),) = worker.frontend_result_queues[lane].items
+            assert isinstance(frame, StepFrame)
+            rows = proto_wire.decode(frame, results)
+            assert sorted(row.client_id for row in rows) == sorted(client_ids)
+        # The requests go on, so rank 0 keeps their entries.
+        assert worker.popped == []
+        assert worker._results.keys() == results.keys()
 
     def test_error_response_routes_to_origin_lane(self):
-        from tensorrt_llm.executor.base_worker import _send_rsp
         from tensorrt_llm.executor.utils import ErrorResponse
 
-        worker, pops = self._fake_worker(3)
+        worker = fake_rank0(lanes=3)
         client_id = namespace_client_id(2, 7)
-        _send_rsp(worker, ErrorResponse(client_id, "boom", 1))
+        # Rank 0 refuses the request, so no request entry waits for its ErrorResponse.
+        self._submit(worker, client_id, max_tokens=0)
+        assert not worker._results
+
+        worker._await_response_helper.process_and_handle_responses([])
+
         assert [len(q.items) for q in worker.frontend_result_queues] == [0, 0, 1]
-        assert pops == [client_id]
+        ((error,),) = worker.frontend_result_queues[2].items
+        assert isinstance(error, ErrorResponse)
+        assert error.client_id == client_id
+        assert worker.popped == [client_id]
 
     def test_none_client_id_routes_to_launcher_lane(self):
-        from tensorrt_llm.executor.base_worker import _send_rsp
         from tensorrt_llm.executor.utils import ErrorResponse
 
-        worker, _ = self._fake_worker(2)
-        _send_rsp(worker, ErrorResponse(None, "adp dummy", 1))
+        worker = fake_rank0(lanes=2)
+        worker._await_response_helper.handle_for_ipc_batched([ErrorResponse(None, "adp dummy", 1)])
         assert len(worker.frontend_result_queues[0].items) == 1
         assert not worker.frontend_result_queues[1].items
-
-    def test_rsp_batch_defers_lane_selection(self):
-        from tensorrt_llm.executor.base_worker import _send_rsp
-        from tensorrt_llm.executor.utils import ErrorResponse
-
-        worker, _ = self._fake_worker(2)
-        rsp_batch = []
-        _send_rsp(worker, ErrorResponse(namespace_client_id(1, 3), "x", 1), rsp_batch=rsp_batch)
-        assert len(rsp_batch) == 1
-        assert all(not q.items for q in worker.frontend_result_queues)
 
 
 class TestClassicFrontendProxyEndToEnd:
@@ -219,6 +251,7 @@ class TestClassicFrontendProxyEndToEnd:
 
     def test_submit_namespaces_and_shutdown_never_sends_sentinel(self):
         from tensorrt_llm.executor.request import CancellingRequest, GenerationRequest
+        from tensorrt_llm.executor.wire import SubmitFrame
         from tensorrt_llm.sampling_params import SamplingParams
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -232,8 +265,8 @@ class TestClassicFrontendProxyEndToEnd:
             assert get_frontend_id(result.request_id) == 1
             assert worker_ingress.poll(5)
             received = worker_ingress.get()
-            assert isinstance(received, GenerationRequest)
-            assert received.id == result.request_id
+            assert isinstance(received, SubmitFrame)
+            assert received.client_ids == (result.request_id,)
 
             # Frontend shutdown aborts its in-flight requests (cancel) but
             # must NOT emit the None engine-shutdown sentinel.

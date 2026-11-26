@@ -12,7 +12,12 @@ must drop those late responses via ``self._results.get(client_id)`` rather than
 
 from types import SimpleNamespace
 
+from test_common.executor.fakes import Rank0
+
+from tensorrt_llm._torch.pyexecutor.llm_request import FinishReason
+from tensorrt_llm.executor.request import GenerationRequest
 from tensorrt_llm.llmapi.engine_client.proxy import GenerationExecutorProxy
+from tensorrt_llm.sampling_params import SamplingParams
 
 
 class _FakeResultQueue:
@@ -51,7 +56,7 @@ def test_late_response_after_terminate_is_dropped_without_keyerror():
     proxy = _make_proxy()
     proxy._results = {}  # terminate already finalized + popped this client_id
 
-    late = SimpleNamespace(client_id=999, has_error=False, result=SimpleNamespace(is_final=True))
+    late = SimpleNamespace(client_id=999, result=SimpleNamespace(is_final=True))
     proxy.result_queue = _FakeResultQueue([late])
 
     # Must not raise KeyError; the dispatch loop stays alive (returns True).
@@ -64,13 +69,22 @@ def test_final_response_is_delivered_and_popped():
     This establishes the exact condition under which a later duplicate becomes
     the 'late response' that the drop above guards against.
     """
+    request = GenerationRequest([1, 2, 3], SamplingParams(max_tokens=1))
+    request.set_id(7)
+    rank0 = Rank0()
+    (sequence,) = rank0.submit(request)
+    sequence.add_new_token(5, 0)
+    sequence.finish_by(FinishReason.LENGTH, 0)
+    # the request's last row, in the StepFrame rank 0 sends the proxy
+    (message,) = rank0.send(sequence)
+
     proxy = _make_proxy()
     queue = _RecordingQueue()
-    proxy._results = {7: SimpleNamespace(queue=queue)}
-
-    resp = SimpleNamespace(client_id=7, has_error=False, result=SimpleNamespace(is_final=True))
-    proxy.result_queue = _FakeResultQueue([resp])
+    # decoding reads what the request asked for from its result
+    proxy._results = {7: SimpleNamespace(queue=queue, sampling_params=request.sampling_params)}
+    proxy.result_queue = _FakeResultQueue([message])
 
     assert proxy.dispatch_result_task() is True
-    assert queue.delivered == [resp]
+    (row,) = queue.delivered
+    assert row.client_id == 7 and row.result.is_final
     assert 7 not in proxy._results  # popped on is_final

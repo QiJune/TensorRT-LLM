@@ -31,10 +31,12 @@ from tensorrt_llm.executor.ray.utils import (_configure_deep_gemm_cache,
                                              control_action_decorator)
 
 from ... import TorchLlmArgs
-from ...llmapi.engine_client.result import GenerationResult
+# enqueue_request is a frontend in the engine's process
+from ...llmapi.engine_client import proto_wire
 from ...llmapi.llm_args import BaseLlmArgs, ExecutorMemoryType
 from ...llmapi.utils import configure_cpu_affinity
 from ...tokenizer import TokenizerBase
+from .. import engine_server
 from .._load_balance_env import (LAUNCH_QUEUES_ENV, configure_moe_launch_queues,
                                  uses_collective_shutdown)
 from ..base_worker import BaseWorker
@@ -156,10 +158,6 @@ class RayWorkerWrapper:
             return func(self, *args, **kwargs)
 
         return wrapper
-
-    @ensure_distributed_setup
-    def submit(self, request: GenerationRequest) -> GenerationResult:
-        return self.worker.submit(request)
 
     @ensure_distributed_setup
     def enqueue_request(self,
@@ -323,7 +321,12 @@ class RayGPUWorker(RpcWorkerMixin, BaseWorker):
     def enqueue_request(self,
                         request: GenerationRequest,
                         result_wait_queue: Queue | None = None) -> int:
-        return self._enqueue_request(request, result_wait_queue)
+        assert request.id is not None
+        return engine_server.submit(self,
+                                    proto_wire.encode(request,
+                                                      postprocess=False),
+                                    raise_errors=True,
+                                    result_wait_queue=result_wait_queue)
 
     def sleep(self, sleep_tags: List[str]) -> None:
         assert isinstance(self.llm_args,

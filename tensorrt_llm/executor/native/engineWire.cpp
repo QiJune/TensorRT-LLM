@@ -15,14 +15,18 @@
  * limitations under the License.
  */
 
-// The executor's proto wire (engine.proto): a frontend sends a SubmitBatch to rank 0, and rank 0
-// sends each frontend one StepOutput per step.
+// The executor's wire (engine.proto): a frontend sends a SubmitBatch to rank 0, and rank 0 sends
+// each frontend one StepOutput per step.
 //
-// Frontend (engine_client.py): encode_requests, decode_rows, and frontend_contexts for the
+// Frontend (proto_wire.py): encode_requests, decode_rows, and frontend_contexts for the
 // postprocess workers. Rank 0 (engine_server.py): ingress, publish. Both sides (wire.py):
-// set_tensor_codec. encode_requests raises NotCarried (a ValueError) for a request that holds a
-// value engine.proto cannot carry, and publish returns the responses it cannot carry: both keep
-// the pickled path. KIND_* and STATUS_* are the values of Kind and Status below.
+// set_tensor_codec. Python objects a Value cannot say travel beside a SubmitBatch, in the objects
+// list encode_requests fills and ingress reads (Value.object, LogitsProcessor.object); a sealed
+// handoff holds none. A StepOutput's tensor bytes travel beside it (TensorRef.buffer).
+// encode_requests raises NotCarried (a ValueError) for a request that holds a value engine.proto
+// cannot carry, which the frontend refuses; ingress gives a request it cannot take as None with its
+// error; publish ends a request whose response it cannot carry with an error row. KIND_* and
+// STATUS_* are the values of Kind and Status below.
 
 #include "engineWire.h"
 #include "engine/v1/engine.pb.h"
@@ -57,8 +61,8 @@ namespace
 
 using Tokens = google::protobuf::RepeatedField<int32_t>;
 
-// A value engine.proto cannot carry: Python's NotCarried, a ValueError. Its request or row keeps the
-// pickled path.
+// A value engine.proto cannot carry: Python's NotCarried, a ValueError. The frontend refuses a request
+// that holds one; in publish it becomes a RowError.
 struct NotCarried : std::runtime_error
 {
     using std::runtime_error::runtime_error;
@@ -381,8 +385,10 @@ nb::list listOf(Field const& f)
     return l;
 }
 
-// A TensorRef, its data inline, from Python's (dtype, shape, bytes, device); device None: host memory.
-void putTensorRef(nb::handle t, ev1::TensorRef* ref)
+// A TensorRef from Python's (dtype, shape, bytes, device); device None: host memory. Its data goes
+// inline, or, given buffers, beside the message: appended to buffers, and TensorRef.buffer numbers it
+// where the message is put together (appendRow).
+void putTensorRef(nb::handle t, ev1::TensorRef* ref, std::vector<nb::object>* buffers = nullptr)
 {
     ref->set_dtype(static_cast<ev1::DType>(nb::cast<int>(t[0])));
     for (nb::handle s : t[1])
@@ -394,7 +400,14 @@ void putTensorRef(nb::handle t, ev1::TensorRef* ref)
     {
         throw nb::type_error("a tensor's data must be bytes");
     }
-    ref->set_inline_data(PyBytes_AS_STRING(data.ptr()), static_cast<size_t>(PyBytes_GET_SIZE(data.ptr())));
+    if (buffers != nullptr)
+    {
+        buffers->push_back(data);
+    }
+    else
+    {
+        ref->set_inline_data(PyBytes_AS_STRING(data.ptr()), static_cast<size_t>(PyBytes_GET_SIZE(data.ptr())));
+    }
     nb::object const device = t[3];
     if (!device.is_none())
     {
@@ -402,14 +415,24 @@ void putTensorRef(nb::handle t, ev1::TensorRef* ref)
     }
 }
 
-// The inverse of putTensorRef. Reads inline data only: a TensorRef in shared memory or CUDA IPC
-// raises.
-nb::tuple tensorRefOf(ev1::TensorRef const& ref)
+// The inverse of putTensorRef. Reads inline data, and given buffers (the ones beside the message) a
+// TensorRef.buffer; a TensorRef in shared memory or CUDA IPC raises.
+nb::tuple tensorRefOf(ev1::TensorRef const& ref, nb::list const* buffers = nullptr)
 {
-    check(ref.data_case() == ev1::TensorRef::kInlineData,
-        "a TensorRef whose data is not inline: this codec reads inline data only");
-    return nb::make_tuple(static_cast<int>(ref.dtype()), listOf(ref.shape()),
-        nb::bytes(ref.inline_data().data(), ref.inline_data().size()),
+    nb::object data;
+    if (ref.data_case() == ev1::TensorRef::kBuffer)
+    {
+        check(buffers != nullptr && ref.buffer() < buffers->size(),
+            "a TensorRef names a buffer the message does not carry");
+        data = (*buffers)[ref.buffer()];
+    }
+    else
+    {
+        check(ref.data_case() == ev1::TensorRef::kInlineData,
+            "a TensorRef whose data is neither inline nor a buffer: this codec reads no other");
+        data = nb::bytes(ref.inline_data().data(), ref.inline_data().size());
+    }
+    return nb::make_tuple(static_cast<int>(ref.dtype()), listOf(ref.shape()), data,
         ref.has_device() ? nb::cast(ref.device()) : nb::none());
 }
 
@@ -436,9 +459,29 @@ void setTensorCodec(nb::handle tensorType, nb::handle toRef, nb::handle fromRef)
     c.fromRef = nb::borrow(fromRef);
 }
 
+// An object put in objects, the list beside the message (Value.object, LogitsProcessor.object); its
+// index there. objects nullptr: the value cannot refer to an object, and NotCarried.
+uint32_t putObject(nb::handle v, nb::list* objects)
+{
+    if (objects == nullptr)
+    {
+        throw NotCarried("a value engine.proto's Value has no kind for");
+    }
+    objects->append(v);
+    return static_cast<uint32_t>(objects->size() - 1);
+}
+
+// The object at index in objects, the list beside the message; nullptr: no objects.
+nb::object objectAt(uint32_t index, nb::list const* objects)
+{
+    check(objects != nullptr && index < objects->size(), "an object index the message does not carry");
+    return (*objects)[index];
+}
+
 // A Python value as a Value: None, and bool, int, float, str, bytes, list, tuple and dict of
-// exactly those types, and tensors. Raises NotCarried for anything else.
-void putValue(nb::handle v, ev1::Value* out)
+// exactly those types, and tensors; any other object goes in objects (Value.object), or raises
+// NotCarried when objects is nullptr.
+void putValue(nb::handle v, ev1::Value* out, nb::list* objects)
 {
     PyObject* o = v.ptr();
     if (o == Py_None)
@@ -455,9 +498,12 @@ void putValue(nb::handle v, ev1::Value* out)
         long long const i = PyLong_AsLongLongAndOverflow(o, &overflow);
         if (overflow)
         {
-            throw NotCarried("an int beyond 64 bits");
+            out->set_object(putObject(v, objects));
         }
-        out->set_integer(i);
+        else
+        {
+            out->set_integer(i);
+        }
     }
     else if (PyFloat_CheckExact(o))
     {
@@ -482,7 +528,7 @@ void putValue(nb::handle v, ev1::Value* out)
         auto* items = PyList_CheckExact(o) ? out->mutable_list() : out->mutable_tuple();
         for (nb::handle x : v)
         {
-            putValue(x, items->add_items());
+            putValue(x, items->add_items(), objects);
         }
     }
     else if (PyDict_CheckExact(o))
@@ -494,28 +540,28 @@ void putValue(nb::handle v, ev1::Value* out)
         while (PyDict_Next(o, &pos, &key, &value))
         {
             auto* f = fields->add_fields();
-            putValue(key, f->mutable_key());
-            putValue(value, f->mutable_value());
+            putValue(key, f->mutable_key(), objects);
+            putValue(value, f->mutable_value(), objects);
         }
     }
     else
     {
         auto& c = tensorCodec();
-        if (!c.type.is_valid() || !PyObject_TypeCheck(o, asType(c.type)))
-        {
-            throw NotCarried("a value engine.proto's Value has no kind for");
-        }
-        nb::object ref = c.toRef(v);
+        // a tensor of a dtype engine.proto has no name for goes beside the message too
+        nb::object ref = c.type.is_valid() && PyObject_TypeCheck(o, asType(c.type)) ? c.toRef(v) : nb::none();
         if (ref.is_none())
         {
-            throw NotCarried("a tensor of a dtype engine.proto has no name for");
+            out->set_object(putObject(v, objects));
         }
-        putTensorRef(ref, out->mutable_tensor());
+        else
+        {
+            putTensorRef(ref, out->mutable_tensor());
+        }
     }
 }
 
 // The inverse of putValue. An unset Value is None.
-nb::object valueOf(ev1::Value const& v)
+nb::object valueOf(ev1::Value const& v, nb::list const* objects)
 {
     switch (v.kind_case())
     {
@@ -535,7 +581,7 @@ nb::object valueOf(ev1::Value const& v)
         nb::list l;
         for (auto const& x : v.list().items())
         {
-            l.append(valueOf(x));
+            l.append(valueOf(x, objects));
         }
         return l;
     }
@@ -544,7 +590,7 @@ nb::object valueOf(ev1::Value const& v)
         nb::object t = own(PyTuple_New(v.tuple().items_size()));
         for (int i = 0; i < v.tuple().items_size(); ++i)
         {
-            PyTuple_SET_ITEM(t.ptr(), i, valueOf(v.tuple().items(i)).release().ptr());
+            PyTuple_SET_ITEM(t.ptr(), i, valueOf(v.tuple().items(i), objects).release().ptr());
         }
         return t;
     }
@@ -553,19 +599,21 @@ nb::object valueOf(ev1::Value const& v)
         nb::dict d;
         for (auto const& f : v.map().fields())
         {
-            d[valueOf(f.key())] = valueOf(f.value());
+            d[valueOf(f.key(), objects)] = valueOf(f.value(), objects);
         }
         return d;
     }
+    case ev1::Value::kObject: return objectAt(v.object(), objects);
     default: return nb::none();
     }
 }
 
-// A handoff sealed for serve to pass on: a Value, serialized.
+// A handoff sealed for serve to pass on: a Value, serialized. It holds no objects, since serve passes
+// it on apart from the message it came with; a value that would need one raises NotCarried.
 std::string seal(nb::handle v)
 {
     ev1::Value value;
-    putValue(v, &value);
+    putValue(v, &value, nullptr);
     std::string s;
     check(value.SerializeToString(&s), "cannot serialize a handoff");
     return s;
@@ -575,7 +623,7 @@ nb::object unseal(std::string const& s)
 {
     ev1::Value value;
     check(value.ParseFromString(s), "malformed handoff");
-    return valueOf(value);
+    return valueOf(value, nullptr);
 }
 
 // A string-keyed field of a map Value, or null.
@@ -598,9 +646,9 @@ ev1::Value* addField(ev1::Value& map, char const* name)
     return f->mutable_value();
 }
 
-// The fields few requests set, from the dict engine_client.encode builds (None when the request
-// sets none).
-void putCold(nb::handle cold, ev1::Request* q)
+// The fields few requests set, from the dict proto_wire.encode builds (None when the request
+// sets none). objects: the list beside the message.
+void putCold(nb::handle cold, ev1::Request* q, nb::list* objects)
 {
     if (cold.is_none())
     {
@@ -776,7 +824,7 @@ void putCold(nb::handle cold, ev1::Request* q)
                 it->add_run_lengths(nb::cast<uint32_t>(x));
             }
         }
-        putValue(v[1], m->mutable_model_inputs());
+        putValue(v[1], m->mutable_model_inputs(), objects);
     }
     if (nb::handle v = key(cold, "thinking_budget")) // (budget, start ids, end ids)
     {
@@ -785,12 +833,20 @@ void putCold(nb::handle cold, ev1::Request* q)
         putTokens(b->mutable_start_ids(), v[1]);
         putTokens(b->mutable_end_ids(), v[2]);
     }
+    if (nb::handle v = key(cold, "logits_processors")) // Python callables, beside the message
+    {
+        for (nb::handle p : v)
+        {
+            q->add_logits_processors()->set_object(putObject(p, objects));
+        }
+    }
 }
 
 // encode_requests([(handle, prompt, stream, sampling_config, max_tokens, end_id, ignore_eos,
 //                   stop_words, bad_words, logprobs, logprobs_mode, priority, arrival_time,
-//                   cache_salt, cold)]) -> SubmitBatch bytes
-nb::bytes encodeRequests(nb::list items)
+//                   cache_salt, cold)], objects) -> SubmitBatch bytes
+// objects: a list the Python objects the messages refer to are appended to.
+nb::bytes encodeRequests(nb::list items, nb::list objects)
 {
     ev1::SubmitBatch batch;
     for (nb::handle item : items)
@@ -819,7 +875,7 @@ nb::bytes encodeRequests(nb::list items)
             out->set_logprobs(nb::cast<uint32_t>(t[9]));
         }
         out->set_logprobs_mode(static_cast<ev1::LogprobMode>(nb::cast<int>(t[10])));
-        // every pickled response has the counters; a non-streaming request has one row per
+        // the LLM API shows the counters on every response; a non-streaming request has one row per
         // sequence, at its end, where FinalInfo has them
         out->set_decoding_stats(q->stream());
         auto* sched = q->mutable_scheduling();
@@ -834,7 +890,7 @@ nb::bytes encodeRequests(nb::list items)
         {
             q->mutable_kv()->set_cache_salt(nb::cast<std::string>(t[13]));
         }
-        putCold(t[14], q);
+        putCold(t[14], q, &objects);
     }
     std::string s;
     check(batch.SerializeToString(&s), "cannot serialize SubmitBatch");
@@ -886,8 +942,8 @@ std::list<tle::VecTokens> wordLists(google::protobuf::RepeatedPtrField<ev1::Toke
     return out;
 }
 
-// What BaseWorker._enqueue_request's _deduce_max_tokens decides; the statuses name its warnings
-// and errors, which the caller words as it does. An error refuses the request.
+// The max_tokens a request runs with, from max_seq_len and its prompt. The statuses name its
+// warnings and errors, which engine_server.submit words. An error refuses the request.
 enum class Status : int
 {
     kOk = 0,
@@ -1096,8 +1152,10 @@ Kind requestKind(ev1::Sampling const& s)
 }
 
 // What only the Python side builds (PythonRequestInputs and LoRA), for engine_server.submit; None
-// when the request has none of it.
-nb::object pythonExtras(ev1::Request const& q)
+// when the request has none of it. objects: the list beside the message. Raises for a request this
+// engine cannot take (a logits processor plugin, a malformed handoff, an object index the message
+// does not carry), which ingress makes that request's error.
+nb::object pythonExtras(ev1::Request const& q, nb::list const* objects)
 {
     nb::dict extra;
     auto const& s = q.scheduling();
@@ -1191,7 +1249,7 @@ nb::object pythonExtras(ev1::Request const& q)
             items.append(nb::make_tuple(listOf(it.hash()), it.has_uuid() ? nb::cast(it.uuid()) : nb::none(),
                 it.position(), it.length(), listOf(it.run_positions()), listOf(it.run_lengths())));
         }
-        extra["multimodal"] = nb::make_tuple(items, valueOf(m.model_inputs()));
+        extra["multimodal"] = nb::make_tuple(items, valueOf(m.model_inputs(), objects));
     }
     auto const& sampling = q.sampling();
     if (sampling.has_embedding_bias())
@@ -1214,6 +1272,22 @@ nb::object pythonExtras(ev1::Request const& q)
             = nb::make_tuple(b.budget(), std::vector<int32_t>(b.start_ids().begin(), b.start_ids().end()),
                 std::vector<int32_t>(b.end_ids().begin(), b.end_ids().end()));
     }
+    if (q.logits_processors_size())
+    {
+        nb::list processors;
+        for (auto const& p : q.logits_processors())
+        {
+            switch (p.processor_case())
+            {
+            case ev1::LogitsProcessor::kObject: processors.append(objectAt(p.object(), objects)); break;
+            case ev1::LogitsProcessor::kName:
+                throw std::runtime_error("unsupported: the logits processor plugin \"" + p.name() + "\"");
+            case ev1::LogitsProcessor::PROCESSOR_NOT_SET:
+                throw std::runtime_error("a logits processor with neither a name nor an object");
+            }
+        }
+        extra["logits_processors"] = processors;
+    }
     if (extra.size() == 0)
     {
         return nb::none();
@@ -1221,13 +1295,15 @@ nb::object pythonExtras(ev1::Request const& q)
     return extra;
 }
 
-// ingress(SubmitBatch bytes, max_seq_len, cp_size, is_generation_model) ->
+// ingress(SubmitBatch bytes, objects, max_seq_len, cp_size, is_generation_model) ->
 //   [(client_id, tllm.Request or None, status, asked, limit, logprobs, logprobs_mode, end_id, arrival_time,
 //     extra, kind, decoding_stats)]
-// The requests are built as BaseWorker._enqueue_request builds them; the rest of the tuple is
-// what the caller needs for PythonRequestInputs and its warnings and errors (status, asked and
-// limit: MaxTokens).
-nb::list ingress(nb::bytes data, std::optional<int64_t> maxSeqLen, int64_t cpSize, bool isGenerationModel)
+// objects: the Python objects that came beside the message. The requests are built as the
+// executor's Request takes them; the rest of the tuple is what the caller needs for
+// PythonRequestInputs and its warnings and errors (status, asked and limit: MaxTokens). A request
+// that cannot be built or read is None, with its error in extra["error"].
+nb::list ingress(
+    nb::bytes data, nb::list objects, std::optional<int64_t> maxSeqLen, int64_t cpSize, bool isGenerationModel)
 {
     struct Built
     {
@@ -1238,7 +1314,7 @@ nb::list ingress(nb::bytes data, std::optional<int64_t> maxSeqLen, int64_t cpSiz
         int logprobsMode;
         std::optional<int32_t> endId;
         std::optional<double> arrival;
-        std::string error; // building the request failed
+        std::string error; // building or reading the request failed
     };
 
     ev1::SubmitBatch batch;
@@ -1301,8 +1377,19 @@ nb::list ingress(nb::bytes data, std::optional<int64_t> maxSeqLen, int64_t cpSiz
     for (size_t i = 0; i < built.size(); ++i)
     {
         auto& b = built[i];
+        auto const& q = batch.requests(static_cast<int>(i));
+        nb::object extra;
+        try
+        {
+            extra = pythonExtras(q, &objects);
+        }
+        catch (std::exception const& e)
+        {
+            b.error = e.what();
+            b.request.reset();
+            extra = nb::none();
+        }
         nb::object req = b.request ? nb::cast(std::move(*b.request), nb::rv_policy::move) : nb::none();
-        nb::object extra = pythonExtras(batch.requests(static_cast<int>(i)));
         if (!b.error.empty())
         {
             if (extra.is_none())
@@ -1311,7 +1398,6 @@ nb::list ingress(nb::bytes data, std::optional<int64_t> maxSeqLen, int64_t cpSiz
             }
             extra["error"] = b.error;
         }
-        auto const& q = batch.requests(static_cast<int>(i));
         out.append(nb::make_tuple(b.handle, req, static_cast<int>(b.maxTokens.status), b.maxTokens.asked,
             b.maxTokens.limit, b.logprobs ? nb::cast(*b.logprobs) : nb::none(), b.logprobsMode,
             b.endId ? nb::cast(*b.endId) : nb::none(), b.arrival ? nb::cast(*b.arrival) : nb::none(), extra,
@@ -1442,7 +1528,7 @@ struct Row
     char const* data = nullptr;
     size_t size = 0;
     bool isFinal = false;
-    std::optional<std::string> error;
+    std::optional<std::string> error; // an error row, which says only this and ends its request
     bool hasLogprobs = false;
     bool valuesOnly = false;
     std::vector<BeamLogprobs> logprobs;
@@ -1451,13 +1537,15 @@ struct Row
     std::optional<ev1::SpecDecodeStats> spec;
     std::optional<ev1::FinalInfo> final;
     std::vector<std::pair<std::string, ev1::TensorRef>> tensors;
+    std::vector<nb::object> tensorData;         // the tensors' bytes, which go beside the message
     std::vector<std::string> groups;
     std::optional<std::string> frontendContext; // RequestEntry.frontend_context, on the request's first row
     std::optional<ev1::Value> kvExtra;        // prepared: what a prefill part hands over besides its ContextPhaseParams
     std::optional<std::string> encoderExport; // prepared: an encoder part's sealed handoff
     // filled without the GIL
     std::optional<std::string> kvExport; // a prefill part's sealed handoff
-    bool fallback = false;
+    bool unclaimed = false;              // not this wire's row, for rest: no RequestEntry's, or after its error row
+    bool abortRequest = false;           // failRow ended a request that had not ended: rank 0 aborts it
     std::vector<tle::VecTokens> tokens;  // per beam
     std::vector<int> finish;             // per beam
     bool sequenceEnd = false;            // the row ends its sequence
@@ -1467,10 +1555,24 @@ struct Row
     std::optional<ev1::RequestTiming> timing;
 };
 
+// A response the wire cannot say: rank 0 ends its request with this error instead.
+struct RowError : std::runtime_error
+{
+    using std::runtime_error::runtime_error;
+};
+
+void require(bool ok, char const* what)
+{
+    if (!ok)
+    {
+        throw RowError(what);
+    }
+}
+
 // The sampler's dict[int, Logprob] for one token: the sampled token first, then the top-k by
-// rank, where a sampled token that is among the top-k carries its top-k entry. Returns false
-// when the dict is not of that shape, or a value is not a float32 the columns can hold.
-bool takeLogprobs(nb::handle dict, BeamLogprobs& out)
+// rank, where a sampled token that is among the top-k carries its top-k entry. A sampled token's
+// rank of None (not computed) goes as 0.
+void takeLogprobs(nb::handle dict, BeamLogprobs& out)
 {
     auto const& n = names();
     PyObject* key;
@@ -1481,38 +1583,27 @@ bool takeLogprobs(nb::handle dict, BeamLogprobs& out)
     {
         std::optional<int32_t> const id = int32Of(key);
         nb::object rank = getattrOrThrow(value, n.rank);
-        if (!id || rank.is_none())
-        {
-            return false;
-        }
+        require(id.has_value(), "a logprob of a token id that does not fit in int32");
+        require(!rank.is_none() || entries.empty(), "a top-k logprob without a rank");
         double const lp = nb::cast<double>(getattrOrThrow(value, n.logprob));
-        if (!isFloat32(lp))
-        {
-            return false;
-        }
-        entries.push_back({*id, static_cast<float>(lp), nb::cast<int64_t>(rank)});
+        require(isFloat32(lp), "a logprob that is not a float32");
+        entries.push_back({*id, static_cast<float>(lp), rank.is_none() ? 0 : nb::cast<int64_t>(rank)});
     }
-    if (entries.empty())
-    {
-        return false;
-    }
+    require(!entries.empty(), "a token without logprobs");
     int64_t maxOther = 0;
     for (size_t i = 1; i < entries.size(); ++i)
     {
         maxOther = std::max(maxOther, entries[i].rank);
     }
     std::vector<Candidate> topk(entries.begin() + 1, entries.end());
-    if (entries[0].rank < maxOther)
+    if (entries[0].rank > 0 && entries[0].rank < maxOther)
     {
         topk.push_back(entries[0]);
     }
     std::sort(topk.begin(), topk.end(), [](Candidate const& a, Candidate const& b) { return a.rank < b.rank; });
     for (size_t i = 0; i < topk.size(); ++i)
     {
-        if (topk[i].rank != static_cast<int64_t>(i) + 1)
-        {
-            return false;
-        }
+        require(topk[i].rank == static_cast<int64_t>(i) + 1, "top-k logprobs whose ranks are not 1 to k");
     }
     out.chosenIds.push_back(entries[0].id);
     out.chosen.push_back(entries[0].logprob);
@@ -1523,26 +1614,22 @@ bool takeLogprobs(nb::handle dict, BeamLogprobs& out)
         out.topkLogprobs.push_back(c.logprob);
     }
     out.topkEnds.push_back(static_cast<uint32_t>(out.topkIds.size()));
-    return true;
 }
 
-// The logprobs a response carries, per beam. Returns false when the columns cannot hold them.
-bool takeBeamLogprobs(nb::handle storage, Row& row)
+// The logprobs a response carries, per beam. A storage nothing was appended to yet (a request
+// that ended before its first token) has none, and the row says so.
+void takeBeamLogprobs(nb::handle storage, Row& row)
 {
     auto const& n = names();
-    // a storage nothing was appended to yet (a request cancelled before its first token) has
-    // neither attribute
     nb::object perBeam = getattrOr(storage, n.logProbs, Py_None);
     nb::object cum = getattrOr(storage, n.cumLogProbs, Py_None);
     if (perBeam.is_none() || cum.is_none())
     {
-        return false;
+        return;
     }
     size_t const beams = nb::len(perBeam);
-    if (beams == 0 || nb::len(cum) != beams || (row.kind != Kind::kBeams && beams != 1))
-    {
-        return false;
-    }
+    require(beams > 0 && nb::len(cum) == beams && (row.kind == Kind::kBeams || beams == 1),
+        "logprobs for other beams than the response's");
     row.hasLogprobs = true;
     row.logprobs.resize(beams);
     for (size_t b = 0; b < beams; ++b)
@@ -1552,48 +1639,37 @@ bool takeBeamLogprobs(nb::handle storage, Row& row)
         {
             if (PyDict_Check(item.ptr()))
             {
-                if (row.valuesOnly || !takeLogprobs(item, out))
-                {
-                    return false;
-                }
+                require(!row.valuesOnly, "logprobs of both formats");
+                takeLogprobs(item, out);
             }
-            else if (PyFloat_Check(item.ptr()))
+            else
             {
+                require(PyFloat_Check(item.ptr()), "a logprob of an unknown type");
                 double const lp = PyFloat_AS_DOUBLE(item.ptr());
-                if ((!row.valuesOnly && !out.chosen.empty()) || !isFloat32(lp))
-                {
-                    return false;
-                }
+                require(row.valuesOnly || out.chosen.empty(), "logprobs of both formats");
+                require(isFloat32(lp), "a logprob that is not a float32");
                 row.valuesOnly = true;
                 out.chosen.push_back(static_cast<float>(lp));
                 out.chosenRank.push_back(0);
                 out.topkEnds.push_back(static_cast<uint32_t>(out.topkIds.size()));
             }
-            else
-            {
-                return false;
-            }
         }
         row.cum.push_back(nb::cast<double>(cum[b]));
     }
-    return true;
 }
 
-// The speculative decoding counters (LlmResult.per_pos_drafted etc.). Returns false when only
-// the pickled path can say them.
-bool takeSpec(nb::handle result, nb::handle totals, Row& row)
+// The speculative decoding counters (LlmResult.per_pos_drafted etc.).
+void takeSpec(nb::handle result, nb::handle totals, Row& row)
 {
     auto const& n = names();
     nb::object drafted = getattrOr(result, n.perPosDrafted, Py_None);
     nb::object accepted = getattrOr(result, n.perPosAccepted, Py_None);
     if (drafted.is_none() && accepted.is_none() && totals.is_none())
     {
-        return true;
+        return;
     }
-    if (drafted.is_none() || accepted.is_none() || !PyList_Check(drafted.ptr()) || !PyList_Check(accepted.ptr()))
-    {
-        return false;
-    }
+    require(PyList_Check(drafted.ptr()) && PyList_Check(accepted.ptr()),
+        "speculative decoding counters that are not lists");
     ev1::SpecDecodeStats spec;
     for (nb::handle v : drafted)
     {
@@ -1607,58 +1683,41 @@ bool takeSpec(nb::handle result, nb::handle totals, Row& row)
     {
         spec.set_total_accepted(nb::cast<uint64_t>(totals[0]));
         spec.set_total_drafted(nb::cast<uint64_t>(totals[1]));
-        if (spec.total_drafted() == 0)
-        {
-            return false;
-        }
     }
     row.spec = std::move(spec);
-    return true;
 }
 
-// A steady-clock time in seconds as nanoseconds, when they give the same double back.
-bool toNs(nb::handle v, uint64_t& ns)
+// A steady-clock time in seconds, as nanoseconds.
+uint64_t toNs(nb::handle v)
 {
-    if (!PyFloat_Check(v.ptr()))
-    {
-        return false;
-    }
-    double const s = PyFloat_AS_DOUBLE(v.ptr());
-    if (!(s >= 0.))
-    {
-        return false;
-    }
-    ns = static_cast<uint64_t>(std::llround(s * 1e9));
-    return static_cast<double>(ns) / 1e9 == s;
+    require(PyFloat_Check(v.ptr()) || PyLong_Check(v.ptr()), "a time that is not a number");
+    double const s = nb::cast<double>(v);
+    require(s >= 0., "a negative time");
+    return static_cast<uint64_t>(std::llround(s * 1e9));
 }
 
 // A GPU time in milliseconds; an int 0 is the executor's "not measured yet".
-bool toMs(nb::handle v, std::optional<double>& ms)
+std::optional<double> toMs(nb::handle v)
 {
     if (PyFloat_Check(v.ptr()))
     {
-        ms = PyFloat_AS_DOUBLE(v.ptr());
-        return true;
+        return PyFloat_AS_DOUBLE(v.ptr());
     }
     int overflow = 0;
-    return PyLong_Check(v.ptr()) && PyLong_AsLongAndOverflow(v.ptr(), &overflow) == 0 && overflow == 0;
+    require(PyLong_Check(v.ptr()) && PyLong_AsLongAndOverflow(v.ptr(), &overflow) == 0 && overflow == 0,
+        "a GPU time that is neither a float nor 0");
+    return std::nullopt;
 }
 
 // One step_metrics or ctx_chunk_metrics entry, its keys in the order the executor writes them.
-bool takeStepTiming(nb::handle dict, bool generation, ev1::StepTiming* out)
+void takeStepTiming(nb::handle dict, bool generation, ev1::StepTiming* out)
 {
     auto const& n = names();
-    if (!PyDict_Check(dict.ptr()))
-    {
-        return false;
-    }
+    require(PyDict_Check(dict.ptr()), "a step timing that is not a dict");
     nb::handle const order[] = {n.forwardStartTime, n.forwardEndTime, n.sampleStartTime, n.sampleEndTime,
         n.gpuForwardTime, n.gpuSampleTime, n.tokenTime, n.iter};
     size_t const keys = generation ? 8 : 7;
-    if (static_cast<size_t>(PyDict_GET_SIZE(dict.ptr())) != keys)
-    {
-        return false;
-    }
+    require(static_cast<size_t>(PyDict_GET_SIZE(dict.ptr())) == keys, "a step timing with other keys");
     PyObject* key;
     PyObject* value;
     Py_ssize_t pos = 0;
@@ -1670,89 +1729,39 @@ bool takeStepTiming(nb::handle dict, bool generation, ev1::StepTiming* out)
         {
             throw nb::python_error();
         }
-        if (!same)
-        {
-            return false;
-        }
+        require(same, "a step timing with other keys");
         nb::handle v(value);
-        uint64_t ns = 0;
-        std::optional<double> ms;
         switch (i++)
         {
-        case 0:
-            if (!toNs(v, ns))
-            {
-                return false;
-            }
-            out->set_forward_start_ns(ns);
-            break;
-        case 1:
-            if (!toNs(v, ns))
-            {
-                return false;
-            }
-            out->set_forward_end_ns(ns);
-            break;
-        case 2:
-            if (!toNs(v, ns))
-            {
-                return false;
-            }
-            out->set_sample_start_ns(ns);
-            break;
-        case 3:
-            if (!toNs(v, ns))
-            {
-                return false;
-            }
-            out->set_sample_end_ns(ns);
-            break;
+        case 0: out->set_forward_start_ns(toNs(v)); break;
+        case 1: out->set_forward_end_ns(toNs(v)); break;
+        case 2: out->set_sample_start_ns(toNs(v)); break;
+        case 3: out->set_sample_end_ns(toNs(v)); break;
         case 4:
-            if (!toMs(v, ms))
-            {
-                return false;
-            }
-            if (ms)
+            if (auto ms = toMs(v))
             {
                 out->set_gpu_forward_ms(*ms);
             }
             break;
         case 5:
-            if (!toMs(v, ms))
-            {
-                return false;
-            }
-            if (ms)
+            if (auto ms = toMs(v))
             {
                 out->set_gpu_sample_ms(*ms);
             }
             break;
-        case 6:
-            if (!toNs(v, ns))
-            {
-                return false;
-            }
-            out->set_token_ns(ns);
-            break;
+        case 6: out->set_token_ns(toNs(v)); break;
         default:
-            if (!PyLong_Check(value))
-            {
-                return false;
-            }
+            require(PyLong_Check(value), "a step timing whose iter is not an int");
             out->set_iter(nb::cast<uint32_t>(v));
         }
     }
-    return true;
 }
 
 // LlmResult.time_breakdown_metrics, its keys in the order the executor writes them.
-bool takeBreakdown(nb::handle dict, ev1::TimeBreakdown* out)
+void takeBreakdown(nb::handle dict, ev1::TimeBreakdown* out)
 {
     auto const& n = names();
-    if (!PyDict_Check(dict.ptr()))
-    {
-        return false;
-    }
+    require(PyDict_Check(dict.ptr()), "a time breakdown that is not a dict");
     nb::handle const order[] = {n.stepMetrics, n.ctxChunkMetrics, n.ctxGpuForwardTime, n.ctxGpuSampleTime};
     PyObject* key;
     PyObject* value;
@@ -1773,32 +1782,20 @@ bool takeBreakdown(nb::handle dict, ev1::TimeBreakdown* out)
                 break;
             }
         }
-        if (i == 4)
-        {
-            return false;
-        }
+        require(i < 4, "a time breakdown with other keys");
         next = i + 1;
         nb::handle v(value);
         if (i < 2)
         {
-            if (!PyList_Check(value) || PyList_GET_SIZE(value) == 0)
-            {
-                return false;
-            }
+            require(PyList_Check(value) && PyList_GET_SIZE(value) > 0, "a time breakdown with an empty step list");
             for (nb::handle step : v)
             {
-                if (!takeStepTiming(step, i == 0, i == 0 ? out->add_steps() : out->add_ctx_chunks()))
-                {
-                    return false;
-                }
+                takeStepTiming(step, i == 0, i == 0 ? out->add_steps() : out->add_ctx_chunks());
             }
         }
         else
         {
-            if (!PyFloat_Check(value))
-            {
-                return false;
-            }
+            require(PyFloat_Check(value), "a context GPU time that is not a float");
             if (i == 2)
             {
                 out->set_ctx_gpu_forward_ms(PyFloat_AS_DOUBLE(value));
@@ -1809,28 +1806,22 @@ bool takeBreakdown(nb::handle dict, ev1::TimeBreakdown* out)
             }
         }
     }
-    return next > 0;
+    require(next > 0, "an empty time breakdown");
 }
 
 // What engine_server.publish prepared in Python for a row: prompt logprobs as (ids, logprobs, ranks,
-// top-k ends, top-k ids, top-k logprobs), tensors as {name: (dtype, shape, bytes, device)}, and
-// the tensor groups the row has. Returns false when the row must take the pickled path.
-bool takePrepared(nb::handle prepared, Row& row)
+// top-k ends, top-k ids, top-k logprobs), tensors as {name: (dtype, shape, bytes, device)}, their
+// bytes beside the message, and the tensor groups the row has.
+void takePrepared(nb::handle prepared, Row& row)
 {
     if (nb::handle v = key(prepared, "prompt_logprobs"))
     {
-        if (!row.prompt) // prepared only for the rows that start a sequence
-        {
-            return false;
-        }
+        require(row.prompt.has_value(), "prompt logprobs on a row that does not start its sequence");
         putColumns(v, row.prompt->mutable_prompt_logprobs());
     }
     if (nb::handle v = key(prepared, "prefill_usage")) // (prompt_tokens, cached_tokens), on the first and last row
     {
-        if (!row.prompt && !row.final)
-        {
-            return false;
-        }
+        require(row.prompt || row.final, "a prefill usage that changed on a middle row");
         for (auto* info : {row.prompt ? row.prompt->mutable_prefill_usage() : nullptr,
                  row.final ? row.final->mutable_prefill_usage() : nullptr})
         {
@@ -1843,9 +1834,9 @@ bool takePrepared(nb::handle prepared, Row& row)
     }
     try
     {
-        if (nb::handle v = key(prepared, "kv_export")) // a dict of what the handoff adds
+        if (nb::handle v = key(prepared, "kv_export"))    // a dict of what the handoff adds
         {
-            putValue(v, &row.kvExtra.emplace());
+            putValue(v, &row.kvExtra.emplace(), nullptr); // sealed with the handoff, which holds no objects
         }
         if (nb::handle v = key(prepared, "encoder_export"))
         {
@@ -1854,7 +1845,7 @@ bool takePrepared(nb::handle prepared, Row& row)
     }
     catch (NotCarried const&)
     {
-        return false;
+        throw RowError("a handoff value engine.proto's Value has no kind for");
     }
     if (nb::handle v = key(prepared, "tensors"))
     {
@@ -1864,7 +1855,7 @@ bool takePrepared(nb::handle prepared, Row& row)
         while (PyDict_Next(v.ptr(), &pos, &name, &value))
         {
             ev1::TensorRef ref;
-            putTensorRef(value, &ref);
+            putTensorRef(value, &ref, &row.tensorData); // its bytes beside the message; appendRow numbers them
             row.tensors.emplace_back(nb::cast<std::string>(nb::handle(name)), std::move(ref));
         }
     }
@@ -1875,17 +1866,16 @@ bool takePrepared(nb::handle prepared, Row& row)
             row.groups.push_back(nb::cast<std::string>(g));
         }
     }
-    return true;
 }
 
-// Reads one response under the GIL, leaving its RequestEntry as it is: a row that falls back to the
-// pickled path finds the entry unchanged. Returns false when the response must take the pickled
-// path; row.entry is set when the response belongs to a RequestEntry. byWorker: the lanes are
-// postprocess workers, a request's by its client id modulo their number; else frontends, by the
-// client id's high bits. prepared: what engine_server.publish prepared in Python, by response
-// index. seen: the client ids of this batch's earlier responses.
-bool takeRow(nb::handle response, size_t index, nb::handle results, PyTypeObject* entryType, int numLanes,
-    bool byWorker, int frontendShift, nb::handle prepared, std::unordered_set<uint64_t>& seen, Row& row)
+// Reads one response under the GIL, leaving its RequestEntry as it is; it changes only once the
+// row goes out. Returns false for a response no RequestEntry waits for. Raises RowError for one the
+// wire cannot say, once row.entry, handle and lane are set. byWorker: the lanes are postprocess
+// workers, a request's by its client id modulo their number; else frontends, by the client id's
+// high bits. prepared: what engine_server.publish prepared in Python, by response index. seen: the
+// client ids of this batch's earlier responses.
+bool takeRow(nb::handle response, size_t index, nb::handle results, int numLanes, bool byWorker, int frontendShift,
+    nb::handle prepared, std::unordered_set<uint64_t>& seen, Row& row)
 {
     auto const& n = names();
     nb::object cid = getattrOr(response, n.clientId, Py_None);
@@ -1900,10 +1890,6 @@ bool takeRow(nb::handle response, size_t index, nb::handle results, PyTypeObject
         {
             throw nb::python_error();
         }
-        return false;
-    }
-    if (!PyObject_TypeCheck(entry, entryType))
-    {
         return false;
     }
     row.response = response;
@@ -1925,35 +1911,25 @@ bool takeRow(nb::handle response, size_t index, nb::handle results, PyTypeObject
     nb::object error = getattrOr(response, n.errorMsg, Py_None);
     if (!error.is_none())
     {
-        if (!PyUnicode_Check(error.ptr()))
-        {
-            return false;
-        }
-        row.error = nb::cast<std::string>(error);
+        row.error = nb::cast<std::string>(nb::str(error));
         row.isFinal = true;
         return true;
     }
     nb::object result = getattrOr(response, n.result, Py_None);
-    if (result.is_none())
-    {
-        return false;
-    }
+    require(!result.is_none(), "a response without a result");
     nb::object raw = getattrOr(result, n.privateResult, Py_None);
-    if (!PyBytes_Check(raw.ptr()))
-    {
-        return false;
-    }
+    require(PyBytes_Check(raw.ptr()), "a result without its serialized form");
     row.data = PyBytes_AS_STRING(raw.ptr());
     row.size = static_cast<size_t>(PyBytes_GET_SIZE(raw.ptr()));
     row.isFinal = isTrue(getattrOrThrow(result, n.isFinal));
 
     nb::object storage = getattrOrThrow(getattrOrThrow(result, n.privatePyResult), n.privateLogProbs);
-    if (!storage.is_none() && !takeBeamLogprobs(storage, row))
+    if (!storage.is_none())
     {
-        return false; // includes a storage nothing was appended to, which the pickled path says as None
+        takeBeamLogprobs(storage, row);
     }
 
-    // The request-level counters: every pickled response carries them. Children each have their
+    // The request-level counters: the executor's LlmResult carries them on every response. Children each have their
     // own, so their rows always say them; other rows say them on the first and the last row.
     // With decoding_stats the speculative decoding counters go on every row once the request has
     // drafted; without it, once, when the sequence ends.
@@ -1963,9 +1939,9 @@ bool takeRow(nb::handle response, size_t index, nb::handle results, PyTypeObject
     bool const counters = isFirst || row.isFinal || children;
     nb::object totals = getattrOr(result, n.specDecTotals, Py_None);
     bool const spec = row.stats ? counters || !totals.is_none() : row.isFinal || children;
-    if (spec && !takeSpec(result, totals, row))
+    if (spec)
     {
-        return false;
+        takeSpec(result, totals, row);
     }
     if (counters)
     {
@@ -1989,22 +1965,18 @@ bool takeRow(nb::handle response, size_t index, nb::handle results, PyTypeObject
             f.set_ctx_first_begin(firstBegin);
             f.set_ctx_num_chunks(chunks);
             nb::object breakdown = getattrOr(result, n.timeBreakdownMetrics, Py_None);
-            if (!breakdown.is_none() && !takeBreakdown(breakdown, f.mutable_breakdown()))
+            if (!breakdown.is_none())
             {
-                return false;
+                takeBreakdown(breakdown, f.mutable_breakdown());
             }
         }
     }
     if (!prepared.is_none())
     {
         PyObject* p = PyList_GET_ITEM(prepared.ptr(), static_cast<Py_ssize_t>(index));
-        if (p == Py_False) // Python could not prepare it
+        if (p != Py_None)
         {
-            return false;
-        }
-        if (p != Py_None && !takePrepared(nb::handle(p), row))
-        {
-            return false;
+            takePrepared(nb::handle(p), row);
         }
     }
     if (!repeat && (isFirst || children))
@@ -2060,12 +2032,21 @@ ev1::RequestTiming toTiming(tle::RequestPerfMetrics const& m)
     return t;
 }
 
-// Decodes a row's Result without the GIL. Returns false when the row must take the pickled path.
-bool decodeRow(Row& row)
+// Ends the row's request with an error instead of the response the wire cannot say: an error row,
+// which says only its error, whatever else the row read before. Runs without the GIL.
+void failRow(Row& row, std::string const& what)
+{
+    row.error = "cannot send the response: " + what;
+    row.abortRequest = !row.isFinal;
+    row.isFinal = true;
+}
+
+// Decodes a row's Result without the GIL.
+void decodeRow(Row& row)
 {
     if (row.error)
     {
-        return true;
+        return;
     }
     MemBuf mb(row.data, row.size);
     std::istream is(&mb);
@@ -2074,7 +2055,8 @@ bool decodeRow(Row& row)
     if (beams == 0 || res.finishReasons.size() != beams || res.isFinal != row.isFinal
         || (row.kind != Kind::kBeams && beams != 1) || (row.hasLogprobs && row.logprobs.size() != beams))
     {
-        return false;
+        failRow(row, "a result whose beams do not match its response");
+        return;
     }
     // a prefill part ends with its handoff and no finish reason
     bool const contextDone = res.contextPhaseParams.has_value() && res.isFinal;
@@ -2087,7 +2069,8 @@ bool decodeRow(Row& row)
             || (row.hasLogprobs && !row.valuesOnly && row.logprobs[b].chosenIds != res.outputTokenIds[b])
             || (row.hasLogprobs && row.logprobs[b].chosen.size() != res.outputTokenIds[b].size()))
         {
-            return false;
+            failRow(row, "a result whose finish or logprobs do not match its tokens");
+            return;
         }
         row.finish.push_back(contextDone && res.finishReasons[b] == tle::FinishReason::kNOT_FINISHED
                 ? static_cast<int>(ev1::FINISH_REASON_CONTEXT_DONE)
@@ -2095,7 +2078,7 @@ bool decodeRow(Row& row)
     }
     if (res.contextPhaseParams)
     {
-        // the handoff, sealed: DisaggregatedParams' fields as the frontend fills them from a pickled response
+        // the handoff, sealed: DisaggregatedParams' fields as a context-only request's params hold them
         auto const& c = *res.contextPhaseParams;
         ev1::Value h = row.kvExtra ? *row.kvExtra : ev1::Value();
         h.mutable_map();
@@ -2158,7 +2141,6 @@ bool decodeRow(Row& row)
     {
         row.timing = toTiming(*res.requestPerfMetrics);
     }
-    return true;
 }
 
 struct LaneColumns
@@ -2167,11 +2149,54 @@ struct LaneColumns
     bool seq = false;
     bool replace = false;
     bool stats = false;
+    uint32_t buffers = 0; // the buffers beside the lane's message so far
 };
 
-void appendRow(ev1::StepOutput& so, Row const& row, LaneColumns const& cols)
+// An error row: the request's handle, no tokens, FINISH_REASON_ERROR, placeholders in the lane's
+// other columns, and in its extras only the error.
+void appendErrorRow(ev1::StepOutput& so, Row const& row, LaneColumns const& cols)
 {
-    size_t const beams = row.error ? 1 : row.tokens.size();
+    int const index = so.handles_size();
+    so.add_handles(row.handle);
+    if (cols.seq)
+    {
+        so.add_seq(0);
+    }
+    if (cols.replace)
+    {
+        so.add_replace_from(kAppends);
+    }
+    so.add_offsets(static_cast<uint32_t>(so.tokens_size()));
+    so.add_finish(ev1::FINISH_REASON_ERROR);
+    if (cols.stats)
+    {
+        so.add_decoding_iter(0);
+        so.add_avg_decoded_tokens_per_iter(0.F);
+    }
+    if (cols.logprobs)
+    {
+        so.add_cum_logprobs(std::numeric_limits<double>::quiet_NaN());
+    }
+    auto* extra = so.add_extras();
+    extra->set_row(static_cast<uint32_t>(index));
+    // an error response carries only its message, which names no ErrorCode
+    auto* error = extra->mutable_error();
+    error->set_code(ev1::ERROR_CODE_INTERNAL);
+    error->set_message(*row.error);
+    if (row.kind != Kind::kSingle)
+    {
+        extra->set_request_done(true);
+    }
+}
+
+void appendRow(ev1::StepOutput& so, Row const& row, LaneColumns& cols)
+{
+    if (row.error)
+    {
+        appendErrorRow(so, row, cols);
+        return;
+    }
+    size_t const beams = row.tokens.size();
     for (size_t b = 0; b < beams; ++b)
     {
         int const index = so.handles_size();
@@ -2185,13 +2210,13 @@ void appendRow(ev1::StepOutput& so, Row const& row, LaneColumns const& cols)
         {
             so.add_replace_from(beam ? 0U : kAppends);
         }
-        size_t const count = row.error ? 0 : row.tokens[b].size();
+        size_t const count = row.tokens[b].size();
         if (count)
         {
             so.mutable_tokens()->Add(row.tokens[b].begin(), row.tokens[b].end());
         }
         so.add_offsets(static_cast<uint32_t>(so.tokens_size()));
-        so.add_finish(row.error ? ev1::FINISH_REASON_ERROR : static_cast<ev1::FinishReason>(row.finish[b]));
+        so.add_finish(static_cast<ev1::FinishReason>(row.finish[b]));
         if (cols.stats)
         {
             so.add_decoding_iter(row.stats ? row.decodingIter : 0);
@@ -2216,14 +2241,14 @@ void appendRow(ev1::StepOutput& so, Row const& row, LaneColumns const& cols)
             }
             else
             {
-                // a row that asked for none: aligned placeholders the frontend does not read
+                // a row without logprobs: aligned placeholders, and a NaN cumulative logprob
                 for (size_t i = 0; i < count; ++i)
                 {
                     lp->add_logprobs(0.F);
                     lp->add_ranks(0);
                     lp->add_topk_offsets(base);
                 }
-                so.add_cum_logprobs(0.);
+                so.add_cum_logprobs(std::numeric_limits<double>::quiet_NaN());
             }
         }
         if (b > 0)
@@ -2236,8 +2261,8 @@ void appendRow(ev1::StepOutput& so, Row const& row, LaneColumns const& cols)
         // that ends before the others takes the counters of its PromptInfo
         bool const ends = row.final || (row.sequenceEnd && row.prompt);
         bool const spec = row.spec && row.stats;
-        if (!(row.prompt || ends || spec || row.timing || row.error || multi || !row.tensors.empty()
-                || !row.groups.empty() || row.frontendContext || row.kvExport || row.encoderExport))
+        if (!(row.prompt || ends || spec || row.timing || multi || !row.tensors.empty() || !row.groups.empty()
+                || row.frontendContext || row.kvExport || row.encoderExport))
         {
             continue;
         }
@@ -2279,20 +2304,15 @@ void appendRow(ev1::StepOutput& so, Row const& row, LaneColumns const& cols)
         {
             *extra->mutable_timing() = *row.timing;
         }
-        if (row.error)
-        {
-            // an error response carries only its message, which names no ErrorCode
-            auto* error = extra->mutable_error();
-            error->set_code(ev1::ERROR_CODE_INTERNAL);
-            error->set_message(*row.error);
-        }
         if (multi)
         {
             extra->set_request_done(row.isFinal);
         }
         for (auto const& [name, ref] : row.tensors)
         {
-            (*extra->mutable_tensors())[name] = ref;
+            auto& out = (*extra->mutable_tensors())[name];
+            out = ref;
+            out.set_buffer(cols.buffers++);
         }
         for (auto const& g : row.groups)
         {
@@ -2313,16 +2333,18 @@ void appendRow(ev1::StepOutput& so, Row const& row, LaneColumns const& cols)
     }
 }
 
-// publish(responses, results, entry_type, num_lanes, by_worker, frontend_shift, prepared)
-//   -> (frames, rest, finals)
-// by_worker: the lanes are postprocess workers; frontend_shift: where a client id's frontend id
-// starts; prepared: what engine_server.publish computed in Python, a list aligned with responses,
-// or None. frames: one StepOutput's bytes per lane (empty when the lane has no row); rest: the
-// responses that take the pickled path, in their order; finals: the client ids whose last row went
-// out here. When one of a request's responses takes the pickled path, so do its others in this
-// batch, which keeps them in order.
-nb::tuple publish(nb::list responses, nb::dict results, nb::handle entryType, int numLanes, bool byWorker,
-    int frontendShift, nb::handle prepared)
+// publish(responses, results, num_lanes, by_worker, frontend_shift, prepared)
+//   -> (frames, buffers, rest, finals, aborts)
+// results: the RequestEntries by client id; by_worker: the lanes are postprocess workers;
+// frontend_shift: where a client id's frontend id starts; prepared: what engine_server.publish
+// computed in Python, a list aligned with responses, or None. frames: one StepOutput's bytes per
+// lane (empty when the lane has no row); buffers: per lane, the tensor bytes its message names
+// (TensorRef.buffer); rest: the unclaimed responses, those no RequestEntry waits for and those of a
+// request after its error row, in their order; finals: the client ids whose last row went out here;
+// aborts: the client ids of unfinished requests that ended with an error row because the wire
+// could not say a response of theirs.
+nb::tuple publish(
+    nb::list responses, nb::dict results, int numLanes, bool byWorker, int frontendShift, nb::handle prepared)
 {
     size_t const count = nb::len(responses);
     if (!prepared.is_none()
@@ -2330,43 +2352,47 @@ nb::tuple publish(nb::list responses, nb::dict results, nb::handle entryType, in
     {
         throw nb::type_error("prepared must be None or a list aligned with responses");
     }
-    PyTypeObject* const entryT = asType(entryType);
     std::vector<Row> rows(count);
-    std::vector<char> taken(count, 0);
     std::unordered_set<uint64_t> seen;
-    std::unordered_set<uint64_t> pickled; // the requests with a response that takes the pickled path
     for (size_t i = 0; i < count; ++i)
     {
         Row& row = rows[i];
-        taken[i] = takeRow(responses[i], i, results, entryT, numLanes, byWorker, frontendShift, prepared, seen, row);
-        if (!taken[i] && row.entry.is_valid())
+        try
         {
-            pickled.insert(row.handle);
+            row.unclaimed = !takeRow(responses[i], i, results, numLanes, byWorker, frontendShift, prepared, seen, row);
+        }
+        catch (RowError const& e)
+        {
+            failRow(row, e.what());
         }
     }
 
     std::vector<std::string> frames(static_cast<size_t>(std::max(numLanes, 1)));
+    std::vector<LaneColumns> cols(frames.size());
     {
         nb::gil_scoped_release nogil;
-        for (size_t i = 0; i < count; ++i)
+        std::unordered_set<uint64_t> ended; // requests whose error row went out in this batch
+        for (auto& row : rows)
         {
-            if (taken[i] && !decodeRow(rows[i]))
+            if (row.unclaimed)
             {
-                pickled.insert(rows[i].handle);
+                continue;
             }
-        }
-        for (size_t i = 0; i < count; ++i)
-        {
-            if (!taken[i] || pickled.count(rows[i].handle))
+            if (ended.count(row.handle))
             {
-                rows[i].fallback = true;
+                row.unclaimed = true; // after its request's error row
+                continue;
+            }
+            decodeRow(row);
+            if (row.error)
+            {
+                ended.insert(row.handle);
             }
         }
         std::vector<ev1::StepOutput> outs(frames.size());
-        std::vector<LaneColumns> cols(frames.size());
         for (auto const& row : rows)
         {
-            if (row.fallback)
+            if (row.unclaimed || row.error) // an error row has placeholders in the other rows' columns
             {
                 continue;
             }
@@ -2382,7 +2408,7 @@ nb::tuple publish(nb::list responses, nb::dict results, nb::handle entryType, in
         }
         for (auto const& row : rows)
         {
-            if (row.fallback)
+            if (row.unclaimed)
             {
                 continue;
             }
@@ -2403,15 +2429,33 @@ nb::tuple publish(nb::list responses, nb::dict results, nb::handle entryType, in
     }
 
     auto const& n = names();
+    std::vector<nb::list> buffers(frames.size());
     nb::list rest;
     nb::list finals;
+    nb::list aborts;
     for (size_t i = 0; i < count; ++i)
     {
         Row const& row = rows[i];
-        if (row.fallback)
+        if (row.unclaimed)
         {
             rest.append(responses[i]);
             continue;
+        }
+        if (row.isFinal)
+        {
+            finals.append(row.handle);
+        }
+        if (row.abortRequest)
+        {
+            aborts.append(row.handle);
+        }
+        if (row.error) // says only its error: it takes nothing from its RequestEntry
+        {
+            continue;
+        }
+        for (auto const& data : row.tensorData) // in the order appendRow numbered them
+        {
+            buffers[row.lane].append(data);
         }
         if (row.takesFirst)
         {
@@ -2421,17 +2465,18 @@ nb::tuple publish(nb::list responses, nb::dict results, nb::handle entryType, in
         {
             setAttr(row.entry, n.frontendContext, Py_None);
         }
-        if (row.isFinal)
-        {
-            finals.append(row.handle);
-        }
     }
     nb::list out;
     for (auto const& f : frames)
     {
         out.append(nb::bytes(f.data(), f.size()));
     }
-    return nb::make_tuple(out, rest, finals);
+    nb::list lanesBuffers;
+    for (auto const& b : buffers)
+    {
+        lanesBuffers.append(b);
+    }
+    return nb::make_tuple(out, lanesBuffers, rest, finals, aborts);
 }
 
 // ----------------------------------------------------------------------------------------------
@@ -2594,16 +2639,16 @@ void parseStepOutput(char const* data, size_t size, int finishReasons, ev1::Step
     }
 }
 
-// decode_rows(StepOutput bytes, results, more_results, (row, error row) types,
+// decode_rows(StepOutput bytes, buffers, results, more_results, (row, error row) types,
 //             (result, extras, outputs) types, finish_reasons, logprob_type)
-//   -> [row]: the row and result objects of engine_client.py, filled with what
+//   -> [row]: the row and result objects of proto_wire.py, filled with what
 //   GenerationResult._handle_step_row reads: a row with extras gets an extras result, one with
 //   prompt logprobs, tensors or a handoff an outputs result, and an error the error row type. A
 //   beam search response's rows become one row with a list per beam.
-//   Logprobs are built as the pickled path's dict[int, Logprob], or a float per token with
+//   Logprobs are built as the sampler's dict[int, Logprob], or a float per token with
 //   logprobs_simple_format, for the rows whose request asked for them.
-nb::list decodeRows(nb::bytes data, nb::dict results, nb::handle moreResults, nb::tuple rowTypes, nb::tuple resultTypes,
-    nb::tuple finishReasons, nb::handle logprobType)
+nb::list decodeRows(nb::bytes data, nb::list buffers, nb::dict results, nb::handle moreResults, nb::tuple rowTypes,
+    nb::tuple resultTypes, nb::tuple finishReasons, nb::handle logprobType)
 {
     if (rowTypes.size() != 2 || resultTypes.size() != 3)
     {
@@ -2637,12 +2682,12 @@ nb::list decodeRows(nb::bytes data, nb::dict results, nb::handle moreResults, nb
     bool const columnStats = so.decoding_iter_size() == rowCount;
     auto const& lp = so.logprobs();
 
-    // dict[id] = Logprob(logprob=value, rank=rank)
+    // dict[id] = Logprob(logprob=value, rank=rank); a rank of 0 is one the sampler did not compute (None)
     auto put = [&](nb::handle dict, int32_t id, float value, int64_t rank)
     {
         nb::object const o = newObject(logprobT, empty);
         setAttr(o, n.logprob, nb::float_(value));
-        setAttr(o, n.rank, nb::int_(rank));
+        setAttr(o, n.rank, rank != 0 ? nb::object(nb::int_(rank)) : nb::none());
         if (PyDict_SetItem(dict.ptr(), nb::int_(id).ptr(), o.ptr()) != 0)
         {
             throw nb::python_error();
@@ -2757,7 +2802,8 @@ nb::list decodeRows(nb::bytes data, nb::dict results, nb::handle moreResults, nb
 
         bool wantLogprobs = false;
         bool valuesOnly = false;
-        if (columnLogprobs && !samplingParams().is_none())
+        // a NaN cumulative logprob: a row without logprobs (its request ended before its first token)
+        if (columnLogprobs && !std::isnan(so.cum_logprobs(i)) && !samplingParams().is_none())
         {
             wantLogprobs = !getattrOrThrow(samplingParams(), n.logprobs).is_none();
             valuesOnly = wantLogprobs && isTrue(getattrOrThrow(samplingParams(), n.logprobsSimpleFormat));
@@ -2848,6 +2894,7 @@ nb::list decodeRows(nb::bytes data, nb::dict results, nb::handle moreResults, nb
         if (specStats != nullptr)
         {
             auto const& s = *specStats;
+            // no totals before the sequence drafts
             nb::object const totals = s.total_drafted() > 0
                 ? nb::object(nb::make_tuple(s.total_accepted(), s.total_drafted()))
                 : nb::none();
@@ -2872,7 +2919,7 @@ nb::list decodeRows(nb::bytes data, nb::dict results, nb::handle moreResults, nb
             nb::dict tensors;
             for (auto const& [name, ref] : extra->tensors())
             {
-                tensors[nb::str(name.data(), name.size())] = tensorRefOf(ref);
+                tensors[nb::str(name.data(), name.size())] = tensorRefOf(ref, &buffers);
             }
             setAttr(res, n.tensors, tensors);
             nb::list groups;
@@ -2943,13 +2990,14 @@ void initBindings(nb::module_& m)
     m.attr("STATUS_ERR_CONTEXT_EXCEEDED") = nb::int_(static_cast<int>(Status::kErrContextExceeded));
     m.attr("STATUS_ERR_MAX_TOKENS") = nb::int_(static_cast<int>(Status::kErrMaxTokens));
 
-    m.def("encode_requests", &encodeRequests, nb::arg("items"));
-    m.def("ingress", &ingress, nb::arg("data"), nb::arg("max_seq_len").none(), nb::arg("cp_size"),
+    m.def("encode_requests", &encodeRequests, nb::arg("items"), nb::arg("objects"));
+    m.def("ingress", &ingress, nb::arg("data"), nb::arg("objects"), nb::arg("max_seq_len").none(), nb::arg("cp_size"),
         nb::arg("is_generation_model"));
-    m.def("publish", &publish, nb::arg("responses"), nb::arg("results"), nb::arg("entry_type"), nb::arg("num_lanes"),
-        nb::arg("by_worker"), nb::arg("frontend_shift"), nb::arg("prepared").none());
-    m.def("decode_rows", &decodeRows, nb::arg("data"), nb::arg("results"), nb::arg("more_results").none(),
-        nb::arg("row_types"), nb::arg("result_types"), nb::arg("finish_reasons"), nb::arg("logprob_type"));
+    m.def("publish", &publish, nb::arg("responses"), nb::arg("results"), nb::arg("num_lanes"), nb::arg("by_worker"),
+        nb::arg("frontend_shift"), nb::arg("prepared").none());
+    m.def("decode_rows", &decodeRows, nb::arg("data"), nb::arg("buffers"), nb::arg("results"),
+        nb::arg("more_results").none(), nb::arg("row_types"), nb::arg("result_types"), nb::arg("finish_reasons"),
+        nb::arg("logprob_type"));
     m.def("frontend_contexts", &frontendContexts, nb::arg("data"));
     m.def("set_tensor_codec", &setTensorCodec, nb::arg("tensor_type"), nb::arg("to_ref"), nb::arg("from_ref"));
 }

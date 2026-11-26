@@ -26,11 +26,7 @@ them is indistinguishable from corruption on the client side:
 
 Totals come from spec_dec_totals (exact) while the histogram comes from the
 per-position vectors, so the second identity is the one that would break first
-if the two ever stopped agreeing.
-
-GPU-free logic, but importing postprocess_handlers is unproven on the CPU-only
-CI stage, so this file is wired into a GPU list (l0_a10.yml) like its sibling
-test_spec_dec_stats_pairing.py.
+if the two ever stopped agreeing. CPU-only; no engine needed.
 """
 
 import json
@@ -38,11 +34,13 @@ from types import SimpleNamespace
 
 import pytest
 from pytest import param
+from test_common.executor.fakes import Rank0
 
 from tensorrt_llm import SamplingParams
-from tensorrt_llm._torch.pyexecutor.llm_request import MAX_SPEC_DECODE_POSITIONS
+from tensorrt_llm._torch.pyexecutor.llm_request import MAX_SPEC_DECODE_POSITIONS, LlmRequestState
 from tensorrt_llm.bindings import executor as tllm
-from tensorrt_llm.llmapi.engine_client.result import GenerationResultBase
+from tensorrt_llm.executor.request import GenerationRequest
+from tensorrt_llm.llmapi.engine_client.result import GenerationResult
 from tensorrt_llm.serve.openai_server import OpenAIServer, resolve_spec_decode_num_spec_tokens
 from tensorrt_llm.serve.postprocess_handlers import (
     ChatPostprocArgs,
@@ -53,6 +51,8 @@ from tensorrt_llm.serve.postprocess_handlers import (
     completion_response_post_processor,
     completion_stream_post_processor,
 )
+
+pytestmark = pytest.mark.cpu_only
 
 
 def _rsp(survival, num_spec_steps, totals):
@@ -246,33 +246,19 @@ def _padded(values):
     return list(values) + [0] * (MAX_SPEC_DECODE_POSITIONS - len(values))
 
 
-def _sequence_response(*, sequence_index, is_final, per_pos_drafted, per_pos_accepted, totals):
-    """One child request's final response, as GenerationResultBase receives it.
+def _finish_sequence(llm_request, *, per_pos_drafted, per_pos_accepted, totals):
+    """End one candidate's sequence with the spec-decode counters its request kept.
 
-    Mirrors the executor response shape used in test_disaggregated_params.py,
-    plus the per-request spec-decode counters the PyTorch executor attaches.
+    ``prepare_response`` attaches them to the sequence's response as the PyTorch
+    executor does; ``totals`` is (accepted, drafted).
     """
-    result = SimpleNamespace(
-        is_final=is_final,
-        decoding_iter=1,
-        avg_decoded_tokens_per_iter=None,
-        context_phase_params=None,
-        finish_reasons=[tllm.FinishReason.END_ID],
-        output_token_ids=[[5, 6]],
-        sequence_index=sequence_index,
-        cum_log_probs=None,
-        log_probs=None,
-        generation_logits=None,
-        time_breakdown_metrics=None,
-        context_logits=None,
-        request_perf_metrics=None,
-        additional_context_outputs=None,
-        additional_generation_outputs=None,
-        per_pos_drafted=_padded(per_pos_drafted),
-        per_pos_accepted=_padded(per_pos_accepted),
-        spec_dec_totals=totals,
-    )
-    return SimpleNamespace(result=result, has_error=lambda: False)
+    for token_id in (5, 6):
+        llm_request.add_new_token(token_id, 0)
+    llm_request.py_per_pos_drafted = _padded(per_pos_drafted)
+    llm_request.py_per_pos_accepted = _padded(per_pos_accepted)
+    llm_request.py_total_accepted_draft_tokens, llm_request.py_total_draft_tokens = totals
+    llm_request.state = LlmRequestState.GENERATION_COMPLETE
+    llm_request.set_finished_reason(tllm.FinishReason.END_ID, 0)
 
 
 def _stats_by_index_from_response(response):
@@ -318,31 +304,19 @@ class TestPerSequenceAttribution:
     def _two_sequence_result():
         # n > 1 needs non-greedy sampling, as every real multi-candidate
         # request has.
-        result = GenerationResultBase(
-            id=1, sampling_params=SamplingParams(max_tokens=2, n=2, temperature=0.8)
-        )
+        request = GenerationRequest([1, 2, 3], SamplingParams(max_tokens=2, n=2, temperature=0.8))
+        request.set_id(1)
+        result = GenerationResult(request)
+        rank0 = Rank0()
+        first, second = rank0.submit(request, result)
         # Sequence 0: 4 steps drafting 2 each; 3 steps accepted >= 1 and 1
         # step accepted both -> histogram [1, 2, 1], 4 of 8 accepted.
-        result._handle_response(
-            _sequence_response(
-                sequence_index=0,
-                is_final=False,
-                per_pos_drafted=[4, 4],
-                per_pos_accepted=[3, 1],
-                totals=(4, 8),
-            )
-        )
-        # Sequence 1 reports last: 3 steps, only 1 accepted anything ->
+        _finish_sequence(first, per_pos_drafted=[4, 4], per_pos_accepted=[3, 1], totals=(4, 8))
+        rank0.publish(first)
+        # Sequence 1 ends last: 3 steps, only 1 accepted anything ->
         # histogram [2, 1, 0], 1 of 6 accepted.
-        result._handle_response(
-            _sequence_response(
-                sequence_index=1,
-                is_final=True,
-                per_pos_drafted=[3, 3],
-                per_pos_accepted=[1],
-                totals=(1, 6),
-            )
-        )
+        _finish_sequence(second, per_pos_drafted=[3, 3], per_pos_accepted=[1], totals=(1, 6))
+        rank0.publish(second)
         return result
 
     @pytest.mark.parametrize(

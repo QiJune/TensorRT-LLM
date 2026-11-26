@@ -178,10 +178,10 @@ class GenerationRequest:
             self.prompt_token_ids = prompt_token_ids
         elif isinstance(prompt_token_ids, (torch.Tensor, np.ndarray)):
             if prompt_token_ids.ndim == 1:
-                # A flat array goes straight into the int32 wire buffer that
-                # __setstate__ also produces, so neither this process nor the
-                # pickle path builds one Python int per token; the list is
-                # materialized lazily by the `prompt_token_ids` property.
+                # A flat array goes straight into the int32 buffer that
+                # proto_wire.encode sends and __setstate__ also produces, so
+                # no Python int is built per token; the list is materialized
+                # lazily by the `prompt_token_ids` property.
                 if isinstance(prompt_token_ids, torch.Tensor):
                     prompt_token_ids = prompt_token_ids.cpu().numpy()
                 self._prompt_token_ids = None
@@ -254,15 +254,14 @@ class GenerationRequest:
         self.id = id
         return self
 
-    # --- int32 token-id wire serialization + LAZY list materialization ----------
-    # Pickling a flat list[int] on the hot proxy->worker RPC-submit path emits one
-    # PyLong frame per token (O(ISL)). Encode token-ids as int32 bytes for the wire.
-    # On decode we DO NOT eagerly rebuild the list: stash the int32 ndarray in
-    # `_prompt_token_ids_i32` (the C++ Request ctor memcpy's it -- see
-    # base_worker._enqueue_request) and leave the backing `_prompt_token_ids` None.
-    # The list is built lazily (and cached) by the `prompt_token_ids` property below
-    # only if a consumer actually reads it (e.g. prompt-logprobs).
-    # Plain decode never reads it -> the O(ISL) `.tolist()` never runs.
+    # --- int32 token-id serialization + LAZY list materialization -------------
+    # Ray's RayWorkerWrapper.enqueue_request pickles a GenerationRequest, and
+    # pickling a flat list[int] emits one PyLong frame per token (O(ISL)), so
+    # token-ids are pickled as int32 bytes. On unpickling the list is NOT
+    # rebuilt: the int32 ndarray goes to `_prompt_token_ids_i32`
+    # (proto_wire.encode copies it into the SubmitBatch) and the backing
+    # `_prompt_token_ids` stays None. The list is built lazily (and cached) by
+    # the `prompt_token_ids` property below only if a consumer reads it.
     #
     # NOTE: implemented as a *property* (scoped to this one name), NOT a class-level
     # __getattr__. A __getattr__ is invoked by the interpreter on EVERY missing
@@ -272,29 +271,13 @@ class GenerationRequest:
     # zero blast radius on any other attribute.
     _I32 = "\x00i32be"
 
-    # Prompt-tail transport (executor/prompt_tail.py): a frontend sets
-    # ``_prompt_tail_tokens`` on an eligible request so that ``__getstate__``
-    # ships only that many trailing ids; the receiving side records the number
-    # of ids left out in ``_prompt_trimmed_prefix``.
+    # Prompt-tail transport (llmapi/engine_client/prompt_tail.py): a frontend sets
+    # ``_prompt_tail_tokens`` on an eligible request, and proto_wire.encode
+    # sends only that many trailing ids.
     _prompt_tail_tokens: int = 0
-    _prompt_trimmed_prefix: int = 0
-
-    @property
-    def prompt_len(self) -> int:
-        """Prompt length, counting ids the prompt-tail transport left out."""
-        buf = self.__dict__.get("_prompt_token_ids_i32")
-        ids = buf if buf is not None else self.__dict__.get("_prompt_token_ids")
-        return self._prompt_trimmed_prefix + (len(ids)
-                                              if ids is not None else 0)
 
     @property
     def prompt_token_ids(self):
-        if self._prompt_trimmed_prefix:
-            raise RuntimeError(
-                f"Request {self.id} carries only its last prompt ids "
-                f"({self._prompt_trimmed_prefix} left out by "
-                "gen_prompt_tail_tokens); the full prompt is not "
-                "available on the worker")
         ptids = self.__dict__.get("_prompt_token_ids")
         if ptids is None:
             buf = self.__dict__.get("_prompt_token_ids_i32")
@@ -302,13 +285,14 @@ class GenerationRequest:
                 ptids = buf.tolist()
                 self._prompt_token_ids = ptids  # cache
         # Callers that mutate this returned list in place must clear
-        # `_prompt_token_ids_i32`; base_worker assumes both forms stay synced.
+        # `_prompt_token_ids_i32`; proto_wire.encode assumes both forms
+        # stay synced.
         return ptids
 
     @prompt_token_ids.setter
     def prompt_token_ids(self, value):
         self._prompt_token_ids = value
-        # base_worker hands the int32 buffer to the engine when it exists, so a
+        # proto_wire.encode sends the int32 buffer when it exists, so a
         # replaced prompt must not leave the old tokens behind in it.
         self._prompt_token_ids_i32 = None
 
@@ -337,16 +321,8 @@ class GenerationRequest:
     def __getstate__(self):
         state = self.__dict__.copy()
         buf = state.pop("_prompt_token_ids_i32", None)
-        tail = state.pop("_prompt_tail_tokens", 0)
         ptids = state.get("_prompt_token_ids")
-        if tail:
-            ids = buf if buf is not None else ptids
-            tail_ids = np.ascontiguousarray(ids[len(ids) - tail:],
-                                            dtype=np.int32)
-            state["_prompt_token_ids"] = (GenerationRequest._I32,
-                                          tail_ids.tobytes())
-            state["_prompt_trimmed_prefix"] = len(ids) - tail
-        elif ptids is not None:
+        if ptids is not None:
             state["_prompt_token_ids"] = GenerationRequest._enc_tokens(ptids)
         elif buf is not None:
             # not yet materialized -> encode the buffer's bytes directly

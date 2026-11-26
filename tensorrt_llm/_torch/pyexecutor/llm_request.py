@@ -11,7 +11,8 @@ import numpy as np
 import torch
 
 import tensorrt_llm.bindings
-from tensorrt_llm._torch.shared_tensor import SharedTensorContainer
+from tensorrt_llm._torch.shared_tensor import (SharedTensorContainer,
+                                               release_exported_handles)
 from tensorrt_llm._utils import prefer_pinned
 from tensorrt_llm.bindings import executor as tllm_executor
 from tensorrt_llm.executor.logprobs import SimpleTokenLogprobs, TokenLogprobs
@@ -674,7 +675,9 @@ class PyResult:
 
     def release_exports(self) -> None:
         """Consume the handles this result exported; no response will deliver them."""
-        release_exported_handles(self)
+        release_exported_handles(self.mm_embedding_handles,
+                                 self.mrope_position_ids_handle,
+                                 self.mrope_position_deltas_handle)
         self._mm_embeddings = None
         self._mrope_position_ids = None
         self._mrope_position_deltas = None
@@ -825,31 +828,17 @@ class PyResult:
         return self._encoder_output
 
 
-def release_exported_handles(result: "PyResult | LlmResult") -> None:
-    """Consume a result's CUDA IPC handles that no consumer will open.
-
-    The producer cannot free an exported allocation until each of its handles is opened
-    and released, or consumed here.
-    """
-    handles = [
-        *(result.mm_embedding_handles or ()),
-        result.mrope_position_ids_handle,
-        result.mrope_position_deltas_handle,
-    ]
-    for handle in handles:
-        if handle is not None:
-            SharedTensorContainer.release_dict(handle)
-
-
 def release_undelivered_response(response: Any) -> None:
     """Consume the exported handles of a response that no client will receive.
 
-    Takes the executor's responses, also when the worker has wrapped them; error
-    responses and other records carry no ``LlmResult`` and export nothing.
+    Takes the executor's responses; error responses and other records carry no
+    ``LlmResult`` and export nothing.
     """
     result = getattr(response, "result", None)
     if isinstance(result, LlmResult):
-        release_exported_handles(result)
+        release_exported_handles(result.mm_embedding_handles,
+                                 result.mrope_position_ids_handle,
+                                 result.mrope_position_deltas_handle)
 
 
 class LlmResult:

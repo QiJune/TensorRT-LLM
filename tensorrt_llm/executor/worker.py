@@ -42,11 +42,10 @@ from ._load_balance_env import (LAUNCH_QUEUES_ENV, configure_moe_launch_queues,
 from .base_worker import BaseWorker, _init_hf_modules
 from .ipc import FusedIpcQueue, IpcQueue
 from .mpi_session import set_mpi_session_cpp
-from .request import (CancellingRequest, GenerationRequest, StartProfileRequest,
-                      StopProfileRequest)
+from .request import CancellingRequest, StartProfileRequest, StopProfileRequest
 from .rpc_worker_mixin import RpcWorkerMixin
-from .utils import (ErrorResponse, IntraProcessQueue, PostprocWorkerConfig,
-                    RequestError, WorkerCommIpcAddrs)
+from .utils import (IntraProcessQueue, PostprocWorkerConfig, RequestError,
+                    WorkerCommIpcAddrs)
 from .worker_process_monitor import capture_worker_process_identity
 
 __all__ = [
@@ -519,7 +518,7 @@ def worker_main(
                 for i in range(postproc_worker_config.num_postprocess_workers)
             ]
         elif multi_frontend_addrs is not None:
-            # One PUSH lane per frontend (see base_worker._send_rsp).
+            # One PUSH lane per frontend (see engine_server.publish).
             frontend_result_queues = [
                 FusedIpcQueue(addr,
                               is_server=False,
@@ -711,14 +710,6 @@ def worker_main(
                         send_profile_ack("stop", ack_err, req)
                     elif isinstance(req, wire.SubmitFrame):
                         engine_server.submit(worker, req)
-                    elif isinstance(req, GenerationRequest):
-                        try:
-                            worker.submit(req)
-                        except RequestError as e:
-                            logger.error(f"submit request failed: {e}")
-                            logger.error(traceback.format_exc())
-                            worker._await_response_helper.temp_error_responses.put(
-                                ErrorResponse(req.id, e, req.id))
                     else:
                         raise ValueError(f"Unknown request type: {type(req)}")
 

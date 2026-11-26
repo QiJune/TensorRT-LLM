@@ -42,6 +42,7 @@ from ...executor.ray.gpu_worker import RayGPUWorker, RayWorkerWrapper
 from ...executor.request import GenerationRequest
 from ...executor.utils import PostprocWorkerConfig, RequestError
 from ..utils import logger_debug
+from . import proto_wire
 from .executor import GenerationExecutor
 from .result import GenerationResult
 from .rpc_proxy_mixin import RpcExecutorMixin
@@ -309,7 +310,8 @@ class RayExecutor(RpcExecutorMixin, GenerationExecutor):
 
         try:
             with nvtx_range_debug("rpc_submit"):
-                self.rpc_client.submit(request).remote(need_response=False)
+                frame = proto_wire.encode(request, self.postproc_config.enabled)
+                self.rpc_client.submit_frame(frame).remote(need_response=False)
         except Exception:
             self._results.pop(request.id, None)
             raise

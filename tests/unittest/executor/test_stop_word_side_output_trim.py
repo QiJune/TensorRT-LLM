@@ -36,7 +36,7 @@ import pytest
 import torch
 
 from tensorrt_llm.bindings import executor as tllm
-from tensorrt_llm.executor.logprobs import Logprob
+from tensorrt_llm.executor.logprobs import Logprob, LogProbsResult
 from tensorrt_llm.llmapi.engine_client.result import GenerationResultBase
 from tensorrt_llm.sampling_params import SamplingParams
 
@@ -73,12 +73,19 @@ def _handle(
         per_pos_accepted=None,
         spec_dec_totals=None,
         time_breakdown_metrics=None,
-        request_perf_metrics=None,
         additional_context_outputs=None,
         additional_generation_outputs=additional_generation_outputs,
     )
     result._done = True
-    result._handle_sequence([finish_reason], response, 0)
+    result._handle_sequence(
+        [finish_reason],
+        response,
+        0,
+        None,
+        None,
+        output_token_ids=response.output_token_ids,
+        request_perf_metrics=None,
+    )
     return result._outputs[0]
 
 
@@ -160,8 +167,6 @@ def test_end_id_finish_is_untouched():
 @pytest.mark.parametrize("streaming", [False, True])
 @pytest.mark.parametrize("beam_search", [False, True])
 def test_sampler_logprobs_survive_prompt_response_wrapper(streaming, beam_search):
-    from tensorrt_llm.executor.logprobs import LogProbsResult
-
     params = SamplingParams(n=2 if beam_search else 1, use_beam_search=beam_search, logprobs=1)
     result = GenerationResultBase(id=0, sampling_params=params)
     result._streaming = streaming
@@ -192,14 +197,16 @@ def test_sampler_logprobs_survive_prompt_response_wrapper(streaming, beam_search
             time_breakdown_metrics=None,
             additional_context_outputs=None,
             additional_generation_outputs=None,
-            request_perf_metrics=None,
         )
         for beam in range(len(sequences)):
             result._handle_sequence(
                 [tllm.FinishReason.NOT_FINISHED] * len(sequences),
                 response,
                 beam,
-                logprobs_result=wrapped,
+                wrapped,
+                None,
+                output_token_ids=response.output_token_ids,
+                request_perf_metrics=None,
             )
 
     for beam, output in enumerate(result._outputs):
@@ -226,10 +233,17 @@ def test_generation_only_response_preserves_sampler_logprobs(first_token_logprob
         time_breakdown_metrics=None,
         additional_context_outputs=None,
         additional_generation_outputs=None,
-        request_perf_metrics=None,
     )
 
-    result._handle_sequence([tllm.FinishReason.NOT_FINISHED], response, 0)
+    result._handle_sequence(
+        [tllm.FinishReason.NOT_FINISHED],
+        response,
+        0,
+        None,
+        None,
+        output_token_ids=response.output_token_ids,
+        request_perf_metrics=None,
+    )
 
     output = result._outputs[0]
     assert output.token_ids == tokens

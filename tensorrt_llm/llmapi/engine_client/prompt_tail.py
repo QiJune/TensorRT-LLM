@@ -95,14 +95,14 @@ class PromptTailPolicy:
 
     def __call__(self, request) -> int:
         """The number of trailing prompt ids to send for ``request``, or 0 to send all."""
-        if request.prompt_len <= self.tail:
+        if request.num_prompt_tokens <= self.tail:
             return 0
         blocker = request_trim_blocker(request, self.tail)
         if blocker is None:
             self._report(
                 "trimmed",
                 f"prompt tail trimming: first trimmed request sends {self.tail} of "
-                f"{request.prompt_len} prompt ids",
+                f"{request.num_prompt_tokens} prompt ids",
             )
             return self.tail
         self._report(

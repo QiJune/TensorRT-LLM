@@ -13,17 +13,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
+from test_common.executor.fakes import Rank0
 
+from tensorrt_llm._torch.pyexecutor.llm_request import LlmRequestState
 from tensorrt_llm.bindings import executor as tllm
 from tensorrt_llm.disaggregated_params import DisaggregatedParams
 from tensorrt_llm.executor.logprobs import Logprob
+from tensorrt_llm.executor.request import GenerationRequest
 from tensorrt_llm.inputs.multimodal import MultimodalInputLayout
-from tensorrt_llm.llmapi.engine_client.result import GenerationResultBase
+from tensorrt_llm.llmapi.engine_client.result import GenerationResult
 from tensorrt_llm.sampling_params import SamplingParams
 
 pytestmark = pytest.mark.cpu_only
@@ -243,52 +245,42 @@ def test_context_only_response_carries_the_first_token_logprobs_and_logits():
     generation worker, which prepends them so its outputs cover every generated
     token.
     """
-    result = GenerationResultBase(
-        id=1,
-        sampling_params=SamplingParams(max_tokens=4, logprobs=1, return_generation_logits=True),
-    )
-    result._disaggregated_params = DisaggregatedParams(
-        multimodal_embedding_handles=[{"tensor_size": [1, 16]}],
-        multimodal_input_layout=MultimodalInputLayout(
-            prompt_token_ids=[1, 2, 3],
-            multimodal_positions=[1],
-            multimodal_lengths=[1],
-            multimodal_embedding_lengths=[1],
+    request = GenerationRequest(
+        [1, 2, 3],
+        SamplingParams(max_tokens=4, logprobs=1, return_generation_logits=True),
+        disaggregated_params=DisaggregatedParams(
+            request_type="context_only",
+            disagg_request_id=1,
+            multimodal_embedding_handles=[{"tensor_size": [1, 16]}],
+            multimodal_input_layout=MultimodalInputLayout(
+                prompt_token_ids=[1, 2, 3],
+                multimodal_positions=[1],
+                multimodal_lengths=[1],
+                multimodal_embedding_lengths=[1],
+            ),
+            mrope_position_ids_handle={"tensor_size": [3, 1, 3]},
+            mrope_position_deltas_handle={"tensor_size": [1, 1]},
         ),
-        mrope_position_ids_handle={"tensor_size": [3, 1, 3]},
-        mrope_position_deltas_handle={"tensor_size": [1, 1]},
     )
+    request.set_id(1)
+    result = GenerationResult(request, disaggregated_params=request.disaggregated_params)
+    # Rank 0 takes context-only requests only with a KV cache transceiver.
+    rank0 = Rank0(kv_cache_transceiver=True)
+    (context,) = rank0.submit(request, result)
     first_token_logprob = {7: Logprob(logprob=-0.5, rank=1)}
+    # As a response carries them: [beams, tokens, vocab].
     first_logits = torch.arange(6, dtype=torch.float32).reshape(1, 1, 6)
-    context_result = SimpleNamespace(
-        is_final=True,
-        decoding_iter=1,
-        avg_decoded_tokens_per_iter=1.0,
-        context_phase_params=SimpleNamespace(
-            first_gen_tokens=[7],
-            req_id=1,
-            opaque_state=b"",
-            draft_tokens=None,
-            ctx_dp_rank=0,
-            disagg_info_endpoint=None,
-        ),
-        finish_reasons=[tllm.FinishReason.LENGTH],
-        output_token_ids=[[7]],
-        sequence_index=0,
-        cum_log_probs=[-0.5],
-        log_probs=[[first_token_logprob]],
-        generation_logits=first_logits,
-        per_pos_drafted=None,
-        per_pos_accepted=None,
-        spec_dec_totals=None,
-        time_breakdown_metrics=None,
-        context_logits=None,
-        request_perf_metrics=None,
-        additional_context_outputs=None,
-        additional_generation_outputs=None,
-    )
 
-    result._handle_response(SimpleNamespace(result=context_result, has_error=lambda: False))
+    # The context worker samples the first token, then hands the request over.
+    context.add_new_token(7, 0)
+    context.py_result.append_log_probs([[first_token_logprob]])
+    # The sampler appends them as [tokens, beams, vocab].
+    context.py_result.append_generation_logits(first_logits.transpose(0, 1))
+    context.context_phase_params = tllm.ContextPhaseParams(
+        [7], context.py_request_id, None, None, 0, None
+    )
+    context.state = LlmRequestState.DISAGG_CONTEXT_COMPLETE
+    rank0.publish(context)
 
     params = result.disaggregated_params
     assert params.request_type == "context_only"

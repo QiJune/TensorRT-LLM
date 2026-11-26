@@ -88,10 +88,8 @@ BASE_EXAMPLE_CLASSES = {
         "CancellingRequest", "GenerationRequest", "LoRARequest", "PostprocArgs",
         "PostprocParams", "PromptAdapterRequest"
     ],
-    "tensorrt_llm.executor.utils": [
-        "ErrorResponse", "PostprocWorkerConfig", "ResponseWrapper",
-        "WorkerCommIpcAddrs"
-    ],
+    "tensorrt_llm.executor.utils":
+    ["ErrorResponse", "PostprocWorkerConfig", "WorkerCommIpcAddrs"],
     "tensorrt_llm.executor.worker": ["GenerationExecutorWorker", "worker_main"],
     "tensorrt_llm.llmapi.engine_client.postproc_worker":
     ["PostprocWorker.Input", "PostprocWorker.Output"],

@@ -21,10 +21,10 @@ from tensorrt_llm.llmapi import tracing
 from ..._utils import nvtx_range_debug
 from ...bindings import executor as tllm
 from ...disaggregated_params import DisaggregatedParams
-from ...executor.logprobs import Logprob, SimpleTokenLogprobs, TokenLogprobs
-from ...executor.utils import (EngineDeadError, ErrorResponse, ResponseWrapper,
-                               _build_perf_metrics_dict, has_event_loop,
-                               is_llm_response)
+from ...executor.logprobs import (Logprob, LogProbsResult, SimpleTokenLogprobs,
+                                  TokenLogprobs)
+from ...executor.utils import (EngineDeadError, ErrorResponse,
+                               _build_perf_metrics_dict, has_event_loop)
 from ...executor.wire import decode_first_gen_logprobs, decode_prefill_usage
 from ...logger import logger
 from ...metrics import MetricNames, RequestEventTiming
@@ -49,6 +49,11 @@ __all__ = [
     "DetokenizedGenerationResultBase",
     "GenerationResult",
     "IterationResult",
+    # executor/logprobs.py's, which results hold
+    "Logprob",
+    "TokenLogprobs",
+    "SimpleTokenLogprobs",
+    "LogProbsResult",
 ]
 
 
@@ -196,9 +201,8 @@ class GenerationResultBase:
         self.ctx_num_chunks = 0
         self.per_pos_drafted = None
         self.per_pos_accepted = None
-        # Cumulative (accepted, drafted) draft-token totals attached by the
-        # PyTorch executor (LlmResult.spec_dec_totals); backfills
-        # RequestPerfMetrics.speculative_decoding in _handle_sequence.
+        # Cumulative (accepted, drafted) draft-token totals a row carries;
+        # backfills RequestPerfMetrics.speculative_decoding in _handle_sequence.
         self.spec_dec_totals = None
         # Average decoded tokens per runtime iteration; set when the first LLM response arrives.
         # None indicates not yet available (e.g., before first step/stream).
@@ -243,11 +247,6 @@ class GenerationResultBase:
                     background_error_handler)
             else:
                 self._background_error_handler = background_error_handler
-
-        # This is used for avoid duplicate transmission the sampling_params for a
-        # request. SamplingParams is necessary for creating dummy
-        # GenerationResultBase instances on postprocess worker processes.
-        self._params_transmitted = False
 
     def abort(self) -> None:
         """Abort the generation request.
@@ -302,10 +301,10 @@ class GenerationResultBase:
         """Backfill RequestPerfMetrics.speculative_decoding in the PyTorch flow.
 
         Nothing populates that section runtime-side, so it arrives zeroed even
-        when drafting ran. The PyTorch executor instead attaches cumulative
-        (accepted, drafted) totals to the response (LlmResult.spec_dec_totals,
-        stashed on self in _handle_response); fill the section from them.
-        No-op when no drafting occurred.
+        when drafting ran. The PyTorch executor instead reports cumulative
+        (accepted, drafted) totals (a row's spec_dec_totals, kept on self by
+        _handle_step_row); fill the section from them. No-op when no drafting
+        occurred.
         """
         if not self.spec_dec_totals:
             return
@@ -318,28 +317,19 @@ class GenerationResultBase:
         spec_dec.acceptance_rate = accepted / drafted
         perf_metrics.speculative_decoding = spec_dec
 
-    def _handle_sequence(self,
-                         finish_reasons,
-                         response_tensors,
-                         sequence_index,
-                         logprobs_result=None,
-                         req_perf_metrics_dict: Optional[dict[str,
-                                                              float]] = None,
-                         *,
-                         output_token_ids=None,
-                         request_perf_metrics=None):
-        """Handle a single sequence in the response.
+    def _handle_sequence(self, finish_reasons, response_tensors: StepRowResult,
+                         sequence_index: int,
+                         logprobs_result: Optional[LogProbsResult],
+                         req_perf_metrics_dict: Optional[dict[str, float]], *,
+                         output_token_ids, request_perf_metrics):
+        """Handle a single sequence of a row.
 
-        ``output_token_ids`` and ``request_perf_metrics`` are the
-        corresponding ``response_tensors`` attributes, pre-read by the caller
-        so a per-beam loop does not re-read (and re-convert) them per beam.
+        ``output_token_ids`` are the row's, with the prompt first when the
+        outputs start with it; ``request_perf_metrics`` is the row's, read once
+        for all the beams.
         """
         seq_idx = sequence_index
         src_idx = sequence_index if self.sampling_params.use_beam_search else 0
-        if output_token_ids is None:
-            output_token_ids = response_tensors.output_token_ids
-        if request_perf_metrics is None:
-            request_perf_metrics = response_tensors.request_perf_metrics
 
         output = self._outputs[seq_idx]
         output.disaggregated_params = self.disaggregated_params
@@ -362,19 +352,14 @@ class GenerationResultBase:
                 output.token_ids.extend(decoder_output_prefix)
             output.token_ids.extend(output_token_ids[src_idx])
 
-        # Sampler logprobs belong to the Python result. Native results carry
-        # token/lifecycle metadata and can also reach this response handler.
-        has_sampler_outputs = not isinstance(response_tensors, tllm.Result)
-        if has_sampler_outputs and (cum_log_probs :=
-                                    response_tensors.cum_log_probs) is not None:
+        if (cum_log_probs := response_tensors.cum_log_probs) is not None:
             output.cumulative_logprob = cum_log_probs[src_idx]
 
         # prompt logprobs handling
         if logprobs_result and logprobs_result.prompt is not None:
             output.prompt_logprobs = logprobs_result.prompt
         # Generation logprobs are computed by the sampler.
-        if has_sampler_outputs and (log_probs :=
-                                    response_tensors.log_probs) is not None:
+        if (log_probs := response_tensors.log_probs) is not None:
             # handle logprobs directly from response tensors given by sampler
             if decoder_output_prefix and self.sampling_params.use_beam_search:
                 output.logprobs = [
@@ -421,32 +406,31 @@ class GenerationResultBase:
                         f"logprobs length: {len(output.logprobs)} != "
                         f"output.length: {output.length}")
 
-        if not isinstance(response_tensors, tllm.Result):
-            # With n > 1 each candidate is its own child request with its own
-            # counters, while the request-level copies on self are overwritten by
-            # every candidate's response. Capture this sequence's here so a choice
-            # never reports whichever candidate happened to respond last.
-            output._spec_dec_counters = _SpecDecCounters(
-                per_pos_drafted=response_tensors.per_pos_drafted,
-                per_pos_accepted=response_tensors.per_pos_accepted,
-                spec_dec_totals=response_tensors.spec_dec_totals)
+        # With n > 1 each candidate is its own child request with its own
+        # counters, while the request-level copies on self are overwritten by
+        # every candidate's response. Capture this sequence's here so a choice
+        # never reports whichever candidate happened to respond last.
+        output._spec_dec_counters = _SpecDecCounters(
+            per_pos_drafted=response_tensors.per_pos_drafted,
+            per_pos_accepted=response_tensors.per_pos_accepted,
+            spec_dec_totals=response_tensors.spec_dec_totals)
 
-            if (generation_logits :=
-                    response_tensors.generation_logits) is not None:
-                output.generation_logits = generation_logits[
-                    src_idx, :output.length]
+        if (generation_logits :=
+                response_tensors.generation_logits) is not None:
+            output.generation_logits = generation_logits[
+                src_idx, :output.length]
 
-            if (additional_context_outputs :=
-                    response_tensors.additional_context_outputs) is not None:
-                output.additional_context_outputs = additional_context_outputs
+        if (additional_context_outputs :=
+                response_tensors.additional_context_outputs) is not None:
+            output.additional_context_outputs = additional_context_outputs
 
-            if (additional_generation_outputs :=
-                    response_tensors.additional_generation_outputs) is not None:
-                output.additional_generation_outputs = additional_generation_outputs
+        if (additional_generation_outputs :=
+                response_tensors.additional_generation_outputs) is not None:
+            output.additional_generation_outputs = additional_generation_outputs
 
-            if (time_breakdown_metrics :=
-                    response_tensors.time_breakdown_metrics) is not None:
-                self.time_breakdown_metrics = time_breakdown_metrics
+        if (time_breakdown_metrics :=
+                response_tensors.time_breakdown_metrics) is not None:
+            self.time_breakdown_metrics = time_breakdown_metrics
 
         # when sampling_params.n > 1 and is cancelled, make sure all the outputs
         # be marked as cancelled.
@@ -623,11 +607,10 @@ class GenerationResultBase:
                 mrope_position_deltas_handle)
 
     def _handle_step_row(self, row: StepRowResult) -> None:
-        """Handle a row of the proto wire (proto_wire.py) as an LlmResponse's result.
+        """Handle a row of the executor's wire (proto_wire.py).
 
-        Every pickled response carries the request-level counters; a row carries
-        them only when they changed, so a row without them keeps the values this
-        sequence had.
+        A row carries the request-level counters only when they changed, so a
+        row without them keeps the values this sequence had.
         """
         self._done = row.is_final
         if row.decoding_iter is not None:
@@ -664,7 +647,7 @@ class GenerationResultBase:
         output_token_ids = row.output_token_ids
         if (not self.sampling_params.exclude_input_from_output
                 and not getattr(self, "_streaming", False)):
-            # the rows carry new tokens only; a pickled Result puts the prompt first
+            # rows carry new tokens only; these outputs start with the prompt
             prompt = self._generation_request.prompt_token_ids
             output_token_ids = [prompt + ids for ids in output_token_ids]
         if self.sampling_params.use_beam_search:
@@ -699,28 +682,23 @@ class GenerationResultBase:
     @nvtx_range_debug("handle_response",
                       color="red",
                       category="GenerationResultBase")
-    def _handle_response(self,
-                         response: Union["PostprocWorker.Output", tllm.Response,
-                                         ResponseWrapper, ErrorResponse]):
+    def _handle_response(self, response: Union["PostprocWorker.Output", StepRow,
+                                               ErrorResponse]):
         """Update outputs, completion state, and handoff metadata from a response.
 
         Args:
-            response: Executor or postprocessing result for this request.
+            response: A row of the executor's wire, or a postprocessing result, for this request.
         """
-        if isinstance(response, StepRow) and response.error_msg is None:
-            # a row that ends its request with an error takes the error branch below
-            self._handle_step_row(response.result)
-            return
-
-        req_perf_metrics_dict = None
-        if isinstance(response, ResponseWrapper):
-            req_perf_metrics_dict = response.request_perf_metrics
-            logprobs_result = response.logprobs
-            response = response._response
-        else:
-            logprobs_result = None
-
-        if isinstance(response, PostprocWorker.Output):
+        if isinstance(response, StepRow):
+            if response.error_msg is not None:
+                self._error_msg = response.error_msg
+                self._done = True
+                if self._background_error_handler is not None and (
+                        handler := self._background_error_handler()):
+                    handler(response.error_msg)
+            else:
+                self._handle_step_row(response.result)
+        elif isinstance(response, PostprocWorker.Output):
             self._done = response.is_final
             self.decoding_iter = response.decoding_iter
             self.avg_decoded_tokens_per_iter = (
@@ -777,104 +755,6 @@ class GenerationResultBase:
             if response.should_abort and not self._aborted:
                 self.abort()
 
-        elif is_llm_response(response):
-            if response.has_error():
-                self._error_msg = response.error_msg
-                self._done = True
-                if self._background_error_handler is not None and (
-                        handler := self._background_error_handler()):
-                    handler(response.error_msg)
-                return  # Never fall through to response.result
-
-            response_result = response.result
-            if hasattr(response_result, "_result") and isinstance(
-                    response_result._result, bytes):
-                response_result.deserialize()
-
-            self._done = response_result.is_final
-            context_phase_params = response_result.context_phase_params
-            self.decoding_iter = response_result.decoding_iter
-            self.cached_tokens = getattr(response_result, 'cached_tokens', 0)
-            self.ctx_computed_tokens = getattr(response_result,
-                                               'ctx_computed_tokens', 0)
-            self.ctx_first_begin = getattr(response_result, 'ctx_first_begin',
-                                           -1)
-            self.ctx_num_chunks = getattr(response_result, 'ctx_num_chunks', 0)
-            self.per_pos_drafted = getattr(response_result, 'per_pos_drafted',
-                                           None)
-            self.per_pos_accepted = getattr(response_result, 'per_pos_accepted',
-                                            None)
-            self.spec_dec_totals = getattr(response_result, 'spec_dec_totals',
-                                           None)
-            self.avg_decoded_tokens_per_iter = response_result.avg_decoded_tokens_per_iter
-            # ctx_usage only exists on the Python LlmResult wrapper; the raw C++
-            # bindings.executor.Result (non-disagg / benchmark path) does not
-            # have it, so fall back to None as with cached_tokens above.
-            ctx_usage = getattr(response_result, 'ctx_usage', None)
-            if ctx_usage is not None:
-                self._take_ctx_usage(ctx_usage)
-            if context_phase_params is not None:
-                self._take_context_phase(
-                    ctx_request_id=context_phase_params.req_id,
-                    first_gen_tokens=context_phase_params.first_gen_tokens,
-                    draft_tokens=context_phase_params.draft_tokens,
-                    ctx_dp_rank=context_phase_params.ctx_dp_rank,
-                    ctx_info_endpoint=context_phase_params.disagg_info_endpoint,
-                    opaque_state=context_phase_params.opaque_state,
-                    remote_tail_start=getattr(response_result,
-                                              "remote_tail_start", None))
-
-            finish_reasons = response_result.finish_reasons
-            # output_token_ids = (beams, tokens). Read the attribute once: on
-            # the C++-backed result every access converts the whole
-            # per-beam vector of vectors, which the per-beam loop below would
-            # otherwise repeat beam_width times.
-            output_token_ids = response_result.output_token_ids
-            request_perf_metrics = response_result.request_perf_metrics
-            if self.sampling_params.use_beam_search:
-                for beam_idx in range(len(output_token_ids)):
-                    self._handle_sequence(
-                        finish_reasons,
-                        response_result,
-                        beam_idx,
-                        logprobs_result,
-                        req_perf_metrics_dict,
-                        output_token_ids=output_token_ids,
-                        request_perf_metrics=request_perf_metrics)
-            else:
-                self._handle_sequence(finish_reasons,
-                                      response_result,
-                                      response_result.sequence_index,
-                                      logprobs_result,
-                                      req_perf_metrics_dict,
-                                      output_token_ids=output_token_ids,
-                                      request_perf_metrics=request_perf_metrics)
-
-            if context_phase_params is not None:
-                self._take_first_gen(
-                    getattr(response_result, "first_gen_log_probs", None))
-
-            if not isinstance(response_result, tllm.Result) and (
-                    context_logits :=
-                    response_result.context_logits) is not None:
-                self._context_logits = context_logits
-
-            mm_embedding_handles = getattr(response_result,
-                                           "mm_embedding_handles", None)
-            mrope_position_ids_handle = getattr(response_result,
-                                                "mrope_position_ids_handle",
-                                                None)
-            if (mm_embedding_handles is not None
-                    or mrope_position_ids_handle is not None):
-                self._take_encoder_handles(
-                    mm_embedding_handles, mrope_position_ids_handle,
-                    getattr(response_result, "mrope_position_deltas_handle",
-                            None))
-
-            # Processing background errors here ASAF during generation.
-            if self._background_error_handler and (
-                    handler := self._background_error_handler()):
-                handler()
         elif isinstance(response, ErrorResponse):
             self._error_msg = response.error_msg
             self._done = True
