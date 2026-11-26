@@ -63,6 +63,8 @@ DYNAMO_IMPORTS = [
     ("tensorrt_llm.sampling_params", "GuidedDecodingParams"),
     ("tensorrt_llm.scheduling_params", "SchedulingParams"),
     # -- executor --
+    ("tensorrt_llm.executor.request", "DEFAULT_REQUEST_PRIORITY"),
+    ("tensorrt_llm.executor.request", "GenerationRequest"),
     ("tensorrt_llm.executor.result", "GenerationResult"),
     ("tensorrt_llm.executor.result", "Logprob"),
     ("tensorrt_llm.executor.utils", "RequestError"),
