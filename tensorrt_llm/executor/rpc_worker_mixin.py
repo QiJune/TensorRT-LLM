@@ -22,7 +22,7 @@ from typing import AsyncGenerator, Optional
 from .._utils import nvtx_range_debug
 from ..llmapi.utils import logger_debug
 from ..logger import logger
-from .request import GenerationRequest
+from . import engine_server, wire
 from .rpc import RPCServer
 
 
@@ -120,7 +120,7 @@ class RpcWorkerMixin:
                     return
                 logger.error(f"PostprocWorker process {shard} died: {exc}")
                 # Requests are sharded to postproc workers by
-                # client_id % num (see _send_rsp_to_postproc); the engine
+                # client_id % num (see engine_server.publish); the engine
                 # produces no further responses for records already handed to
                 # the dead child, so fail this shard's pending requests
                 # explicitly instead of poisoning an unrelated next response.
@@ -215,13 +215,12 @@ class RpcWorkerMixin:
             self.rpc_server.bind(self.rpc_addr)
             self.rpc_server.start()
 
-    def submit(self, request: GenerationRequest):
-        """Submits a request to the worker."""
-        with nvtx_range_debug("RpcWorker.submit", color="blue", category="Worker"):
-            logger_debug(f"[worker] Submitting request {request.id}", color="green")
-            result = super().submit(request)
-            logger_debug(f"[worker] Submitted request {request.id}", color="green")
-            return result
+    def submit_frame(self, frame: "wire.SubmitFrame") -> None:
+        """Submits a frame of requests to the worker (an RPC proxy's submit)."""
+        with nvtx_range_debug("RpcWorker.submit_frame", color="blue", category="Worker"):
+            logger_debug(f"[worker] Submitting requests {frame.client_ids}", color="green")
+            engine_server.submit(self, frame)
+            logger_debug(f"[worker] Submitted requests {frame.client_ids}", color="green")
 
     def fetch_responses(self, timeout: Optional[float] = None) -> list:
         """Fetch responses from the response queue (blocking)."""

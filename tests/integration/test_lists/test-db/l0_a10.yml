@@ -138,7 +138,6 @@ l0_a10:
   - unittest/llmapi/test_additional_model_outputs.py -m "gpu1"
   # executor
   - unittest/executor/test_spec_dec_stats_pairing.py
-  - unittest/executor/test_spec_decode_stats_payload.py
   - unittest/executor/test_proxy_postproc_terminate.py
   - unittest/executor/test_proxy_fast_death.py
   - unittest/executor/test_proxy_profile_sync.py

@@ -2,19 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 import asyncio
 import traceback
+import types
 from dataclasses import dataclass
 from typing import (TYPE_CHECKING, Any, Callable, Dict, List, NamedTuple,
-                    Optional, Union)
+                    Optional)
 
 import zmq
 
 from ..._utils import nvtx_range_debug
-from ...bindings import executor as tllm
 from ...executor import wire
 from ...executor.ipc import ZeroMqQueue
 from ...executor.request import PostprocParams
-from ...executor.utils import (ErrorResponse, bucket_responses_by_frontend,
-                               is_llm_response)
+from ...executor.utils import ErrorResponse, bucket_responses_by_frontend
 from ...logger import logger
 from ...sampling_params import SamplingParams
 from ...tokenizer import TransformersTokenizer, load_hf_tokenizer
@@ -24,7 +23,6 @@ from .postprocessor_hook import load_post_processor_hook
 
 if TYPE_CHECKING:
     from ...disaggregated_params import DisaggregatedParams
-    from ...executor.utils import ResponseWrapper
     from .result import DetokenizedGenerationResultBase, GenerationResult
 
 __all__ = [
@@ -39,13 +37,15 @@ class PostprocWorker:
 
     @dataclass
     class Input:
-        rsp: Union["tllm.Response", "ResponseWrapper"]
+        rsp: "proto_wire.StepRow | ErrorResponse"
 
         # The information necessary for creating a GenerationResult in the first Input for each request
         sampling_params: Optional[SamplingParams] = None
         postproc_params: Optional[PostprocParams] = None
         disaggregated_params: Optional["DisaggregatedParams"] = None
         streaming: Optional[bool] = None
+        # a proto row's request whose outputs start with the prompt: the prompt
+        prompt_token_ids: Optional[List[int]] = None
 
     class Output(NamedTuple):
         client_id: int
@@ -128,17 +128,9 @@ class PostprocWorker:
             tokenizer=tokenizer)
 
     async def _handle_input(
-        self, input: Union["PostprocWorker.Input", "ResponseWrapper"]
-    ) -> [Any, Optional[dict[str, float]]]:
-        ''' Handle a single response from await_response worker. '''
-        result = input.rsp.result
-        if not isinstance(result, tllm.Result) and (
-                result.context_logits is not None
-                or result.generation_logits is not None):
-            raise ValueError(
-                "Context logits or generation logits are not supposed to be "
-                "sent to postprocessing workers.")
-
+            self,
+            input: "PostprocWorker.Input") -> [Any, Optional[dict[str, float]]]:
+        ''' Handle a single row of a request's output. '''
         with nvtx_range_debug("handle_input",
                               color="yellow",
                               category="Postproc"):
@@ -154,6 +146,10 @@ class PostprocWorker:
                 if input.disaggregated_params is not None:
                     self._records[
                         req_id]._disaggregated_params = input.disaggregated_params
+                if input.prompt_token_ids is not None:
+                    self._records[
+                        req_id]._generation_request = types.SimpleNamespace(
+                            prompt_token_ids=input.prompt_token_ids)
 
             record = self._records[req_id]
             record._handle_response(input.rsp)  # inplace
@@ -181,15 +177,14 @@ class PostprocWorker:
     def _step_inputs(self, frame: wire.StepFrame) -> list:
         """Turn the rows of a ``StepFrame`` into Inputs.
 
-        A request's first row brings the params its record is built from, as
-        the first Input of a pickled request does, and an error row becomes the
-        ErrorResponse rank 0 sends for a pickled request.
+        A request's first row brings the params its record is built from, and
+        an error row becomes an ErrorResponse.
         """
         contexts = proto_wire.frontend_contexts(frame)
         inputs = []
         # a new request's context says what it asked for until its record exists
         for row in proto_wire.decode(frame, self._records, contexts):
-            if row.has_error():
+            if isinstance(row, proto_wire.StepRowError):
                 inputs.append(
                     PostprocWorker.Input(
                         ErrorResponse(row.client_id, row.error_msg,
@@ -205,7 +200,8 @@ class PostprocWorker:
                     sampling_params=context.sampling_params,
                     postproc_params=context.postproc_params,
                     disaggregated_params=context.disaggregated_params,
-                    streaming=context.streaming))
+                    streaming=context.streaming,
+                    prompt_token_ids=context.prompt_token_ids))
         return inputs
 
     async def _batched_put(self):
@@ -241,10 +237,13 @@ class PostprocWorker:
                 batch.append(inp.rsp)
                 self._records.pop(client_id, None)
                 return
+            if client_id not in self._records and inp.sampling_params is None:
+                # a row after its request's record ended (its last row, its
+                # error, or a `terminate` verdict): no one receives it
+                proto_wire.release_undelivered(inp.rsp)
+                return
             try:
-                response_result = inp.rsp.result if is_llm_response(
-                    inp.rsp) else None
-                is_final = response_result.is_final if response_result else True
+                is_final = inp.rsp.result.is_final
                 res, metrics, perf_metrics, disaggregated_params = await self._handle_input(
                     inp)
                 record = self._records.get(client_id)
@@ -254,10 +253,6 @@ class PostprocWorker:
                 if record is not None and record._done:
                     is_final = True
                 should_abort = record._aborted if record else False
-                # a proto row says the request-level counters only when they
-                # change; the record holds them as pickled responses give them
-                counters = record if (record is not None and isinstance(
-                    inp.rsp, proto_wire.StepRow)) else response_result
                 finish_reason = record.outputs[0].finish_reason if (
                     record and record.outputs
                 ) else None  # pass this through for _handle_response
@@ -274,15 +269,17 @@ class PostprocWorker:
                         should_abort=should_abort,
                         finish_reason=finish_reason,
                         num_generated_tokens=num_generated_tokens,
-                        decoding_iter=getattr(counters, "decoding_iter", 0),
+                        # a row says the request-level counters only when they
+                        # change; the record holds them as the last row that
+                        # said them gave them
+                        decoding_iter=getattr(record, "decoding_iter", 0),
                         avg_decoded_tokens_per_iter=getattr(
-                            counters, "avg_decoded_tokens_per_iter", None),
-                        cached_tokens=getattr(counters, "cached_tokens", 0),
-                        ctx_computed_tokens=getattr(counters,
+                            record, "avg_decoded_tokens_per_iter", None),
+                        cached_tokens=getattr(record, "cached_tokens", 0),
+                        ctx_computed_tokens=getattr(record,
                                                     "ctx_computed_tokens", 0),
-                        ctx_first_begin=getattr(counters, "ctx_first_begin",
-                                                -1),
-                        ctx_num_chunks=getattr(counters, "ctx_num_chunks", 0),
+                        ctx_first_begin=getattr(record, "ctx_first_begin", -1),
+                        ctx_num_chunks=getattr(record, "ctx_num_chunks", 0),
                     ))
                 if is_final:
                     self._records.pop(client_id, None)

@@ -1,10 +1,12 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""The frontend's half of the executor's proto wire: requests to the engine contract, its rows back.
+"""The frontend's half of the executor's wire: requests to the engine contract, its rows back.
 
-The proxy sends rank 0 a request the proto carries as a ``SubmitBatch`` (``encode``). The proxy
-and the postprocess workers read the rows of the ``StepOutput`` rank 0 sends them each step
-(``decode``) into objects ``GenerationResult`` reads.
+A frontend sends rank 0 each request as a ``SubmitBatch`` (``encode``), and the frontend and the
+postprocess workers read the rows of the ``StepOutput`` rank 0 sends them each step (``decode``)
+into objects ``GenerationResult`` reads. Python objects a message refers to (logits processors,
+model inputs no Value can say) travel beside it in the frame. A request rank 0 refuses gets its
+error from rank 0.
 """
 
 import functools
@@ -13,6 +15,7 @@ from typing import TYPE_CHECKING, Optional
 import numpy as np
 import torch
 
+from ...executor.logprobs import Logprob, LogProbsResult
 from ...executor.wire import (
     DISAGG_PHASES,
     DTYPES,
@@ -25,18 +28,16 @@ from ...executor.wire import (
     encode_disagg,
     encode_frontend_context,
     encode_multimodal,
-    encode_prefill_usage,
     native,
     tensor_ref,
 )
 
 if TYPE_CHECKING:
-    from ...executor.logprobs import LogProbsResult
     from ...executor.request import GenerationRequest
 
 
 class StepRowResult:
-    """A row's result, read by ``GenerationResult._handle_step_row`` as it reads an ``LlmResult``.
+    """A row's result, read by ``GenerationResult._handle_step_row``.
 
     One per response, so a beam search row has a list per beam. ``decode`` fills the slots;
     ``_handle_step_row`` sets the ``per_pos_*`` and ``spec_dec_totals`` slots that
@@ -92,9 +93,10 @@ class StepRowOutputs(StepRowExtras):
 
     ``decode`` fills ``prompt_logprobs``, ``tensors`` ({name: (dtype, shape, bytes, device)}),
     ``output_groups``, the handoffs ``kv_export`` (a prefill part's, by DisaggregatedParams field)
-    and ``encoder_export`` (an encoder part's, by ``LlmResult`` attribute), and
-    ``prefill_usage`` ((prompt_tokens, cached_tokens)); ``take_outputs`` turns the tensors into
-    the logits and additional outputs ``_handle_sequence`` reads.
+    and ``encoder_export`` (an encoder part's shared tensor handles: ``mm_embedding_handles``,
+    ``mrope_position_ids_handle`` and ``mrope_position_deltas_handle``), and ``prefill_usage``
+    ((prompt_tokens, cached_tokens)); ``take_outputs`` turns the tensors into the logits and
+    additional outputs ``_handle_sequence`` reads.
     """
 
     __slots__ = (
@@ -111,11 +113,10 @@ class StepRowOutputs(StepRowExtras):
     )
 
 
-def take_outputs(row: StepRowOutputs) -> Optional["LogProbsResult"]:
-    """Frontend: set ``row``'s logits and additional outputs from its tensors.
+def take_outputs(row: StepRowOutputs) -> Optional[LogProbsResult]:
+    """Set ``row``'s logits and additional outputs from its tensors.
 
-    They are set as a pickled ``LlmResult`` has them. Returns the row's prompt logprobs as a
-    ``LogProbsResult``, or None.
+    Returns the row's prompt logprobs as a ``LogProbsResult``, or None.
     """
     row.context_logits = row.generation_logits = None
     row.additional_context_outputs = row.additional_generation_outputs = None
@@ -130,19 +131,14 @@ def take_outputs(row: StepRowOutputs) -> Optional["LogProbsResult"]:
             setattr(row, key, tensor)
     if row.prompt_logprobs is None:
         return None
-    from ...executor.logprobs import LogProbsResult
-
     return LogProbsResult(prompt=row.prompt_logprobs)
 
 
 class StepRow:
-    """One response of a ``StepFrame``, dispatched to its ``GenerationResult`` like an ``LlmResponse``."""
+    """One response of a ``StepFrame``, dispatched to its ``GenerationResult``."""
 
     __slots__ = ("client_id", "request_id", "result")
     error_msg = None
-
-    def has_error(self) -> bool:
-        return self.error_msg is not None
 
 
 class StepRowError(StepRow):
@@ -151,10 +147,38 @@ class StepRowError(StepRow):
     __slots__ = ("error_msg",)
 
 
+def release_undelivered(response) -> None:
+    """Consume the shared tensor handles of a response that no result will receive.
+
+    An encoder part's row exports its embeddings and mRoPE positions, which their producer frees
+    only once a consumer opens the handles or they are consumed here; a postprocess worker's output
+    carries them in its disaggregated params. Error responses export nothing.
+    """
+    if isinstance(response, StepRow):
+        if (export := response.result.encoder_export) is None:
+            return
+        handles = (
+            export.get("mm_embedding_handles"),
+            export.get("mrope_position_ids_handle"),
+            export.get("mrope_position_deltas_handle"),
+        )
+    else:
+        # a postprocess worker's output; an ErrorResponse has no params
+        if (params := getattr(response, "disaggregated_params", None)) is None:
+            return
+        handles = (
+            params.multimodal_embedding_handles,
+            params.mrope_position_ids_handle,
+            params.mrope_position_deltas_handle,
+        )
+    # tensorrt_llm._torch imports the LLM API, which imports this module
+    from ..._torch.shared_tensor import release_exported_handles
+
+    release_exported_handles(*handles)
+
+
 def _thinking_budget(processors) -> Optional[tuple]:
     """(budget, start ids, end ids) when ``processors`` is a thinking budget alone, else None."""
-    if not processors:
-        return None
     from ..thinking_budget import ThinkingBudgetLogitsProcessor
 
     if isinstance(processors, list) and len(processors) == 1:
@@ -168,69 +192,41 @@ def _thinking_budget(processors) -> Optional[tuple]:
     )
 
 
-def _carried(
-    request: "GenerationRequest", postprocess: bool, thinking_budget: Optional[tuple]
-) -> bool:
-    """Whether the proto carries what rank 0 reads from ``request``.
+def _refusal(request: "GenerationRequest", postprocess: bool) -> Optional[str]:
+    """The error rank 0 refuses ``request`` with on sight, as it refuses it, or None.
 
-    It does not carry, in this order: with postprocess workers, rows that need the prompt or carry
-    logits (the pickled path handles them); a prompt adapter or a prompt already trimmed; a logits
-    processor other than a thinking budget alone (``thinking_budget``); an embedding bias other
-    than a dense tensor or list, or sparse (token id, bias) pairs, which ``_enqueue_request``
-    takes; a prompt tail without disaggregated params; disaggregated params in a phase it does not
-    name, of a decode part without a request id (get_context_phase_params needs one), or with a
-    usage other than the engine's two counts; and a multimodal layout ``encode_multimodal``'s
-    items cannot say.
-
-    A value engine.proto's Value cannot hold (in multimodal data or handoffs) is left to
-    ``encode_requests``, which raises ``NotCarried`` for it.
+    ``postprocess`` is whether postprocess workers read the request's rows.
     """
     sp = request.sampling_params
-    if postprocess and (
-        sp.return_context_logits or sp.return_generation_logits or not sp.exclude_input_from_output
-    ):
-        return False
-    if request.prompt_adapter_request is not None or request._prompt_trimmed_prefix:
-        return False
-    if sp.logits_processor and thinking_budget is None:
-        return False
+    if request.prompt_adapter_request is not None:
+        return "Prompt adapters are not supported by the PyTorch executor."
+    if postprocess and (sp.return_context_logits or sp.return_generation_logits):
+        return (
+            "Postprocessing error: Context logits or generation logits are not supposed to be "
+            "sent to postprocessing workers."
+        )
     bias = sp.embedding_bias
-    if not (
-        bias is None
-        or isinstance(bias, (list, tuple))
-        or (isinstance(bias, torch.Tensor) and bias.dtype in DTYPES)
-    ):
-        return False
-    params = request.disaggregated_params
-    if params is None:
-        if request._prompt_tail_tokens:
-            return False
-    elif (
-        params.request_type not in DISAGG_PHASES
-        or (
+    if bias is not None and not isinstance(bias, (list, tuple)):
+        if not isinstance(bias, torch.Tensor):
+            return "Unsupported embedding bias type"
+        if bias.dtype not in DTYPES:
+            return f"Unsupported embedding bias dtype {bias.dtype}"
+    if (params := request.disaggregated_params) is not None:
+        if params.request_type not in DISAGG_PHASES:
+            try:
+                params.get_request_type()
+            except ValueError as e:
+                return str(e)
+        if (
             params.request_type == "generation_only"
             and params.disagg_request_id is None
             and params.ctx_request_id is None
-        )
-        or (params.orig_elapsed_s is not None and type(params.orig_elapsed_s) is not float)
-        or (params.ctx_usage is not None and encode_prefill_usage(params.ctx_usage) is None)
-    ):
-        return False
-    mm = None if request.multimodal_params is None else request.multimodal_params.multimodal_input
-    if mm is None:
-        return True
-    uuids = mm.multimodal_uuids
-    offsets = mm.multimodal_item_run_cu_offsets
-    return (
-        len(mm.multimodal_hashes) > 0
-        and (uuids is None or any(u is not None for u in uuids))
-        and (offsets is None or offsets[-1] != 0)
-    )
+        ):
+            return "A generation-only request needs disagg_request_id or ctx_request_id"
+    return None
 
 
-def _cold(
-    request: "GenerationRequest", postprocess: bool, thinking_budget: Optional[tuple]
-) -> Optional[dict]:
+def _cold(request: "GenerationRequest", postprocess: bool) -> Optional[dict]:
     """The fields few requests set, for ``encode_requests``; None when there are none."""
     sp = request.sampling_params
     cold = {}
@@ -241,13 +237,18 @@ def _cold(
     if postprocess:
         from .result import with_multimodal_spans
 
-        # what a postprocess worker builds its record from, as rank 0 sends a pickled request's
+        # what a postprocess worker builds its record from, and the prompt for outputs that
+        # start with it
+        prompt = None
+        if not sp.exclude_input_from_output and not request.streaming:
+            prompt = request.prompt_token_ids
         cold["frontend_context"] = encode_frontend_context(
             FrontendContext(
                 sp,
                 request.postproc_params,
                 request.streaming,
                 with_multimodal_spans(request.disaggregated_params, request),
+                prompt,
             )
         )
     if sp.guided_decoding is not None:
@@ -298,30 +299,32 @@ def _cold(
         cold["routed_experts"] = True
     if sp.return_encoder_output:
         cold["encoder_output"] = True
-    if thinking_budget is not None:
-        cold["thinking_budget"] = thinking_budget
+    if processors := sp.logits_processor:
+        if (budget := _thinking_budget(processors)) is not None:
+            cold["thinking_budget"] = budget
+        else:
+            cold["logits_processors"] = processors if isinstance(processors, list) else [processors]
     return cold or None
 
 
-def encode(request: "GenerationRequest", postprocess: bool) -> Optional[SubmitFrame]:
-    """Proxy: ``request`` as a ``SubmitFrame``, or None when it keeps the pickled path.
+def encode(request: "GenerationRequest", postprocess: bool) -> SubmitFrame:
+    """``request`` as a ``SubmitFrame``; one that rank 0 refuses, when it would.
 
     ``postprocess`` is whether postprocess workers read the request's rows.
     """
+    if (refusal := _refusal(request, postprocess)) is not None:
+        return SubmitFrame(b"", (request.id,), refusal=refusal)
     sp = request.sampling_params
-    thinking_budget = _thinking_budget(sp.logits_processor)
-    if not _carried(request, postprocess, thinking_budget):
-        return None
-    cold = _cold(request, postprocess, thinking_budget)
+    cold = _cold(request, postprocess)
     prompt = request.__dict__.get("_prompt_token_ids_i32")
+    if prompt is None:
+        prompt = request.__dict__.get("_prompt_token_ids")
     if tail := request._prompt_tail_tokens:
         # a decode part's frontend sends only the prompt's tail (prompt_tail.py)
-        ids = prompt if prompt is not None else request._prompt_token_ids
-        prompt = np.ascontiguousarray(ids[len(ids) - tail :], dtype=np.int32)
+        trimmed = len(prompt) - tail
+        prompt = np.ascontiguousarray(prompt[trimmed:], dtype=np.int32)
         cold = cold or {}
-        cold["prompt_trimmed_prefix"] = len(ids) - tail
-    elif prompt is None:
-        prompt = request.prompt_token_ids
+        cold["prompt_trimmed_prefix"] = trimmed
     max_tokens = sp.max_tokens
     if max_tokens is not None:
         # the forced decoder prefix is already in the prompt
@@ -343,19 +346,22 @@ def encode(request: "GenerationRequest", postprocess: bool) -> Optional[SubmitFr
         request.cache_salt,
         cold,
     )
+    objects = []
+    codec = native()
     try:
-        return SubmitFrame(native().encode_requests([item]), (request.id,))
-    except native().NotCarried:
-        # a value engine.proto's Value cannot hold (in multimodal data or handoffs)
-        return None
+        data = codec.encode_requests([item], objects)
+    # a token id or value the executor's Request would not take either
+    except (TypeError, codec.NotCarried) as e:
+        return SubmitFrame(b"", (request.id,), refusal=str(e))
+    return SubmitFrame(data, (request.id,), objects or None)
 
 
 @functools.cache
 def _finish_reasons() -> tuple:
     """The executor's finish reasons, by engine.proto's FinishReason.
 
-    An error row has no finish reason, and a prefill part ends as a pickled Result says it: not
-    finished.
+    An error row has no finish reason, and a prefill part ends as the executor's Result says it:
+    not finished.
     """
     from ...bindings import executor as tllm
 
@@ -373,7 +379,10 @@ def _finish_reasons() -> tuple:
 
 
 def frontend_contexts(frame: StepFrame) -> dict[int, FrontendContext]:
-    """Postprocess worker: the frontend contexts of the requests that start in ``frame``, by client id."""
+    """The frontend contexts of the requests that start in ``frame``, by client id.
+
+    A postprocess worker builds its records from them.
+    """
     return {
         client_id: decode_frontend_context(data)
         for client_id, data in native().frontend_contexts(frame.data)
@@ -381,16 +390,15 @@ def frontend_contexts(frame: StepFrame) -> dict[int, FrontendContext]:
 
 
 def decode(frame: StepFrame, results: dict, more_results: Optional[dict] = None) -> list[StepRow]:
-    """Frontend and postprocess workers: a ``StepFrame``'s rows.
+    """A ``StepFrame``'s rows, for the frontend or a postprocess worker.
 
     ``results``, then ``more_results``, hold by client id what says what each request asked for
     (its ``sampling_params``): a ``GenerationResult``, a postprocess worker's record, or a
     ``FrontendContext``.
     """
-    from ...executor.logprobs import Logprob
-
     return native().decode_rows(
         frame.data,
+        frame.buffers or [],
         results,
         more_results,
         (StepRow, StepRowError),

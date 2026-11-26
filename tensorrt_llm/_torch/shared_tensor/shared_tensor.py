@@ -6,7 +6,7 @@ import itertools
 import logging
 import os
 import threading
-from typing import Any, Callable, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import torch
 from torch.multiprocessing import reductions
@@ -477,3 +477,18 @@ class SharedTensorContainer:
 
         tensor_dict["method_key"] = self.method_key
         return tensor_dict
+
+
+def release_exported_handles(
+        mm_embedding_handles: Optional[List[Dict[str, Any]]],
+        mrope_position_ids_handle: Optional[Dict[str, Any]],
+        mrope_position_deltas_handle: Optional[Dict[str, Any]]) -> None:
+    """Consume a multimodal encoder's exported handles no consumer will open.
+
+    The producer cannot free an exported allocation until each of its handles
+    is opened and released, or consumed here.
+    """
+    for handle in (*(mm_embedding_handles or ()), mrope_position_ids_handle,
+                   mrope_position_deltas_handle):
+        if handle is not None:
+            SharedTensorContainer.release_dict(handle)

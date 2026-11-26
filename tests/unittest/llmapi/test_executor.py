@@ -3,7 +3,6 @@
 
 import asyncio
 import datetime
-import pickle
 import tempfile
 import threading
 import time
@@ -11,19 +10,27 @@ from concurrent.futures import ProcessPoolExecutor
 from contextlib import closing
 from pathlib import Path
 from queue import Empty, Queue
-from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 import zmq
+from test_common.executor.fakes import (Rank0, executor_requests,
+                                        fake_postprocessor, fake_rank0,
+                                        run_postprocessor)
 
+from tensorrt_llm._torch.pyexecutor.llm_request import (LlmRequestState,
+                                                        PerfTimingInfo)
+from tensorrt_llm._torch.pyexecutor.response_utils import prepare_response
 from tensorrt_llm._utils import mpi_world_size, nvtx_range_debug
 from tensorrt_llm.bindings import executor as tllm
 from tensorrt_llm.disaggregated_params import DisaggregatedParams
+from tensorrt_llm.executor import engine_server
 from tensorrt_llm.executor.ipc import FusedIpcQueue, ZeroMqQueue
+from tensorrt_llm.executor.logprobs import Logprob
 from tensorrt_llm.executor.request import GenerationRequest
 from tensorrt_llm.executor.utils import RequestError
 from tensorrt_llm.inputs.multimodal import MultimodalInput, MultimodalParams
+from tensorrt_llm.llmapi.engine_client import proto_wire
 from tensorrt_llm.llmapi.engine_client.postproc_worker import PostprocWorker
 from tensorrt_llm.llmapi.engine_client.proxy import GenerationExecutorProxy
 from tensorrt_llm.llmapi.engine_client.result import (
@@ -92,14 +99,24 @@ def test_FusedIpcQueue():
     consumer_thread.join()
 
 
-def create_rsp(id, finished: bool = False):
-    result = tllm.Result()
-    result.output_token_ids = [[id]]
-    if finished:
-        result.finish_reasons = [tllm.FinishReason.END_ID]
-    result.is_final = finished
-    result.sequence_index = 0
-    return tllm.Response(request_id=0, result=result, client_id=0)
+def _streamed_rows(*token_ids: int) -> list:
+    """The rows a frontend gets for a streaming request sampling ``token_ids``, one a step.
+
+    The last row ends the request.
+    """
+    request = GenerationRequest([1, 2, 3],
+                                SamplingParams(max_tokens=len(token_ids)),
+                                streaming=True)
+    request.set_id(1)
+    rank0 = Rank0()
+    (sequence, ) = rank0.submit(request)
+    rows = []
+    for step, token in enumerate(token_ids, 1):
+        sequence.add_new_token(token, 0)
+        if step == len(token_ids):
+            sequence.finish_by(tllm.FinishReason.END_ID, 0)
+        rows += rank0.publish(sequence)
+    return rows
 
 
 def test_GenerationResultBase():
@@ -108,114 +125,85 @@ def test_GenerationResultBase():
         id=2,
         sampling_params=sampling_params,
     )
-    result._handle_response(create_rsp(2, finished=False))
-    result._handle_response(create_rsp(3, finished=False))
-    result._handle_response(create_rsp(4, finished=True))
+    for row in _streamed_rows(2, 3, 4):
+        result._handle_response(row)
     print(result.outputs[0])
     assert len(result.outputs[0].token_ids) == 3
     assert result._done
 
 
-@pytest.mark.parametrize("pytorch", [False, True])
 @pytest.mark.parametrize("beam_search", [False, True])
 @pytest.mark.parametrize("streaming", [False, True])
 @pytest.mark.parametrize("postproc", [False, True])
-def test_result_stream_sequence_alignment(pytorch: bool, beam_search: bool,
-                                          streaming: bool,
+def test_result_stream_sequence_alignment(beam_search: bool, streaming: bool,
                                           postproc: bool) -> None:
-    from tensorrt_llm._torch.pyexecutor.llm_request import (LlmResponse,
-                                                            LlmResult, PyResult)
-    from tensorrt_llm.executor.logprobs import Logprob, LogProbsResult
-    from tensorrt_llm.executor.utils import ResponseWrapper
-
-    result = GenerationResultBase(id=0,
-                                  sampling_params=SamplingParams(
-                                      max_tokens=2,
-                                      n=2,
-                                      best_of=2,
-                                      use_beam_search=beam_search,
-                                      top_k=10,
-                                      temperature=1.0,
-                                      logprobs=1))
-    worker = SimpleNamespace(_records={},
-                             _record_creator=lambda inp, tokenizer: result,
-                             _tokenizer=None,
-                             _post_processor_hook=None)
-    prompt_logprobs = [{7: Logprob(-0.75, rank=1)}]
-    for step in ((1, 2) if streaming else (2, )):
-        for sequence in ([0] if beam_search else [0, 1]):
-            sequences = [0, 1] if beam_search else [sequence]
-            native = tllm.Result()
-            native.output_token_ids = [
-                [100 + seq * 10 + pos for pos in range(1, step + 1)]
-                if beam_search or not streaming else [100 + seq * 10 + step]
-                for seq in sequences
-            ]
-            native.sequence_index = sequence
-            native.finish_reasons = [
-                tllm.FinishReason.LENGTH
-                if step == 2 else tllm.FinishReason.NOT_FINISHED
-            ] * len(sequences)
-            native.is_final = step == 2 and (beam_search or sequence == 1)
-            if pytorch:
-                py_result = PyResult(prompt_len=1,
-                                     max_new_tokens=2,
-                                     use_device_memory=False,
-                                     return_log_probs=True)
-                py_result.set_log_probs([[{
-                    token: Logprob(logprob=-0.25, rank=1)
-                } for token in tokens] for tokens in native.output_token_ids],
-                                        [-0.25 * step] * len(sequences))
-                wrapped = LlmResult(native,
-                                    py_result,
-                                    is_final=native.is_final,
-                                    time_breakdown_metrics={"step": step})
-                response = LlmResponse(request_id=0,
-                                       client_id=0,
-                                       result=wrapped)
-            else:
-                response = tllm.Response(request_id=0,
-                                         result=native,
-                                         client_id=0)
-            # Exercise the same response wrapper and pickle boundary used by IPC
-            # and postprocessing, keeping prompt logprobs independent of Result.
-            response = pickle.loads(
-                pickle.dumps(
-                    ResponseWrapper(
-                        response,
-                        logprobs=LogProbsResult(prompt=prompt_logprobs))))
-            if postproc:
-                with closing(asyncio.new_event_loop()) as loop:
-                    loop.run_until_complete(
-                        PostprocWorker._handle_input(
-                            worker,
-                            PostprocWorker.Input(
-                                rsp=response,
-                                sampling_params=result.sampling_params,
-                                streaming=streaming)))
-            else:
-                result._handle_response(response)
+    sampling_params = SamplingParams(max_tokens=2,
+                                     n=2,
+                                     best_of=2,
+                                     use_beam_search=beam_search,
+                                     top_k=10,
+                                     temperature=1.0,
+                                     logprobs=1)
+    request = GenerationRequest([7], sampling_params, streaming=streaming)
+    request.set_id(1)
+    result = GenerationResultBase(id=1, sampling_params=sampling_params)
+    postprocessor = fake_postprocessor(
+        record_creator=lambda inp, tokenizer: result)
+    rank0 = Rank0()
+    # a beam search is one executor request; sampling, one per sequence
+    requests = rank0.submit(request)
+    beams = 2 if beam_search else 1
+    for step in (1, 2):
+        for index, executor_request in enumerate(requests):
+            sequences = range(2) if beam_search else (index, )
+            tokens = [100 + seq * 10 + step for seq in sequences]
+            for beam, token in enumerate(tokens):
+                executor_request.add_new_token(token, beam)
+            executor_request.py_result.append_log_probs([[{
+                token:
+                Logprob(logprob=-0.25, rank=1)
+            }] for token in tokens])
+            if step == 2:
+                if index == len(requests) - 1:
+                    # the request's time breakdown comes with its last row
+                    executor_request.py_perf_timing = PerfTimingInfo(
+                        ctx_gpu_forward_time=1.5)
+                executor_request.state = LlmRequestState.GENERATION_COMPLETE
+                for beam in range(beams):
+                    executor_request.set_finished_reason(
+                        tllm.FinishReason.LENGTH, beam)
+            rows = rank0.publish(executor_request)
+            if not rows:
+                # a non-streaming request responds when it ends
+                continue
+            for row in rows:
+                if postproc:
+                    with closing(asyncio.new_event_loop()) as loop:
+                        loop.run_until_complete(
+                            PostprocWorker._handle_input(
+                                postprocessor,
+                                PostprocWorker.Input(
+                                    rsp=row,
+                                    sampling_params=sampling_params,
+                                    streaming=streaming)))
+                else:
+                    result._handle_response(row)
             for seq in sequences:
                 output = result._outputs[seq]
-                assert output.token_ids == [
-                    100 + seq * 10 + pos for pos in range(1, step + 1)
-                ]
-                assert output.token_ids_diff == ([100 + seq * 10 +
-                                                  step] if streaming else
-                                                 output.token_ids)
-                expected_logprobs = ([{
+                token_ids = [100 + seq * 10 + pos for pos in range(1, step + 1)]
+                assert output.token_ids == token_ids
+                assert output.token_ids_diff == (token_ids[-1:]
+                                                 if streaming else token_ids)
+                expected_logprobs = [{
                     token: Logprob(logprob=-0.25, rank=1)
-                } for token in output.token_ids] if pytorch else [])
+                } for token in token_ids]
                 assert output.logprobs == expected_logprobs
                 assert output.logprobs_diff == (
                     expected_logprobs[-1:] if streaming else expected_logprobs)
-                assert output.prompt_logprobs == prompt_logprobs
-                assert output.cumulative_logprob == (-0.25 *
-                                                     step if pytorch else None)
+                assert output.cumulative_logprob == -0.25 * step
                 assert output.finish_reason == ("length" if step == 2 else None)
-            if pytorch:
-                assert result.time_breakdown_metrics == {"step": step}
     assert result._done
+    assert result.time_breakdown_metrics == {"ctx_gpu_forward_time": 1.5}
 
 
 def test_GenerationResult():
@@ -223,18 +211,15 @@ def test_GenerationResult():
                                 sampling_params=SamplingParams(max_tokens=4))
     result = GenerationResult(request)
 
-    for i in range(11):
-        result._handle_response(create_rsp(i + 33, finished=False))
-    result._handle_response(create_rsp(44, finished=True))
+    for row in _streamed_rows(*range(33, 45)):
+        result._handle_response(row)
     assert len(result.outputs[0].token_ids) == 12
     assert result._done
 
 
 def test_context_result_preserves_multimodal_spans() -> None:
-    from types import SimpleNamespace
-
-    from tensorrt_llm.executor.base_worker import _get_params_for_first_rsp
-
+    original = DisaggregatedParams(request_type="context_only",
+                                   disagg_request_id=42)
     request = GenerationRequest(
         # The first image-token ID is literal text, outside both image spans.
         prompt_token_ids=[129264, 129264, 129264, 42, 43, 129264],
@@ -244,24 +229,31 @@ def test_context_result_preserves_multimodal_spans() -> None:
             multimodal_positions=[1, 5],
             multimodal_lengths=[2, 1],
         )),
+        disaggregated_params=original,
     )
     request.set_id(42)
-    original = DisaggregatedParams(request_type="context_only",
-                                   disagg_request_id=42)
-    result = GenerationResult(request, disaggregated_params=original)
+    result = GenerationResult(request,
+                              disaggregated_params=request.disaggregated_params)
+    assert result.disaggregated_params.multimodal_positions == [1, 5]
     assert original.multimodal_positions is None
-    sampling_params, _, params = _get_params_for_first_rsp(
-        SimpleNamespace(_results={42: result}), 42)
-    result = GenerationResultBase(42, sampling_params)
-    result._disaggregated_params = params
 
-    response = create_rsp(17, finished=True)
-    response.result.context_phase_params = tllm.ContextPhaseParams([17], 42,
-                                                                   None, None,
-                                                                   None, None)
-    result._handle_response(response)
+    # Rank 0 sends the prefill part's one row, its KV handoff, to a postprocess
+    # worker, which builds its record from the request's first row.
+    worker = fake_rank0(postprocess_workers=1, kv_cache_transceiver=True)
+    engine_server.submit(worker,
+                         proto_wire.encode(request, postprocess=True),
+                         raise_errors=True)
+    ((llm_request, ), ) = executor_requests(worker.engine.enqueued)
+    llm_request.add_new_token(17, 0)
+    llm_request.context_phase_params = tllm.ContextPhaseParams([17], 42, None,
+                                                               None, None, None)
+    llm_request.state = LlmRequestState.DISAGG_CONTEXT_COMPLETE
+    engine_server.publish(worker, [prepare_response(llm_request)],
+                          postprocess=True)
 
-    params = result.outputs[0].disaggregated_params
+    (output, ) = run_postprocessor(fake_postprocessor(),
+                                   worker.postproc_queues[0].items)
+    params = output.disaggregated_params
     assert params.first_gen_tokens == [17]
     assert params.disagg_request_id == 42
     assert params.multimodal_positions == [1, 5]
@@ -270,26 +262,26 @@ def test_context_result_preserves_multimodal_spans() -> None:
 
 
 def test_context_result_preserves_remote_tail_handoff() -> None:
-    from types import SimpleNamespace
+    request = GenerationRequest([1, 2, 3],
+                                SamplingParams(max_tokens=1),
+                                disaggregated_params=DisaggregatedParams(
+                                    request_type="context_only",
+                                    disagg_request_id=42))
+    request.set_id(42)
+    result = GenerationResult(request,
+                              disaggregated_params=request.disaggregated_params)
+    rank0 = Rank0(kv_cache_transceiver=True)
+    (context, ) = rank0.submit(request, result)
 
-    from tensorrt_llm._torch.pyexecutor.llm_request import (LlmResponse,
-                                                            LlmResult)
-
-    result = GenerationResultBase(42, SamplingParams(max_tokens=1))
-    result._disaggregated_params = DisaggregatedParams(
-        request_type="context_only", disagg_request_id=42)
-
-    response = create_rsp(17, finished=True)
-    response.result.context_phase_params = tllm.ContextPhaseParams([17], 42,
-                                                                   None, [18],
-                                                                   None, None)
-    py_result = SimpleNamespace(
-        **{name: None
-           for name in LlmResult.py_result_properties})
-    wrapped_result = LlmResult(response.result, py_result, is_final=True)
-    wrapped_result.remote_tail_start = 64
-    result._handle_response(
-        LlmResponse(request_id=42, result=wrapped_result, client_id=42))
+    # A prefill part's last row: the handoff rank 0 seals from the executor's
+    # ContextPhaseParams, with the remote tail the decode part replays from.
+    context.add_new_token(17, 0)
+    context.context_phase_params = tllm.ContextPhaseParams([17], 42, None, [18],
+                                                           None, None)
+    context.py_csa2_remote_tail_mode = "source"
+    context.py_csa2_remote_tail_start = 64
+    context.state = LlmRequestState.DISAGG_CONTEXT_COMPLETE
+    rank0.publish(context)
 
     params = result.outputs[0].disaggregated_params
     assert params.remote_tail_start == 64
@@ -318,7 +310,7 @@ def test_result_timeout_budget_across_steps():
 
     # A single non-final response is available, then the queue goes empty and the request never
     # completes.
-    result.queue.put(create_rsp(33, finished=False))
+    result.queue.put(_streamed_rows(33, 44)[0])
 
     start = time.monotonic()
     with pytest.raises(TimeoutError):
@@ -333,8 +325,8 @@ def test_result_zero_timeout_completes_with_queued_responses():
                                 sampling_params=SamplingParams(max_tokens=4))
     result = GenerationResult(request)
 
-    result.queue.put(create_rsp(33, finished=False))
-    result.queue.put(create_rsp(44, finished=True))
+    for row in _streamed_rows(33, 44):
+        result.queue.put(row)
 
     assert result.result(timeout=0) is result
     assert result._done
@@ -356,8 +348,8 @@ def test_result_completes_within_timeout():
                                 sampling_params=SamplingParams(max_tokens=4))
     result = GenerationResult(request)
 
-    result.queue.put(create_rsp(33, finished=False))
-    result.queue.put(create_rsp(44, finished=True))
+    for row in _streamed_rows(33, 44):
+        result.queue.put(row)
 
     ret = result.result(timeout=30.0)
     assert ret is result
@@ -374,9 +366,8 @@ def test_DetokenizedGenerationResultBase():
         sampling_params=sampling_params,
         tokenizer=tokenizer,
     )
-    result._handle_response(create_rsp(20, finished=False))
-    result._handle_response(create_rsp(30, finished=False))
-    result._handle_response(create_rsp(40, finished=True))
+    for row in _streamed_rows(20, 30, 40):
+        result._handle_response(row)
     print(result.outputs[0])
     assert len(result.outputs[0].token_ids) == 3
     assert result._done
@@ -397,7 +388,7 @@ def test_abort_on_DetokenizedGenerationResultBase():
     result = DetokenizedGenerationResultBase(id=1,
                                              sampling_params=sampling_params)
     assert not result.aborted()
-    result._handle_response(create_rsp(10, finished=False))
+    result._handle_response(_streamed_rows(10, 11)[0])
     assert not result._done
 
     result.abort()
@@ -622,13 +613,14 @@ def test_ResponsePostprocessWorker():
                       out_pipe.address,
                       str(llm_models_root() / "Qwen3/Qwen3-0.6B"))
 
+    *rows, last = _streamed_rows(*[123] * 12)
     inputs = [
-        Input(rsp=create_rsp(123),
+        Input(rsp=row,
               sampling_params=SamplingParams(max_tokens=4),
-              streaming=False) for i in range(11)
+              streaming=False) for row in rows
     ]
     inputs.append(
-        Input(rsp=create_rsp(123, finished=True),
+        Input(rsp=last,
               sampling_params=SamplingParams(max_tokens=4),
               streaming=True))
 
@@ -659,15 +651,11 @@ def test_ResponsePostprocessWorker():
     out_pipe.close()
 
 
-def test_get_params_for_first_rsp_returns_disaggregated_params_once():
-    """Verify _get_params_for_first_rsp extracts disaggregated_params from the GenerationResult on the first call and returns None after.
+def test_first_row_carries_disaggregated_params_once():
+    """Verify a postprocess worker gets a request's disaggregated_params on its first row only.
 
     Regression test for https://nvbugs/5991957.
     """
-    from types import SimpleNamespace
-
-    from tensorrt_llm.executor.base_worker import _get_params_for_first_rsp
-
     disagg_params = DisaggregatedParams(
         request_type="generation_only",
         first_gen_tokens=[7],
@@ -676,28 +664,36 @@ def test_get_params_for_first_rsp_returns_disaggregated_params_once():
     request = GenerationRequest(
         prompt_token_ids=[1, 2, 3],
         sampling_params=SamplingParams(max_tokens=4),
+        streaming=True,
         disaggregated_params=disagg_params,
     )
     request.set_id(42)
-    result = GenerationResult(request, disaggregated_params=disagg_params)
+    worker = fake_rank0(postprocess_workers=1, kv_cache_transceiver=True)
+    engine_server.submit(worker,
+                         proto_wire.encode(request, postprocess=True),
+                         raise_errors=True)
+    ((llm_request, ), ) = executor_requests(worker.engine.enqueued)
+    for token in (100, 101):
+        llm_request.add_new_token(token, 0)
+        if token == 101:
+            llm_request.finish_by(tllm.FinishReason.LENGTH, 0)
+        engine_server.publish(worker, [prepare_response(llm_request)],
+                              postprocess=True)
+    (first, ), (second, ) = worker.postproc_queues[0].items
 
-    worker = SimpleNamespace(_results={42: result})
-
-    # First call: should return all three params
-    sp, pp, dp = _get_params_for_first_rsp(worker, 42)
-    assert sp is not None
-    assert pp is None  # no postproc_params on this request
+    # First row: what the worker builds the request's record from
+    ((client_id, context), ) = proto_wire.frontend_contexts(first).items()
+    assert client_id == 42
+    assert context.sampling_params is not None
+    assert context.postproc_params is None  # no postproc_params on this request
+    dp = context.disaggregated_params
     assert dp is not None
     assert dp.request_type == "generation_only"
     assert dp.first_gen_tokens == [7]
     assert dp.ctx_request_id == 12345
-    assert result._params_transmitted is True
 
-    # Second call: _params_transmitted is True, all should be None
-    sp2, pp2, dp2 = _get_params_for_first_rsp(worker, 42)
-    assert sp2 is None
-    assert pp2 is None
-    assert dp2 is None
+    # Later rows carry none of it
+    assert proto_wire.frontend_contexts(second) == {}
 
 
 def test_PostprocWorker_disaggregated_params():
@@ -724,9 +720,10 @@ def test_PostprocWorker_disaggregated_params():
         ctx_request_id=12345,
     )
 
+    first, last = _streamed_rows(42, 43)
     # First response carries disaggregated_params (transmitted once)
     input_pipe.put(
-        Input(rsp=create_rsp(42),
+        Input(rsp=first,
               sampling_params=SamplingParams(max_tokens=4),
               disaggregated_params=disagg_params,
               streaming=True))
@@ -734,7 +731,7 @@ def test_PostprocWorker_disaggregated_params():
     # Subsequent streaming response — no disaggregated_params in Input,
     # but the record should still have it from the first response
     input_pipe.put(
-        Input(rsp=create_rsp(43, finished=True),
+        Input(rsp=last,
               sampling_params=None,
               disaggregated_params=None,
               streaming=None))

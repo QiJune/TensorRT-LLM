@@ -7,26 +7,32 @@ pending ``GenerationResult`` parked in ``queue.get()`` / ``aqueue.get()``
 must wake up with a meaningful ``ErrorResponse`` rather than hang
 forever. See nvbug 6038228 and PR #12735.
 
-These tests bind the real ``AwaitResponseHelper.__call__`` /
-``_broadcast_event_loop_error`` to lightweight stubs, so they need
-neither GPUs nor models.
+These tests run the real ``AwaitResponseHelper.__call__`` /
+``_broadcast_event_loop_error`` of a fake rank 0 (test_common/executor/fakes.py)
+with a stub engine, so they need neither GPUs nor models. The pending requests
+are submitted through the executor's wire (``proto_wire.encode``,
+``engine_server.submit``), so rank 0 keeps a request entry for each.
 """
 
 import datetime
-import queue as _stdlib_queue
 import threading
 
 import pytest
+from test_common.executor.fakes import FakeEngine, fake_rank0
 
+from tensorrt_llm.executor import engine_server
 from tensorrt_llm.executor.base_worker import AwaitResponseHelper
+from tensorrt_llm.executor.request import GenerationRequest
 from tensorrt_llm.executor.utils import ErrorResponse, RequestError
 from tensorrt_llm.executor.worker import GenerationExecutorWorker
+from tensorrt_llm.llmapi.engine_client import proto_wire
+from tensorrt_llm.sampling_params import SamplingParams
 
 pytestmark = pytest.mark.cpu_only
 
 
-class _EngineStub:
-    """Stub for self.worker.engine: returns whatever the test plugged in."""
+class _EngineStub(FakeEngine):
+    """The engine rank 0's await helper polls: it gives whatever the test plugged in."""
 
     def __init__(
         self,
@@ -35,6 +41,7 @@ class _EngineStub:
         event_loop_error=None,
         is_shutdown=False,
     ):
+        super().__init__()
         self._await_responses_result = await_responses_result or []
         self._await_responses_raises = await_responses_raises
         self._event_loop_error = event_loop_error
@@ -51,44 +58,28 @@ class _EngineStub:
         return list(self._await_responses_result)
 
 
-class _ResultStub:
-    """Minimal GenerationResult: just exposes a queue."""
-
-    def __init__(self):
-        self.queue = _stdlib_queue.Queue()
-
-
-class _WorkerStub:
-    """Stub for BaseWorker exposing only the attributes the helper touches."""
-
-    def __init__(self, engine, num_pending: int = 1, ipc: bool = False):
-        self.engine = engine
-        self._results = {cid: _ResultStub() for cid in range(1, num_pending + 1)}
-        self.popped = []
-        # A non-None result_queue is what makes the helper resolve to
-        # ipc_batched -- i.e. the proxy/spawned-worker deployment.
-        self.result_queue = object() if ipc else None
-        self.postproc_queues = None
-        # responses_handler() reads this unguarded (base_worker.py); BaseWorker
-        # sets it in __init__, which this stub bypasses, so seed it to None.
-        self.frontend_result_queues = None
-        self._engine_wire_active = False
-
-    def return_queue(self, client_id: int):
-        return self._results[client_id].queue
-
-    def _pop_result(self, client_id: int):
-        self.popped.append(client_id)
-        self._results.pop(client_id, None)
-
-
 def _make_helper(engine, num_pending: int = 1, ipc: bool = False):
-    helper = AwaitResponseHelper.__new__(AwaitResponseHelper)
-    helper.worker = _WorkerStub(engine, num_pending=num_pending, ipc=ipc)
-    helper.handler_kind = AwaitResponseHelper.HandlerKind.unknown
-    helper.enable_postprocprocess_parallel = False
-    helper.temp_error_responses = _stdlib_queue.Queue()
-    return helper
+    """The await helper of a rank 0 with ``num_pending`` requests in flight, client ids from 1.
+
+    In single-process mode they are submitted as ``BaseWorker.submit`` does it:
+    rank 0 keeps a request entry in ``_results``, and the caller's
+    ``GenerationResult`` waits in ``_frontend_results``. Behind a proxy (``ipc``)
+    the frontend holds the ``GenerationResult``, rank 0 only gets the request's
+    frame, and its result queue is what makes the helper resolve to
+    ipc_batched -- i.e. the proxy/spawned-worker deployment.
+    """
+    worker = fake_rank0(in_frontend_process=not ipc)
+    worker.engine = engine
+    for client_id in range(1, num_pending + 1):
+        request = GenerationRequest([1, 2, 3], SamplingParams(max_tokens=4))
+        request.set_id(client_id)
+        if ipc:
+            engine_server.submit(
+                worker, proto_wire.encode(request, postprocess=False), raise_errors=True
+            )
+        else:
+            worker.submit(request)
+    return worker._await_response_helper
 
 
 class _ThreadStub:
@@ -189,8 +180,8 @@ class TestAwaitResponseHelperEventLoopError:
 
         assert helper(timeout=0.01) is True
         # No ErrorResponse should have been pushed.
-        for rs in helper.worker._results.values():
-            assert rs.queue.empty()
+        for result in helper.worker._frontend_results.values():
+            assert result.queue.empty()
         assert helper.worker.popped == []
 
     def test_broadcasts_when_await_responses_raises(self):
@@ -225,7 +216,7 @@ class TestAwaitResponseHelperEventLoopError:
         """Pushed item is an ErrorResponse carrying the original error text."""
         original = RuntimeError("KV cache OOM at iteration 42")
         engine = _EngineStub(event_loop_error=original, is_shutdown=True)
-        # Capture queue refs before they get popped from _results.
+        # Capture queue refs before they get popped from _frontend_results.
         helper = _make_helper(engine, num_pending=1)
         result_queue = helper.worker.return_queue(client_id=1)
 
@@ -281,10 +272,9 @@ class TestEventLoopErrorDeliveryGate:
     def test_gate_stays_clear_on_ipc_batched_path(self):
         """The regression this class exists for.
 
-        On ``ipc_batched`` the worker-side ``_results`` queues written by the
-        broadcast have no reader -- responses travel via
-        ``handle_for_ipc_batched`` -- so nothing reached the client even
-        though the puts succeeded.
+        On ``ipc_batched`` the broadcast puts onto the result queue toward the
+        proxy, and nothing on rank 0 shows that a client woke, so the gate
+        stays clear even though the puts succeeded.
         """
         original = RuntimeError("KV cache OOM")
         engine = _EngineStub(event_loop_error=original, is_shutdown=True)

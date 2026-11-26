@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import importlib
 import importlib.util
+import math
 import sys
 import time
 import warnings
@@ -9,142 +10,185 @@ from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from pathlib import Path
 from threading import Event, Lock
-from types import MethodType, ModuleType, SimpleNamespace
+from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock, Mock, patch
 
 import pytest
 import torch
 
 from tensorrt_llm._torch.pyexecutor.llm_request import LlmRequest
+from tensorrt_llm._torch.pyexecutor.response_utils import prepare_response
 from tensorrt_llm._utils import mpi_comm, mpi_rank, mpi_world_size
 from tensorrt_llm.bindings.executor import FinishReason
 from tensorrt_llm.bindings.internal.batch_manager import LlmRequestType
 from tensorrt_llm.executor.mpi_session import MpiPoolSession
 
 # isort: off
+from test_common.executor.fakes import executor_requests, fake_rank0
 from utils.llm_data import llm_models_root
 from utils.util import skip_single_gpu
 # isort: on
 
-from tensorrt_llm.executor import base_worker
+from tensorrt_llm.executor import engine_server
 from tensorrt_llm.executor.base_worker import BaseWorker
-from tensorrt_llm.executor.logprobs import LogProbsResult
 from tensorrt_llm.executor.request import GenerationRequest, LoRARequest
 from tensorrt_llm.executor.utils import RequestError
-from tensorrt_llm.llmapi.engine_client.result import GenerationResult
+from tensorrt_llm.executor.wire import SubmitFrame
+from tensorrt_llm.llmapi.engine_client import proto_wire
 from tensorrt_llm.llmapi.engine_client.rpc_proxy_mixin import RpcExecutorMixin
 from tensorrt_llm.llmapi.llm_args import TorchLlmArgs
-from tensorrt_llm.sampling_params import LogprobParams, SamplingParams
+from tensorrt_llm.sampling_params import SamplingParams
 
 default_model_name = "Qwen3/Qwen3-0.6B"
 model_path = llm_models_root() / default_model_name
 
 
+def _worker():
+    """Rank 0 in the frontend's process, as BaseWorker.submit and the await helper use it."""
+    return fake_rank0(in_frontend_process=True, max_seq_len=64)
+
+
+def _submitted(prompt=(10, 11, 12), streaming=False, **sampling):
+    """Rank 0 holding client 7's request, which a frontend sent it, and rank 0's record of it."""
+    worker = _worker()
+    request = GenerationRequest(list(prompt),
+                                SamplingParams(max_tokens=4, **sampling),
+                                streaming=streaming)
+    request.set_id(7)
+    engine_server.submit(worker,
+                         proto_wire.encode(request, postprocess=False),
+                         raise_errors=True)
+    return worker, worker._results[7]
+
+
+def _response(context_logits: torch.Tensor | None,
+              *,
+              is_final: bool = False,
+              first_token: int = 13) -> SimpleNamespace:
+    """A response of client 7 whose first output token is ``first_token``."""
+    result = SimpleNamespace(
+        is_final=is_final,
+        context_logits=context_logits,
+        context_prompt_logprob_rows=None,
+        get_result=lambda: SimpleNamespace(output_token_ids=[[first_token]]))
+    return SimpleNamespace(client_id=7,
+                           request_id=70,
+                           result=result,
+                           has_error=lambda: False)
+
+
+def _deliver(worker, result, response) -> None:
+    """Deliver ``response`` as rank 0's await thread does in the frontend's process.
+
+    ``result`` takes the rows it is handed.
+    """
+    worker._await_response_helper.handle_for_worker([response])
+    while not result.queue.empty():
+        result._result_step(timeout=0)
+
+
 @pytest.mark.cpu_only
-@pytest.mark.parametrize("return_metrics", [False, True, None],
-                         ids=["opt_out", "opt_in", "untracked"])
-def test_response_metrics_are_deserialized_only_when_requested(
-        monkeypatch: pytest.MonkeyPatch, return_metrics: bool | None) -> None:
-    metrics = {"latency": 0.125}
-    deserialize = Mock(return_value=SimpleNamespace(
-        request_perf_metrics=metrics))
-    response = SimpleNamespace(client_id=7,
-                               result=SimpleNamespace(is_final=False,
-                                                      _result=None,
-                                                      get_result=deserialize))
-    results = {} if return_metrics is None else {
-        7:
-        SimpleNamespace(sampling_params=SimpleNamespace(
-            return_perf_metrics=return_metrics))
-    }
-    monkeypatch.setattr("tensorrt_llm.executor.utils._build_perf_metrics_dict",
-                        lambda value: value)
+@pytest.mark.parametrize("return_metrics", [False, True],
+                         ids=["opt_out", "opt_in"])
+def test_perf_metrics_are_requested_only_when_asked(
+        return_metrics: bool) -> None:
+    worker = _worker()
+    request = GenerationRequest(prompt_token_ids=[10, 11],
+                                sampling_params=SamplingParams(
+                                    max_tokens=1,
+                                    return_perf_metrics=return_metrics))
+    request.set_id(7)
 
-    wrapped = base_worker._maybe_wrap_response(
-        SimpleNamespace(_results=results), response)
+    engine_server.submit(worker,
+                         proto_wire.encode(request, postprocess=False),
+                         raise_errors=True)
 
-    if return_metrics is False:
-        assert wrapped is response
-        deserialize.assert_not_called()
-    else:
-        assert wrapped.request_perf_metrics is metrics
-        deserialize.assert_called_once_with()
+    # The executor fills a result's perf metrics, which its rows carry, only
+    # for a request whose output config asks for them.
+    (enqueued, ) = worker.engine.enqueued
+    assert enqueued.request.output_config.return_perf_metrics is return_metrics
+    # The native publish says them: rank 0 prepares nothing in Python for them.
+    assert type(worker._results[7]) is engine_server.RequestEntry
 
 
 @pytest.mark.cpu_only
 @pytest.mark.parametrize("streaming", [False, True])
-@pytest.mark.parametrize("drop_context_logits", [False, True])
-@pytest.mark.parametrize("simple", [False, True])
-def test_prompt_logprobs_computation_and_streaming_cache(
-        monkeypatch, streaming, drop_context_logits, simple):
-    prompt_logprobs = [-0.5, -0.25, -0.125] if simple else [{11: "logprob"}]
-    logits = object()
-    calls = []
+@pytest.mark.parametrize("return_context_logits", [False, True])
+@pytest.mark.parametrize("top_k,simple", [(0, False), (0, True), (2, False)])
+def test_prompt_logprobs_align_with_the_prompt_and_stream_once(
+        streaming, return_context_logits, top_k, simple):
+    # n > 1 sampled: every row starts a sequence, so every row carries the
+    # prompt logprobs.
+    worker, entry = _submitted(prompt=(0, 1, 2),
+                               streaming=streaming,
+                               n=2,
+                               temperature=1.0,
+                               prompt_logprobs=top_k,
+                               prompt_logprobs_simple_format=simple,
+                               return_context_logits=return_context_logits)
+    logits = torch.tensor([[0., 1., 2., 3.]] * 3)
+    (row, ) = engine_server._prepare(worker, [_response(logits, first_token=0)],
+                                     {7})
 
-    def compute(k, context_logits, prompt_token_ids, *, simple_prompt_logprobs):
-        calls.append(
-            (k, context_logits, prompt_token_ids, simple_prompt_logprobs))
-        return LogProbsResult(prompt=prompt_logprobs)
-
-    monkeypatch.setattr(base_worker, "compute_prompt_logprobs", compute)
-    generation_result = SimpleNamespace(
-        _logprob_params=LogprobParams(prompt_logprobs=0,
-                                      drop_context_logits=drop_context_logits,
-                                      prompt_logprobs_simple_format=simple),
-        _streaming=streaming,
-        _generation_request=SimpleNamespace(prompt_token_ids=[10, 11, 12]))
-    generation_result.clear_logprob_params = lambda: delattr(
-        generation_result, "_logprob_params")
-    worker = SimpleNamespace(_results={1: generation_result})
-
-    def make_response(context_logits):
-        result = SimpleNamespace(
-            context_logits=context_logits,
-            context_prompt_logprob_rows=None,
-            is_final=False,
-            get_result=lambda: SimpleNamespace(output_token_ids=[[13]]))
-        return SimpleNamespace(client_id=1,
-                               result=result,
-                               clear_context_logits=lambda: setattr(
-                                   result, "context_logits", None))
-
-    response = make_response(logits)
-    assert base_worker._get_logprobs(worker, response).prompt == prompt_logprobs
-    assert calls == [(0, logits, [11, 12, 13], simple)]
-    assert response.result.context_logits is (None if drop_context_logits else
-                                              logits)
+    ids, values, ranks, ends, topk_ids, _ = row["prompt_logprobs"]
+    normalizer = math.log(sum(math.exp(i) for i in range(4)))
+    # Context logits predict the next prompt token; the last row predicts
+    # the first generated token. The initial prompt token has no logprob.
+    assert ids == [1, 2, 0]
+    for value, rank, token in zip(values, ranks, ids):
+        assert value == pytest.approx(token - normalizer)
+        # simple prompt logprobs carry no rank (0)
+        assert rank == (0 if simple else 4 - token)
+    # Every position's top-k are the largest logits, by rank.
+    assert ends == [top_k, 2 * top_k, 3 * top_k]
+    assert topk_ids == ([3, 2] * 3 if top_k else [])
+    # The context logits travel only when the request asked for them.
+    sent = "context_logits" in row.get("tensors", {})
+    assert sent is return_context_logits
 
     if streaming:
-        # Later streaming chunks do not carry the original context logits.
-        response = make_response(None)
-        assert base_worker._get_logprobs(worker,
-                                         response).prompt == prompt_logprobs
-        assert len(calls) == 1
+        # Later streaming rows carry no context logits: the prompt logprobs
+        # computed from the first are cached and repeated.
+        cached = entry.cached_prompt_logprobs
+        (later, ) = engine_server._prepare(worker,
+                                           [_response(None, first_token=0)],
+                                           {7})
+        assert later["prompt_logprobs"] == row["prompt_logprobs"]
+        assert entry.cached_prompt_logprobs is cached
 
-    if not streaming:
-        response = make_response(logits)
-    response.result.is_final = True
-    assert base_worker._get_logprobs(worker, response).prompt == prompt_logprobs
-    assert not hasattr(generation_result, "_logprob_params")
+    final = _response(None if streaming else logits,
+                      is_final=True,
+                      first_token=0)
+    (last, ) = engine_server._prepare(worker, [final], {7})
+    assert last["prompt_logprobs"] == row["prompt_logprobs"]
+    assert entry.logprob_params is None
 
 
 @pytest.mark.cpu_only
-def test_generation_logprobs_do_not_recompute_logits(monkeypatch):
+@pytest.mark.parametrize("return_context_logits", [False, True])
+def test_generation_logprobs_need_no_prompt_logprobs(monkeypatch,
+                                                     return_context_logits):
 
     def unexpected_compute(*args, **kwargs):
         pytest.fail("Generation logprobs must come from the sampler")
 
-    monkeypatch.setattr(base_worker, "compute_prompt_logprobs",
+    monkeypatch.setattr(engine_server, "compute_prompt_logprobs",
                         unexpected_compute)
-    generation_result = SimpleNamespace(
-        _logprob_params=None,
-        clear_logprob_params=lambda: delattr(generation_result,
-                                             "_logprob_params"))
-    worker = SimpleNamespace(_results={1: generation_result})
-    response = SimpleNamespace(client_id=1,
-                               result=SimpleNamespace(is_final=True))
-    assert base_worker._get_logprobs(worker, response) is None
-    assert not hasattr(generation_result, "_logprob_params")
+    worker, entry = _submitted(streaming=True,
+                               logprobs=2,
+                               return_context_logits=return_context_logits)
+    pending = {7}
+    (row, ) = engine_server._prepare(
+        worker, [_response(torch.zeros(3, 4), is_final=True)], pending)
+    if return_context_logits:
+        # Rank 0 prepares the context logits the request asked for.
+        assert "prompt_logprobs" not in row
+        assert "context_logits" in row["tensors"]
+    else:
+        # The sampler's response tensors carry generation logprobs, so rank 0
+        # prepares nothing in Python for the request.
+        assert type(entry) is engine_server.RequestEntry
+        assert row is None and not pending
 
 
 @pytest.mark.cpu_only
@@ -162,9 +206,10 @@ def test_queued_context_cancellation_without_prompt_logits(
                                            sampling_params=params,
                                            streaming=streaming)
     generation_request.set_id(7)
-    generation_result = GenerationResult(
-        generation_request, logprob_params=LogprobParams(prompt_logprobs=0))
-    worker = SimpleNamespace(_results={7: generation_result})
+    worker = _worker()
+    generation_result = worker.submit(generation_request)
+    entry = worker._results[7]
+    # a context-only request cancelled while queued, before it ran
     request = LlmRequest(
         request_id=1,
         client_id=7,
@@ -181,18 +226,17 @@ def test_queued_context_cancellation_without_prompt_logits(
     def unexpected_compute(*args, **kwargs):
         pytest.fail("A queued cancellation cannot have prompt logits")
 
-    monkeypatch.setattr(base_worker, "compute_prompt_logprobs",
+    monkeypatch.setattr(engine_server, "compute_prompt_logprobs",
                         unexpected_compute)
     for index, sequence in enumerate([request, *request.child_requests]):
         sequence.finish_by_reason(FinishReason.CANCELLED)
-        response = sequence.create_response()
+        response = prepare_response(sequence)
         assert response is not None
         assert response.result.context_logits is None
-        wrapped = base_worker._maybe_wrap_response(worker, response)
-        generation_result._handle_response(wrapped)
+        _deliver(worker, generation_result, response)
         is_last = index == num_sequences - 1
         assert generation_result.finished == is_last
-        assert hasattr(generation_result, "_logprob_params") != is_last
+        assert (entry.logprob_params is None) == is_last
 
     assert all(output.finish_reason == "cancelled"
                for output in generation_result.outputs)
@@ -202,55 +246,43 @@ def test_queued_context_cancellation_without_prompt_logits(
 
 
 @pytest.mark.cpu_only
-def test_cancelled_stream_keeps_cached_prompt_logprobs() -> None:
+def test_cancelled_stream_keeps_prompt_logprobs() -> None:
     """A later cancellation must preserve prompt data produced before it."""
-    params = SamplingParams(max_tokens=4, prompt_logprobs=0)
     generation_request = GenerationRequest(prompt_token_ids=[10, 11, 12],
-                                           sampling_params=params,
+                                           sampling_params=SamplingParams(
+                                               max_tokens=4, prompt_logprobs=0),
                                            streaming=True)
     generation_request.set_id(7)
-    generation_result = GenerationResult(
-        generation_request, logprob_params=LogprobParams(prompt_logprobs=0))
-    cached = [{11: "cached prompt logprob"}]
-    generation_result._cached_prompt_logprobs = cached
-    worker = SimpleNamespace(_results={7: generation_result})
-    request = LlmRequest(request_id=1,
-                         client_id=7,
-                         max_new_tokens=4,
-                         input_tokens=[10, 11, 12],
-                         sampling_config=params._get_sampling_config(),
-                         is_streaming=True,
-                         exclude_input_from_output=True,
-                         return_context_logits=True)
+    worker = _worker()
+    generation_result = worker.submit(generation_request)
+    entry = worker._results[7]
+    ((request, ), ) = executor_requests(worker.engine.enqueued)
+    # The first step: the prompt's logits and the first output token.
+    request.py_result.append_context_logits(torch.randn(3, 16))
+    request.add_new_token(13, 0)
+    _deliver(worker, generation_result, prepare_response(request))
+    prompt_logprobs = generation_result.outputs[0].prompt_logprobs
+    assert [list(position) for position in prompt_logprobs] == [[11], [12],
+                                                                [13]]
+
     request.finish_by_reason(FinishReason.CANCELLED)
-    response = request.create_response()
-    assert response is not None
-    wrapped = base_worker._maybe_wrap_response(worker, response)
-    generation_result._handle_response(wrapped)
+    _deliver(worker, generation_result, prepare_response(request))
     assert generation_result.finished
-    assert generation_result.outputs[0].prompt_logprobs is cached
-    assert not hasattr(generation_result, "_logprob_params")
+    assert generation_result.outputs[0].finish_reason == "cancelled"
+    assert generation_result.outputs[0].prompt_logprobs is prompt_logprobs
+    assert entry.logprob_params is None
 
 
 @pytest.mark.cpu_only
 def test_successful_terminal_response_still_requires_prompt_logits() -> None:
     """Missing requested logits are tolerated only for cancelled sequences."""
-    generation_result = SimpleNamespace(
-        _logprob_params=LogprobParams(prompt_logprobs=0), _streaming=False)
-    worker = SimpleNamespace(_results={7: generation_result})
-    request = LlmRequest(
-        request_id=1,
-        client_id=7,
-        max_new_tokens=4,
-        input_tokens=[10, 11, 12],
-        sampling_config=SamplingParams()._get_sampling_config(),
-        is_streaming=False,
-        return_context_logits=True)
+    worker, _ = _submitted(prompt_logprobs=0)
+    ((request, ), ) = executor_requests(worker.engine.enqueued)
     request.finish_by_reason(FinishReason.LENGTH)
     response = request.create_response()
     assert response is not None
     with pytest.raises(AssertionError, match="context_logits must not be None"):
-        base_worker._maybe_wrap_response(worker, response)
+        engine_server._prepare(worker, [response], {7})
 
 
 @pytest.mark.cpu_only
@@ -366,28 +398,27 @@ def test_get_startup_metrics_preserves_loader_policy_metadata(
 
 
 @pytest.mark.cpu_only
-def test_enqueue_request_wraps_lora_load_error():
+def test_submit_wraps_lora_load_error():
 
     def raise_load_error(lora_request):
         raise RuntimeError("bad adapter")
 
-    worker = object.__new__(BaseWorker)
-    # GC-time __del__ -> shutdown() reads this; __init__ is bypassed here, so
-    # seed it to keep teardown a clean no-op.
-    worker.doing_shutdown = False
-    worker.engine = None
+    worker = _worker()
     worker._lora_manager = object()
     worker._load_lora_adapter = raise_load_error
-    request = type(
-        "Request", (), {
-            "id": 1,
-            "prompt_adapter_request": None,
-            "lora_request": type("LoraRequest", (), {"adapter_id": 999})(),
-        })()
+    request = GenerationRequest(prompt_token_ids=[10, 11],
+                                sampling_params=SamplingParams(max_tokens=1),
+                                lora_request=LoRARequest(
+                                    "adapter", 999, "/adapters/a"))
+    request.set_id(1)
 
     with pytest.raises(RequestError,
                        match="Failed to load LoRA adapter: bad adapter"):
-        worker._enqueue_request(request)
+        engine_server.submit(worker,
+                             proto_wire.encode(request, postprocess=False),
+                             raise_errors=True)
+    assert not worker.engine.enqueued
+    assert not worker._results
 
 
 def test_lora_request_does_not_probe_filesystem_on_init(tmp_path):
@@ -425,12 +456,17 @@ def test_lora_identity_rejects_conflicting_request(
     conflict = LoRARequest("second", 7,
                            path if change_source else str(tmp_path / "other"),
                            "nemo" if change_source else "hf")
+    request = GenerationRequest(prompt_token_ids=[10, 11],
+                                sampling_params=SamplingParams(max_tokens=1),
+                                lora_request=conflict)
+    request.set_id(1)
+    worker.start = lambda: None
+    worker.engine.is_generation_model = True
     with patch("tensorrt_llm.executor.base_worker.logger.warning") as warning:
         with pytest.raises(RequestError, match="ID 7 is already bound"):
-            worker._enqueue_request(
-                SimpleNamespace(id=1,
-                                prompt_adapter_request=None,
-                                lora_request=conflict))
+            engine_server.submit(worker,
+                                 proto_wire.encode(request, postprocess=False),
+                                 raise_errors=True)
     assert warning.call_args.args[1:3] == ("7", (path, "hf"))
     assert worker._lora_manager.load_from_ckpt.call_count == 1
     worker.engine.enqueue_request.assert_not_called()
@@ -776,70 +812,6 @@ if __name__ == "__main__":
     test_worker_base.test_submit_request()
 
 
-@pytest.mark.parametrize("streaming", [False, True])
-@pytest.mark.parametrize("drop_context_logits", [False, True])
-@pytest.mark.parametrize("top_k,simple", [(0, False), (0, True), (2, False)])
-def test_prompt_logprobs_preserve_token_alignment_and_streaming_cache(
-        streaming, drop_context_logits, top_k, simple):
-    import math
-
-    from tensorrt_llm.executor.base_worker import _get_logprobs
-    from tensorrt_llm.sampling_params import LogprobParams
-
-    generation_result = SimpleNamespace(
-        _streaming=streaming,
-        _generation_request=SimpleNamespace(prompt_token_ids=[0, 1, 2]),
-        _logprob_params=LogprobParams(prompt_logprobs=top_k,
-                                      drop_context_logits=drop_context_logits,
-                                      prompt_logprobs_simple_format=simple),
-    )
-    worker = SimpleNamespace(_results={7: generation_result})
-    response_result = SimpleNamespace(
-        is_final=False,
-        context_logits=torch.tensor([[0., 1., 2., 3.]] * 3),
-        context_prompt_logprob_rows=None,
-        get_result=lambda: SimpleNamespace(output_token_ids=[[0]]),
-    )
-
-    def clear_context_logits():
-        response_result.context_logits = None
-
-    response = SimpleNamespace(client_id=7,
-                               result=response_result,
-                               clear_context_logits=clear_context_logits)
-    result = _get_logprobs(worker, response)
-
-    normalizer = math.log(sum(math.exp(i) for i in range(4)))
-    # Context logits predict the next prompt token; the last row predicts
-    # the first generated token. The initial prompt token has no logprob.
-    expected_tokens = [1, 2, 0]
-    for entry, token in zip(result.prompt, expected_tokens):
-        value = entry if simple else entry[token].logprob
-        assert value == pytest.approx(token - normalizer)
-        if not simple:
-            assert entry[token].rank == 4 - token
-    assert len(result.prompt) == len(expected_tokens)
-    assert (response_result.context_logits is None) == drop_context_logits
-
-    if streaming:
-        # Later streaming responses can omit the already-consumed logits.
-        response_result.context_logits = None
-        cached_result = _get_logprobs(worker, response)
-        assert cached_result.prompt is result.prompt
-
-
-@pytest.mark.cpu_only
-def test_generation_logprobs_need_no_worker_recomputation():
-    from tensorrt_llm.executor.base_worker import _get_logprobs
-
-    worker = SimpleNamespace(
-        _results={7: SimpleNamespace(_logprob_params=None)})
-    # Generation logprobs come directly from the sampler's response tensors.
-    response = SimpleNamespace(client_id=7,
-                               result=SimpleNamespace(is_final=False))
-    assert _get_logprobs(worker, response) is None
-
-
 @pytest.mark.cpu_only
 def test_prompt_adapter_rejected_before_loading_or_changing_tokens() -> None:
     with warnings.catch_warnings(record=True) as recorded:
@@ -859,20 +831,25 @@ def test_prompt_adapter_rejected_before_loading_or_changing_tokens() -> None:
             prompt_adapter_request=object())
     request.id = 1
     # An unsupported adapter must fail before accessing any worker resources.
+    frame = proto_wire.encode(request, postprocess=False)
+    assert frame.refusal is not None
     with pytest.raises(RequestError, match="Prompt adapters are not supported"):
-        BaseWorker._enqueue_request(SimpleNamespace(), request)
+        engine_server.submit(SimpleNamespace(start=lambda: None),
+                             frame,
+                             raise_errors=True)
 
     worker = MagicMock(rank=0,
                        _results={},
+                       _frontend_results={},
                        _client_id_to_request_id={},
                        _handle_background_error=None)
     worker._get_logprob_params.return_value = None
-    worker._enqueue_request.side_effect = lambda req: BaseWorker._enqueue_request(
-        worker, req)
     with pytest.raises(RequestError, match="Prompt adapters are not supported"):
         BaseWorker.submit(worker, request)
     assert worker._results == {}
+    assert worker._frontend_results == {}
     assert worker._client_id_to_request_id == {}
+    worker.engine.enqueue_request.assert_not_called()
     assert request.prompt_token_ids == [10, 11]
 
 
@@ -884,30 +861,33 @@ def test_submit_cleans_up_failed_enqueue(
     request = GenerationRequest(prompt_token_ids=[10, 11],
                                 sampling_params=SamplingParams(max_tokens=1))
     request.set_id(7)
-    peer_result = object()
-    worker = MagicMock(rank=0,
-                       _results={8: peer_result},
-                       _client_id_to_request_id={8: 80})
-    worker._handle_background_error = MethodType(lambda self: None, worker)
-    worker._get_logprob_params.return_value = None
+    peer_entry, peer_result = object(), object()
+    worker = _worker()
+    worker._results[8] = peer_entry
+    worker._frontend_results[8] = peer_result
+    worker._client_id_to_request_id[8] = 80
     error = error_type("enqueue failed") if error_type else None
 
-    def enqueue(req: GenerationRequest) -> int:
-        assert worker._results[req.id]._generation_request is req
+    def enqueue(executor_request, result_wait_queue=None) -> int:
+        assert executor_request.request.client_id == 7
+        assert worker._frontend_results[7]._generation_request is request
+        assert isinstance(worker._results[7], engine_server.RequestEntry)
         if error is not None:
             raise error
         return 70
 
-    worker._enqueue_request.side_effect = enqueue
+    worker.engine.enqueue_request = enqueue
     if error is not None:
-        with pytest.raises(error_type, match="enqueue failed") as exc_info:
-            BaseWorker.submit(worker, request)
-        assert exc_info.value is error
-        assert worker._results == {8: peer_result}
+        # Rank 0 answers any failure to enqueue with the request's error.
+        with pytest.raises(RequestError, match="enqueue failed"):
+            worker.submit(request)
+        assert worker._results == {8: peer_entry}
+        assert worker._frontend_results == {8: peer_result}
         assert worker._client_id_to_request_id == {8: 80}
     else:
-        result = BaseWorker.submit(worker, request)
-        assert worker._results == {7: result, 8: peer_result}
+        result = worker.submit(request)
+        assert worker._frontend_results == {7: result, 8: peer_result}
+        assert worker._results.keys() == {7, 8}
         assert worker._client_id_to_request_id == {7: 70, 8: 80}
 
 
@@ -966,7 +946,10 @@ def test_rpc_submit_rejects_prompt_adapters_before_dispatch(
             prompt_token_ids=[10, 11],
             sampling_params=SamplingParams(max_tokens=1))
     peer_result = object()
-    proxy = MagicMock(_results={8: peer_result}, _handle_background_error=None)
+    proxy = MagicMock(_results={8: peer_result},
+                      _handle_background_error=None,
+                      postproc_config=SimpleNamespace(num_postprocess_workers=0,
+                                                      enabled=False))
     proxy._get_next_client_id.return_value = 7
     proxy._get_logprob_params.return_value = None
 
@@ -974,14 +957,17 @@ def test_rpc_submit_rejects_prompt_adapters_before_dispatch(
         with pytest.raises(RequestError,
                            match="Prompt adapters are not supported"):
             executor_class.submit(proxy, request)
-        proxy.rpc_client.submit.assert_not_called()
+        proxy.rpc_client.submit_frame.assert_not_called()
         proxy._get_next_client_id.assert_not_called()
         assert request.id is None
         assert proxy._results == {8: peer_result}
     else:
         result = executor_class.submit(proxy, request)
-        proxy.rpc_client.submit.assert_called_once_with(request)
-        proxy.rpc_client.submit.return_value.remote.assert_called_once_with(
+        proxy.rpc_client.submit_frame.assert_called_once()
+        (frame, ), _ = proxy.rpc_client.submit_frame.call_args
+        assert isinstance(frame, SubmitFrame)
+        assert frame.client_ids == (7, ) and frame.refusal is None
+        proxy.rpc_client.submit_frame.return_value.remote.assert_called_once_with(
             need_response=False)
         assert request.id == 7
         assert proxy._results == {7: result, 8: peer_result}
@@ -1003,8 +989,12 @@ def test_worker_enqueues_serializable_python_input_envelope(
     captured = []
     worker = object.__new__(BaseWorker)
     worker.doing_shutdown = True
+    worker.start = lambda: None
     worker._lora_manager = None
     worker.max_seq_len = 20
+    worker._results = {}
+    worker._client_id_to_request_id = {}
+    worker._prepared_client_ids = set()
     worker.engine = SimpleNamespace(
         is_generation_model=True,
         enqueue_request=lambda request: captured.append(request) or 42)
@@ -1026,7 +1016,9 @@ def test_worker_enqueues_serializable_python_input_envelope(
         arrival_time=123.0,
     ).set_id(11)
 
-    assert worker._enqueue_request(request) == 42
+    assert engine_server.submit(worker,
+                                proto_wire.encode(request, postprocess=False),
+                                raise_errors=True) == 42
     assert len(captured) == 1
     envelope = captured[0]
     assert isinstance(envelope, ExecutorRequest)

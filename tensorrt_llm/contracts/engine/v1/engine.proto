@@ -3,16 +3,21 @@
 //
 // The engine contract: the interface between serve (the serving frontends) and the engine, which
 // both sides depend on and which depends on neither. Released with the engine, no compatibility
-// promised across versions; field numbers stay put where possible. Where a comment says "today",
-// it names what the LLM API's executor does for the same thing.
+// promised across versions; field numbers stay put where possible. A comment's closing "TRT-LLM:"
+// note says how TensorRT-LLM does what the comment describes.
 //
 // TensorRT-LLM's executor implements the Submit and Steps messages of this contract between its
 // frontends and rank 0: a frontend sends rank 0 a SubmitBatch, and rank 0 sends each frontend one
-// StepOutput per step. A request or row that needs more than these messages carry keeps the
-// executor's own message format.
+// StepOutput per step.
 //
 // Conventions:
-// - handle: a uint64 the frontend assigns (today's client_id).
+// - handle: a uint64 the frontend assigns; TRT-LLM: client_id.
+// - Side lists: two lists travel beside a message, in the frame that carries it, and its fields
+//   index them from 0. SubmitFrame.objects, beside a SubmitBatch: the frontend's language-native
+//   objects, which Value.object and LogitsProcessor.object index; an engine that cannot read them
+//   refuses a request that refers to one with ERROR_CODE_UNSUPPORTED. StepFrame.buffers, beside a
+//   StepOutput: raw bytes, which TensorRef.buffer indexes; TRT-LLM: the objects are Python objects,
+//   pickled.
 // - Hot columns: fixed-width packed repeated (fixed32 / sfixed32 / fixed64 / float / double), on the wire
 //   a contiguous little-endian array C++ and Rust can memcpy; the finish enum is a varint, 1 byte
 //   per row.
@@ -47,9 +52,9 @@ message EngineInfo {
   KvInfo kv = 5;
   Parallelism parallel = 6;
   Features features = 7;
-  DisaggInfo disagg = 8;            // today: get_disaggregated_params
-  StartupMetrics startup = 9;       // today: get_startup_metrics
-  repeated KvEventSource kv_event_sources = 10;  // today: the sources of OpenEngine discovery
+  DisaggInfo disagg = 8;            // TRT-LLM: get_disaggregated_params
+  StartupMetrics startup = 9;       // TRT-LLM: get_startup_metrics
+  repeated KvEventSource kv_event_sources = 10;  // TRT-LLM: the sources of OpenEngine discovery
   repeated OutputSource output_sources = 11;     // empty: one source, 0, on this connection
 }
 
@@ -68,7 +73,7 @@ message Limits {
   uint32 max_seq_len = 1;
   uint32 max_num_tokens = 2;
   uint32 max_batch_size = 3;
-  uint32 max_beam_width = 4;        // today a request's beam width must equal it
+  uint32 max_beam_width = 4;        // TRT-LLM: a request's beam width must equal it
   uint32 max_draft_len = 5;         // 0 = no speculative decoding
   uint32 max_logprobs = 6;
 }
@@ -77,7 +82,7 @@ message KvInfo {
   uint32 tokens_per_block = 1;
   uint64 total_blocks = 2;
   uint64 total_host_blocks = 3;
-  string event_hash_algo = 4;       // today /server_info and OpenEngine each report one, and they can differ
+  string event_hash_algo = 4;       // TRT-LLM: /server_info and OpenEngine each report one, and they can differ
   bool events_enabled = 5;
 }
 
@@ -118,7 +123,7 @@ message KvEventSource {
   string topic = 2;
   string replay_endpoint = 3;
   uint32 attention_dp_rank = 4;
-  string encoding = 5;                   // msgpack today
+  string encoding = 5;                   // TRT-LLM: msgpack
 }
 
 // Where StepOutputs come from. An engine that gathers its rows in one place has one source; a
@@ -249,13 +254,19 @@ message GuidedDecoding {
   }
 }
 
-// Today a Python callable goes over the wire; here, a plugin the engine registers by name
+// A logits processor: a plugin the engine registers by name (Features.logits_processors), or a
+// frontend object that only an engine in the frontend's language runs. An engine refuses one it
+// cannot run with ERROR_CODE_UNSUPPORTED; TRT-LLM: the object is a Python callable, and the engine
+// registers no plugins
 message LogitsProcessor {
-  string name = 1;
-  bytes args = 2;                        // JSON
+  oneof processor {
+    string name = 1;                     // a plugin, by its name in Features.logits_processors
+    uint32 object = 3;                   // a frontend object, by its index in SubmitFrame.objects
+  }
+  bytes args = 2;                        // a plugin's arguments, JSON
 }
 
-// Today a ThinkingBudgetLogitsProcessor the frontend inserts; here, a parameter the engine applies itself
+// A reasoning budget the engine applies itself; TRT-LLM: as a ThinkingBudgetLogitsProcessor
 message ThinkingBudget {
   uint32 budget = 1;
   repeated sfixed32 start_ids = 2;       // the tokens that open reasoning
@@ -276,7 +287,7 @@ enum LoraFormat {
 message Scheduling {
   optional float priority = 1;           // [0, 1], default 0.5
   optional uint32 attention_dp_rank = 2;
-  bool attention_dp_strict = 3;          // default false, i.e. today's attention_dp_relax = true
+  bool attention_dp_strict = 3;          // true: only on attention_dp_rank; TRT-LLM: attention_dp_relax, negated
   repeated AgentHop agent_hierarchy = 4;
   string subagent_affinity_id = 5;
   fixed64 arrival_time_ns = 6;           // when serve received the request; for metrics only
@@ -365,8 +376,9 @@ message PrefillUsage {
   uint32 cached_tokens = 2;
 }
 
-// A tree of plain values and tensors, for what one side packs for the other without a schema
-// here: the model inputs, and the engine's sealed handoffs
+// A tree of plain values, tensors and frontend objects, for what one side packs for the other
+// without a schema here: the model inputs, and the engine's sealed handoffs, which hold no frontend
+// objects since serve passes them on apart from the message they came with
 message Value {
   oneof kind {
     bool none = 1;
@@ -379,6 +391,7 @@ message Value {
     Values list = 8;
     Values tuple = 9;
     Fields map = 10;
+    uint32 object = 11;                  // a frontend object, by its index in SubmitFrame.objects, which only an engine in the frontend's language reads; TRT-LLM: a Python object
   }
 }
 
@@ -445,12 +458,12 @@ message StepOutput {
   repeated sfixed32 tokens = 6;          // new tokens only, no prompt
   repeated FinishReason finish = 7;      // 1 byte per row: FinishReason values stay below 128
   repeated sfixed32 stop_index = 8;      // with finish = STOP_SEQUENCE, the index into Stopping.stop, else -1; omitted when no row has one
-  repeated fixed32 replace_from = 9;     // beam search: the output position this row's tokens overwrite from (today the whole beam each time, i.e. 0); 0xFFFFFFFF: the row appends (a row that is not a beam); omitted without beam rows
+  repeated fixed32 replace_from = 9;     // beam search: the output position this row's tokens overwrite from; 0xFFFFFFFF: the row appends (a row that is not a beam); omitted without beam rows; TRT-LLM: 0, the whole beam each time
 
   // Optional columns: the whole column is present when one row's request asked for it, and the
   // other rows have placeholders
   TokenLogprobs logprobs = 10;           // OutputOptions.logprobs, aligned with tokens
-  repeated double cum_logprobs = 11;     // OutputOptions.logprobs, one per row: the cumulative logprob up to this step (beams, picking n of best_of), summed in double
+  repeated double cum_logprobs = 11;     // OutputOptions.logprobs, one per row: the cumulative logprob up to this step (beams, picking n of best_of), summed in double; NaN: this row carries no logprobs
   // OutputOptions.decoding_stats, one per row: the request's counters as they stand at this step
   repeated fixed32 decoding_iter = 12;   // the iterations the request has run
   repeated float avg_decoded_tokens_per_iter = 14;  // its tokens per iteration, above 1 with speculative decoding
@@ -534,7 +547,7 @@ message RequestTiming {
   fixed64 last_token_ns = 4;
   fixed64 kv_transfer_start_ns = 5;
   fixed64 kv_transfer_end_ns = 6;
-  uint64 kv_transfer_bytes = 7;          // today's kv_cache_size
+  uint64 kv_transfer_bytes = 7;          // TRT-LLM: kv_cache_size
   uint32 kv_blocks_allocated = 8;
   uint32 kv_blocks_new = 9;
   uint32 kv_blocks_reused = 10;
@@ -575,7 +588,7 @@ enum ErrorCode {
   ERROR_CODE_UNSPECIFIED = 0;
   ERROR_CODE_INVALID_REQUEST = 1;
   ERROR_CODE_CONTEXT_TOO_LONG = 2;
-  ERROR_CODE_UNSUPPORTED = 3;            // the engine lacks the capability: guided decoding, routed experts, etc.
+  ERROR_CODE_UNSUPPORTED = 3;            // the engine lacks the capability: guided decoding, routed experts, a logits processor plugin, frontend objects, etc.
   ERROR_CODE_LORA_CONFLICT = 4;
   ERROR_CODE_KV_TRANSFER_FAILED = 5;
   ERROR_CODE_KV_TRANSFER_TIMEOUT = 6;
@@ -586,9 +599,10 @@ enum ErrorCode {
 
 // ═══════════════════════════ Tensors ═══════════════════════════
 
-// Shared memory or CUDA IPC within one machine; across machines, inline only.
-// The rules are today's SharedTensor's: the receiver consumes or releases every exported
-// handle exactly once, and a handle is valid only while the producer process lives
+// A tensor: its data inline, in a buffer beside a StepOutput, or, within one machine, in shared
+// memory or CUDA IPC. The receiver consumes or releases every exported shared memory or CUDA IPC
+// handle exactly once, and a handle is valid only while the producer process lives; TRT-LLM:
+// SharedTensor's rules
 message TensorRef {
   DType dtype = 1;
   repeated uint64 shape = 2;
@@ -596,8 +610,9 @@ message TensorRef {
     bytes inline_data = 3;
     ShmRef shm = 4;
     CudaIpcRef cuda_ipc = 5;
+    uint32 buffer = 7;                   // in a StepOutput: raw bytes, by their index in StepFrame.buffers
   }
-  optional int32 device = 6;             // inline data: the CUDA device the producer held it on, where the receiver puts it; unset: host memory
+  optional int32 device = 6;             // inline data or a buffer: the CUDA device the producer held it on, where the receiver puts it; unset: host memory
 }
 
 message ShmRef {
@@ -627,6 +642,7 @@ enum DType {
   DTYPE_I8 = 7;
   DTYPE_U8 = 8;
   DTYPE_BOOL = 9;
+  DTYPE_F64 = 10;
 }
 
 // ═══════════════════════════ Commands ═══════════════════════════
@@ -671,7 +687,7 @@ message GetStats {
 }
 
 message Stats {
-  repeated string iteration_stats_json = 1;  // today's IterationStats JSON for now, not unpacked here
+  repeated string iteration_stats_json = 1;  // one JSON document per iteration, not unpacked here; TRT-LLM: IterationStats
 }
 
 message GetKvEvents {
@@ -701,7 +717,7 @@ message MemoryStatus {
   repeated string parked_tags = 2;
 }
 
-// Today only Ray can use it, sending pickled rebuild functions; here, explicit tensor references
+// New weights, by explicit tensor references
 message UpdateWeights {
   repeated WeightShard shards = 1;
   bool finalize = 2;                     // after the last shard: post-load hook, reset the prefix cache, restore CUDA graphs

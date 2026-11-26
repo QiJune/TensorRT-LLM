@@ -75,11 +75,6 @@ _MOVED = (
         _RESULT_NAMES + ("PostprocWorker",),
     ),
     ("tensorrt_llm.executor.result", "tensorrt_llm.executor.logprobs", _LOGPROB_NAMES),
-    (
-        "tensorrt_llm.executor.result",
-        "tensorrt_llm.executor.utils",
-        ("ResponseWrapper", "get_metrics_dict"),
-    ),
     ("tensorrt_llm.executor.postprocessor_hook", f"{_CLIENT}.postprocessor_hook", _HOOK_NAMES),
     ("tensorrt_llm._torch.async_llm", "tensorrt_llm.llmapi.async_llm", ("AsyncLLM",)),
 )

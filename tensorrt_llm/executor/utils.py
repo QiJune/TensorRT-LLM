@@ -24,8 +24,7 @@ import traceback
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from queue import Empty, Queue
-from typing import (TYPE_CHECKING, Any, Callable, List, NamedTuple, Optional,
-                    Union)
+from typing import Any, Callable, List, NamedTuple, Optional, Union
 
 from strenum import StrEnum
 
@@ -33,15 +32,10 @@ from tensorrt_llm._utils import mpi_rank
 from tensorrt_llm.llmapi.utils import enable_llm_debug, logger_debug
 
 from ..bindings import executor as tllm
-from ..llmapi.utils import logger_debug
 from ..logger import logger
 from ..metrics import RequestEventTiming
-from .logprobs import LogProbsResult
 from .mpi_session import (MpiCommSession, MpiPoolSession, MpiSession,
                           RemoteMpiCommSessionClient)
-
-if TYPE_CHECKING:
-    from ..llmapi.engine_client.postproc_worker import PostprocWorker
 
 
 class LlmLauncherEnvs(StrEnum):
@@ -236,32 +230,6 @@ class ErrorResponse(NamedTuple):
     request_id: int
 
 
-class ResponseWrapper:
-    """1. Wrapper of runtime response with optional outputs computed post runtime.
-    2. A workaround to pass around RequestPerfMetrics.
-    """
-
-    def __init__(self,
-                 response: Union["PostprocWorker.Output", tllm.Response],
-                 logprobs: Optional[LogProbsResult] = None,
-                 request_perf_metrics: Optional[dict[str, float]] = None):
-        self._response = response
-        self.logprobs = logprobs
-        self.request_perf_metrics = request_perf_metrics
-
-    def __getattr__(self, name):
-        response = object.__getattribute__(self, '_response')
-        return getattr(response, name)
-
-    def __getstate__(self):
-        return (self._response, self.logprobs, self.request_perf_metrics)
-
-    def __setstate__(self, state):
-        self._response = state[0]
-        self.logprobs = state[1]
-        self.request_perf_metrics = state[2]
-
-
 def _build_perf_metrics_dict(
     req_perf_metrics: tllm.RequestPerfMetrics
 ) -> dict[RequestEventTiming, float]:
@@ -283,19 +251,6 @@ def _build_perf_metrics_dict(
         RequestEventTiming.KV_CACHE_SIZE:
         req_perf_metrics.timing_metrics.kv_cache_size,
     }
-
-
-def get_metrics_dict(
-        response: tllm.Response) -> dict[RequestEventTiming, float]:
-    req_perf_metrics = None
-    res = response.result
-    if res:
-        if hasattr(res, '_result'):
-            if result := res.get_result():
-                req_perf_metrics = result.request_perf_metrics
-        else:
-            req_perf_metrics = res.request_perf_metrics
-    return _build_perf_metrics_dict(req_perf_metrics)
 
 
 # Methods that are explicitly implemented for multi-rank MPI/IPC executor
@@ -463,15 +418,6 @@ def multi_frontend_request_addr(ipc_dir: str) -> str:
 def multi_frontend_result_addr(ipc_dir: str, frontend_id: int) -> str:
     """The result lane bound by a frontend; worker/postproc PUSH-connect."""
     return f"ipc://{os.path.join(ipc_dir, f'result_{frontend_id}.sock')}"
-
-
-def is_llm_response(instance):
-    # Duck typing, expect one of:
-    #  tensorrt_llm.bindings.executor.Response
-    #  tensorrt_llm._torch.pyexecutor.llm_request.LlmResponse
-    # Avoid testing for "result", because an error bindings.executor.Response
-    # throws when accessing its result property.
-    return hasattr(instance, "has_error")
 
 
 def print_alive_threads():

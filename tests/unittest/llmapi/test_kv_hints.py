@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import JsonValue, ValidationError
+from test_common.executor.fakes import fake_rank0
 
 from tensorrt_llm.executor.request import GenerationRequest
 from tensorrt_llm.kv_hints import KvHintsEnvelope
@@ -364,13 +365,17 @@ def test_generation_request_pickle_preserves_snapshot() -> None:
 
 def test_proxy_batching_preserves_hint_snapshots() -> None:
     """Batched worker transport preserves hints, fallback and prompt tokens."""
+    from tensorrt_llm.executor import engine_server
+    from tensorrt_llm.executor.utils import PostprocWorkerConfig
     from tensorrt_llm.executor.worker import _incoming_requests
     from tensorrt_llm.llmapi.engine_client.proxy import GenerationExecutorProxy, _RequestSender
 
     hints = _hints()
     request = _request(hints)
+    request.set_id(1)
     with patch("tensorrt_llm.kv_hints.protocol.count_ignored_kv_hints"):
         fallback = _request({"protocol_version": "0.1"})
+    fallback.set_id(2)
     assert fallback.kv_hints is None
 
     request_queue = queue.Queue()
@@ -378,6 +383,7 @@ def test_proxy_batching_preserves_hint_snapshots() -> None:
     sender = _RequestSender(request_queue, error_queue)
     proxy = GenerationExecutorProxy.__new__(GenerationExecutorProxy)
     proxy.workers_started = False
+    proxy.postproc_config = PostprocWorkerConfig()
     proxy._request_sender = sender
     try:
         proxy._send_request(request)
@@ -389,11 +395,14 @@ def test_proxy_batching_preserves_hint_snapshots() -> None:
     assert error_queue.empty()
     request_queue.put(None)
 
-    received = list(_incoming_requests(request_queue))
+    worker = fake_rank0()
+    for frame in _incoming_requests(request_queue):
+        engine_server.submit(worker, frame, raise_errors=True)
+    received = worker.engine.enqueued
     assert len(received) == 2
-    assert received[0].kv_hints.envelope().model_dump() == _wire()
-    assert received[1].kv_hints is None
-    assert [item.prompt_token_ids for item in received] == [[1, 2, 3], [1, 2, 3]]
+    assert received[0].py_kv_hints.envelope().model_dump() == _wire()
+    assert received[1].py_kv_hints is None
+    assert [list(item.request.input_token_ids) for item in received] == [[1, 2, 3], [1, 2, 3]]
 
 
 def test_no_hint_and_legacy_request_state_default_to_none() -> None:
@@ -463,18 +472,16 @@ def test_llm_async_forwards_hints_to_executor() -> None:
 
 @pytest.mark.parametrize("with_hints", [False, True])
 def test_worker_and_llm_request_conversion(with_hints: bool) -> None:
-    """Real native request construction carries the Python side-channel data."""
+    """Rank 0's request from the frontend's frame, and the executor's from it, carry the hints."""
     from tensorrt_llm._torch.pyexecutor.llm_request import executor_request_to_llm_request
-    from tensorrt_llm.executor.base_worker import BaseWorker
+    from tensorrt_llm.executor import engine_server
+    from tensorrt_llm.llmapi.engine_client import proto_wire
 
     request = _request(_hints() if with_hints else None)
     request.set_id(42)
-    worker = MagicMock()
-    worker._is_pytorch_backend = True
-    worker.max_seq_len = None
-    worker.engine.enqueue_request.return_value = 42
-    BaseWorker._enqueue_request(worker, request)
-    native_request = worker.engine.enqueue_request.call_args.args[0]
+    worker = fake_rank0()
+    engine_server.submit(worker, proto_wire.encode(request, postprocess=False), raise_errors=True)
+    (native_request,) = worker.engine.enqueued
     assert native_request.py_kv_hints == request.kv_hints
 
     llm_request = executor_request_to_llm_request(

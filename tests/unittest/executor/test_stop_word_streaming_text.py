@@ -20,19 +20,24 @@ have arrived in earlier responses and already been decoded incrementally, so
 the final ``.text`` has to be decoded again from the kept ids: otherwise it
 keeps the start of the stop string (``"<answer>42</answer"``), or ends in
 U+FFFD when the decoder still holds the lead bytes of a character that only
-the stop word completes (a Thai digit such as ``"๒"``). CPU-only; no engine
-needed.
+the stop word completes (a Thai digit such as ``"๒"``).
+
+The executor's requests (``LlmRequest``) play the sampler's steps, and their
+responses reach the result as a frontend gets them: rank 0 publishes them and
+the frontend decodes the frame (``test_common.executor.fakes.Rank0``).
+CPU-only; no engine needed.
 """
 
-from types import SimpleNamespace
-
 import pytest
+from test_common.executor.fakes import Rank0
 from tokenizers import Tokenizer
 from tokenizers.decoders import ByteFallback, Fuse, Sequence
 from tokenizers.models import WordLevel
 from transformers import PreTrainedTokenizerFast
 
+from tensorrt_llm._torch.pyexecutor.llm_request import LlmRequestState
 from tensorrt_llm.bindings import executor as tllm
+from tensorrt_llm.executor.request import GenerationRequest
 from tensorrt_llm.llmapi.engine_client.result import DetokenizedGenerationResultBase
 from tensorrt_llm.sampling_params import SamplingParams
 from tensorrt_llm.tokenizer import TransformersTokenizer
@@ -61,6 +66,8 @@ THAI_GENERATED = [5, 6, 1, 2, 3, 6, 5, 6, *THAI_DIGIT_TWO]
 ANSWER_CLOSE = [9, 10, 11]
 # "<answer>42</answer>"
 ANSWER_GENERATED = [7, 8, *ANSWER_CLOSE]
+PROMPT = [5, 6]
+CLIENT_ID = 1
 
 
 @pytest.fixture(scope="module")
@@ -78,28 +85,13 @@ def detokenization_backend(request, monkeypatch: pytest.MonkeyPatch) -> str:
     return request.param
 
 
-def _response(token_ids, is_final, finish_reason, sequence_index=0):
-    result = SimpleNamespace(
-        is_final=is_final,
-        context_phase_params=None,
-        decoding_iter=1,
-        avg_decoded_tokens_per_iter=None,
-        finish_reasons=[finish_reason],
-        output_token_ids=[list(token_ids)],
-        sequence_index=sequence_index,
-        cum_log_probs=None,
-        log_probs=None,
-        generation_logits=None,
-        per_pos_drafted=None,
-        per_pos_accepted=None,
-        spec_dec_totals=None,
-        time_breakdown_metrics=None,
-        request_perf_metrics=None,
-        additional_context_outputs=None,
-        additional_generation_outputs=None,
-        context_logits=None,
-    )
-    return SimpleNamespace(has_error=lambda: False, result=result)
+def _sample(llm_request, token_ids, finish_reason=None):
+    """One sampler step of ``llm_request``: its new tokens, and its end with ``finish_reason``."""
+    for token_id in token_ids:
+        llm_request.add_new_token(token_id, 0)
+    if finish_reason is not None:
+        llm_request.state = LlmRequestState.GENERATION_COMPLETE
+        llm_request.set_finished_reason(finish_reason, 0)
 
 
 def _sampling_params(stop, stop_ids, **kwargs):
@@ -110,19 +102,25 @@ def _sampling_params(stop, stop_ids, **kwargs):
     return sampling_params
 
 
-def _run(tokenizer, sampling_params, chunks, finish_reason, streaming=True):
-    """Feed one response per chunk; the last one finishes the request with finish_reason."""
+def _serve(tokenizer, sampling_params, streaming=True):
+    """A detokenizing result for a request, the rank 0 serving it, and the executor's requests."""
+    request = GenerationRequest(list(PROMPT), sampling_params, streaming=streaming)
+    request.set_id(CLIENT_ID)
     result = DetokenizedGenerationResultBase(
-        0, sampling_params, tokenizer=tokenizer, streaming=streaming
+        CLIENT_ID, sampling_params, tokenizer=tokenizer, streaming=streaming
     )
+    rank0 = Rank0()
+    return result, rank0, rank0.submit(request, result)
+
+
+def _run(tokenizer, sampling_params, chunks, finish_reason, streaming=True):
+    """Sample one chunk per step; the last one finishes the request with finish_reason."""
+    result, rank0, (sequence,) = _serve(tokenizer, sampling_params, streaming=streaming)
     deltas = []
     for index, chunk in enumerate(chunks):
         is_final = index == len(chunks) - 1
-        result._handle_response(
-            _response(
-                chunk, is_final, finish_reason if is_final else tllm.FinishReason.NOT_FINISHED
-            )
-        )
+        _sample(sequence, chunk, finish_reason if is_final else None)
+        rank0.publish(sequence)
         deltas.append(result.outputs[0].text_diff)
     return result.outputs[0], "".join(deltas)
 
@@ -229,9 +227,7 @@ def test_trimmed_candidate_is_decoded_once_when_siblings_stream_on(tokenizer, mo
     sampling_params = _sampling_params(
         "๒", THAI_DIGIT_TWO, n=2, best_of=2, temperature=0.8, top_p=0.9
     )
-    result = DetokenizedGenerationResultBase(
-        0, sampling_params, tokenizer=tokenizer, streaming=True
-    )
+    result, rank0, sequences = _serve(tokenizer, sampling_params)
     full_decodes = []
     decode = tokenizer.decode
 
@@ -251,16 +247,10 @@ def test_trimmed_candidate_is_decoded_once_when_siblings_stream_on(tokenizer, mo
     ]
     first, second = result._outputs
     first_diffs_after_stop = []
-    for step, (sequence_index, chunk, finish_reason) in enumerate(steps):
-        is_final = step == len(steps) - 1
-        result._handle_response(
-            _response(
-                chunk,
-                is_final,
-                finish_reason or tllm.FinishReason.NOT_FINISHED,
-                sequence_index=sequence_index,
-            )
-        )
+    for sequence_index, chunk, finish_reason in steps:
+        sequence = sequences[sequence_index]
+        _sample(sequence, chunk, finish_reason)
+        rank0.publish(sequence)
         if sequence_index == 1:
             first_diffs_after_stop.append(first.text_diff)
 

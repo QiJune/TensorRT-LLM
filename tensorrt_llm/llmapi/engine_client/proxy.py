@@ -39,7 +39,6 @@ from tensorrt_llm._startup_errors import (StartupErrorInfo,
                                           wrap_worker_startup_error)
 from tensorrt_llm.logger import logger
 
-from ..._torch.pyexecutor.llm_request import release_undelivered_response
 from ..._utils import customized_gc_thresholds, mpi_rank, nvtx_range_debug
 from ...executor import wire
 from ...executor.ipc import FusedIpcQueue, IpcQueue
@@ -55,14 +54,14 @@ from ...executor.utils import (EngineDeadError, ErrorResponse,
                                PostprocWorkerConfig, RequestError,
                                WorkerCommIpcAddrs, _check_collective_rpc_guard,
                                create_mpi_comm_session,
-                               get_spawn_proxy_process_env, is_llm_response,
+                               get_spawn_proxy_process_env,
                                multi_frontend_request_addr,
                                multi_frontend_result_addr, namespace_client_id,
                                print_alive_threads)
-# yapf: enable
 from ...executor.worker import GenerationExecutorWorker, worker_main
 from ...executor.worker_process_monitor import (WorkerProcessIdentity,
                                                 WorkerProcessMonitor)
+# yapf: enable
 from ..llm_args import TorchLlmArgs
 from ..tracer import enable_llm_tracer, get_tracer, global_tracer
 from ..utils import (AsyncQueue, ManagedThread, _SyncQueue, enable_llm_debug,
@@ -878,7 +877,7 @@ class GenerationExecutorProxy(GenerationExecutor):
             # late responses instead of crashing with a KeyError.
             result = self._results.get(client_id)
             if result is None:
-                release_undelivered_response(res)
+                proto_wire.release_undelivered(res)
                 return
             queue = result.queue
             if isinstance(queue, _SyncQueue):
@@ -889,12 +888,9 @@ class GenerationExecutorProxy(GenerationExecutor):
             else:
                 queue.put(res)
 
-            # FIXME: Add type annotations and make 'res' type more homogeneous (e.g.
-            #        include PostprocWorker.Output in is_llm_response and unify is_final APIs).
-            if (is_llm_response(res) and res.result.is_final) or isinstance(
-                    res,
-                    ErrorResponse) or (isinstance(res, PostprocWorker.Output)
-                                       and res.is_final):
+            if ((isinstance(res, proto_wire.StepRow) and res.result.is_final)
+                    or isinstance(res, ErrorResponse) or
+                (isinstance(res, PostprocWorker.Output) and res.is_final)):
                 self._results.pop(client_id, None)
 
         res = res if isinstance(res, list) else [res]
@@ -1199,9 +1195,8 @@ class GenerationExecutorProxy(GenerationExecutor):
         the request as it is now, and a request that cannot be pickled raises
         here.
         """
-        if wire.ENABLED and isinstance(request, GenerationRequest):
-            request = proto_wire.encode(request,
-                                        self.postproc_config.enabled) or request
+        if isinstance(request, GenerationRequest):
+            request = proto_wire.encode(request, self.postproc_config.enabled)
         if self._request_sender is None:
             self.request_queue.put(request)
         else:

@@ -63,6 +63,7 @@ _monitor_path = (
     pathlib.Path(__file__).resolve().parents[3]
     / "tensorrt_llm"
     / "executor"
+    / "engine"
     / "worker_process_monitor.py"
 )
 _monitor_spec = importlib.util.spec_from_file_location("worker_process_monitor", _monitor_path)

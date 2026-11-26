@@ -1,26 +1,34 @@
 # SPDX-FileCopyrightText: Copyright (c) 2026 NVIDIA CORPORATION & AFFILIATES. All rights reserved.
 # SPDX-License-Identifier: Apache-2.0
-"""Rank 0's half of the executor's proto wire: the engine's requests from frames, its rows to frontends.
+"""Rank 0's half of the executor's wire: the engine's requests from frames, its rows to frontends.
 
 ``submit`` builds the executor's requests from a ``SubmitFrame``; ``publish`` sends each frontend
-(or postprocess worker) one ``StepOutput`` per step, by column. A response the proto cannot carry
-keeps the pickled path.
+(or postprocess worker) one ``StepOutput`` per step, by column, and tensor bytes beside it. A
+response the wire cannot say ends its request with an error.
 """
 
 import functools
 import struct
-import types
 from typing import TYPE_CHECKING, Callable, Optional
 
+import torch
+
+from ..bindings import executor as tllm
 from ..logger import logger
 from ..sampling_params import LogprobParams
+from .logprobs import (
+    SimpleTokenLogprobs,
+    TokenLogprobs,
+    compute_prompt_logprobs,
+    prompt_logprobs_from_reduced,
+    reduce_prompt_logprobs,
+)
 from .wire import (
     DISAGG_PHASES,
     LOGPROB_MODES,
     StepFrame,
     SubmitFrame,
     decode_disagg,
-    decode_frontend_context,
     decode_multimodal,
     decode_prefill_usage,
     device_tensor,
@@ -31,20 +39,17 @@ from .wire import (
 )
 
 if TYPE_CHECKING:
+    from .._torch.pyexecutor.llm_request import LlmResponse, LlmResult
     from .base_worker import BaseWorker
+    from .utils import ErrorResponse
 
-_NO_PERF_METRICS = types.SimpleNamespace(return_perf_metrics=False)
-
-# the extras of a request whose rows rank 0 prepares in Python or that asks for perf metrics
+# the extras of a request whose rows rank 0 prepares in Python
 _OUTPUTS_EXTRAS = frozenset(
-    ("prompt_logprobs", "context_logits", "tensor_outputs", "perf_metrics", "disagg", "multimodal")
+    ("prompt_logprobs", "context_logits", "tensor_outputs", "disagg", "multimodal")
 )
 
 # a result's groups of additional outputs; a row sends each output as the tensor "<group>/<name>"
 _OUTPUT_GROUPS = ("additional_context_outputs", "additional_generation_outputs")
-
-# Tensors one publish sends inline at most, which keeps each StepOutput well below protobuf's 2 GiB
-_TENSOR_BYTES = 1 << 30
 
 _NO_DEFAULT_MAX_TOKENS = "`default_max_tokens` cannot be deduced"
 
@@ -52,67 +57,50 @@ _NO_DEFAULT_MAX_TOKENS = "`default_max_tokens` cannot be deduced"
 _Message = Optional[Callable[[int, int], str]]
 
 
-class RequestEntry:
-    """Rank 0's record of a request that came in a ``SubmitFrame``.
+class _Unsendable(ValueError):
+    """A row the wire cannot say; it ends its request with an error."""
 
-    It is kept in ``worker._results``, where a ``GenerationResult`` is kept for a pickled one.
+
+class IncompleteContextLogitsError(RuntimeError):
+    """Context logits do not cover the whole prompt, so prompt logprobs cannot be aligned."""
+
+
+class RequestEntry:
+    """Rank 0's record of a request that came in a ``SubmitFrame``, kept in ``worker._results``.
+
     ``kind`` is how its sequences come back (``native()``'s ``KIND_SINGLE``: one,
     ``KIND_CHILDREN``: n > 1 sampled, ``KIND_BEAMS``: beam search); ``decoding_stats`` is whether
     its rows say the decoding counters (OutputOptions.decoding_stats) or its sequences' ends do;
     ``first`` is cleared once its first row is published; ``frontend_context`` is the request's
-    (Request.frontend_context) until its first row, or its first pickled response, carries it.
-    ``_streaming`` and the class attributes answer what the pickled path reads when one of its
-    responses falls back to it.
+    (Request.frontend_context) until its first row carries it.
     """
 
-    __slots__ = ("first", "kind", "decoding_stats", "_streaming", "frontend_context")
-    _logprob_params = None
-    sampling_params = _NO_PERF_METRICS
+    __slots__ = ("first", "kind", "decoding_stats", "frontend_context")
 
-    def __init__(
-        self, kind: int, decoding_stats: bool, streaming: bool, frontend_context: Optional[bytes]
-    ):
+    def __init__(self, kind: int, decoding_stats: bool, frontend_context: Optional[bytes]):
         self.first = True
         self.kind = kind
         self.decoding_stats = decoding_stats
-        self._streaming = streaming
         self.frontend_context = frontend_context
-
-    def clear_logprob_params(self) -> None:
-        pass
-
-
-def first_params(entry: RequestEntry) -> tuple:
-    """Rank 0: the params a postprocess worker builds a record from, for a pickled response.
-
-    They are (sampling_params, postproc_params, disaggregated_params) from the request's frontend
-    context when no row has carried it yet, else Nones: what ``_get_params_for_first_rsp`` gives
-    for a pickled request.
-    """
-    data = entry.frontend_context
-    if data is None:
-        return None, None, None
-    entry.frontend_context = None
-    context = decode_frontend_context(data)
-    return context.sampling_params, context.postproc_params, context.disaggregated_params
 
 
 class OutputsEntry(RequestEntry):
-    """The ``RequestEntry`` of a request whose rows rank 0 prepares in Python, or that asks for perf metrics.
+    """The ``RequestEntry`` of a request whose rows rank 0 prepares in Python.
 
-    Rank 0 prepares prompt logprobs, logits, additional outputs and handoffs. The entry holds what
-    ``_compute_pytorch_prompt_logprobs`` reads, and what the pickled path reads when one of its
-    responses falls back to it; ``prompt_first_token``, the output token the cached prompt
-    logprobs' last position was scored against, which every later row repeats; and
-    ``ctx_usage_sent``, the ctx_usage the frontend has.
+    Rank 0 prepares prompt logprobs, logits, additional outputs and handoffs. ``logprob_params``
+    are the prompt logprobs the request asked for, until its last row; ``prompt_token_ids`` is
+    the prompt they score; ``cached_prompt_logprobs`` holds a streaming request's once computed;
+    ``prompt_first_token`` is the output token the cached prompt logprobs' last position was
+    scored against, which every later row repeats; ``ctx_usage_sent`` is the ctx_usage the
+    frontend has.
     """
 
     __slots__ = (
-        "_logprob_params",
-        "_generation_request",
-        "_cached_prompt_logprobs",
+        "logprob_params",
+        "streaming",
+        "prompt_token_ids",
+        "cached_prompt_logprobs",
         "prompt_first_token",
-        "sampling_params",
         "context_logits",
         "tensor_outputs",
         "handoffs",
@@ -123,40 +111,26 @@ class OutputsEntry(RequestEntry):
         self,
         kind: int,
         decoding_stats: bool,
-        streaming: bool,
         frontend_context: Optional[bytes],
         *,
+        streaming: bool,
         logprob_params: Optional[LogprobParams],
         prompt_token_ids: Optional[list],
-        perf_metrics: bool,
         context_logits: bool,
         tensor_outputs: bool,
         handoffs: bool,
         ctx_usage_sent: Optional[dict],
     ):
-        super().__init__(kind, decoding_stats, streaming, frontend_context)
-        self._logprob_params = logprob_params
-        self._generation_request = types.SimpleNamespace(prompt_token_ids=prompt_token_ids)
-        self._cached_prompt_logprobs = None
+        super().__init__(kind, decoding_stats, frontend_context)
+        self.logprob_params = logprob_params
+        self.streaming = streaming
+        self.prompt_token_ids = prompt_token_ids
+        self.cached_prompt_logprobs = None
         self.prompt_first_token = None
-        self.sampling_params = types.SimpleNamespace(return_perf_metrics=perf_metrics)
         self.context_logits = context_logits
         self.tensor_outputs = tensor_outputs
         self.handoffs = handoffs
         self.ctx_usage_sent = ctx_usage_sent
-
-    @property
-    def prepares_rows(self) -> bool:
-        """Whether rank 0 prepares the request's rows in Python, beyond its perf metrics."""
-        return (
-            self._logprob_params is not None
-            or self.context_logits
-            or self.tensor_outputs
-            or self.handoffs
-        )
-
-    def clear_logprob_params(self) -> None:
-        self._logprob_params = None
 
 
 @functools.cache
@@ -196,24 +170,92 @@ def _is_float32(value) -> bool:
     return isinstance(value, float) and struct.unpack("f", struct.pack("f", value))[0] == value
 
 
-def _prompt_columns(prompt: list, entry: OutputsEntry) -> Optional[tuple]:
-    """Prompt logprobs as engine.proto's TokenLogprobs columns, or None when they do not fit them.
+def _compute_prompt_logprobs(
+    params: LogprobParams, prompt_token_ids: list, result: "LlmResult"
+) -> Optional[TokenLogprobs | SimpleTokenLogprobs]:
+    """The prompt logprobs of a request's first row, ``result``, from its context logits.
+
+    None when the request was cancelled before it ran, so no context logits exist.
+
+    Raises:
+        IncompleteContextLogitsError: the context logits do not cover the whole prompt.
+    """
+    context_logits = result.context_logits
+    compact_rows = result.context_prompt_logprob_rows
+    executor_result = result.get_result()
+    assert executor_result is not None, "result must not be None when prompt_logprobs is requested."
+    if (
+        context_logits is None
+        and compact_rows is None
+        and executor_result.is_sequence_final
+        and executor_result.finish_reasons
+        and all(reason == tllm.FinishReason.CANCELLED for reason in executor_result.finish_reasons)
+    ):
+        # cancellation before execution leaves no prompt logits to report
+        return None
+    assert context_logits is not None or compact_rows is not None, (
+        "context_logits must not be None when prompt_logprobs is requested."
+    )
+    # Single element list
+    first_generation_token = executor_result.output_token_ids[0][:1]
+    assert first_generation_token, (
+        "first generation token must not be empty when prompt_logprobs is requested."
+    )
+    # Pass prompt_token_ids with an offset of 1 for correct mapping to the context logits
+    targets = prompt_token_ids[1:] + first_generation_token
+    if compact_rows is None:
+        return compute_prompt_logprobs(
+            params.prompt_logprobs,
+            context_logits,
+            targets,
+            simple_prompt_logprobs=params.prompt_logprobs_simple_format,
+        ).prompt
+    rows = torch.cat(compact_rows)
+    if rows.shape[0] + 1 != len(targets):
+        # Row t scores prompt token t + 1; a reused KV cache prefix produces
+        # no rows, so the remaining rows cannot be aligned with the prompt.
+        raise IncompleteContextLogitsError(
+            f"prompt logprobs need context logits for all "
+            f"{len(targets)} prompt tokens, got {rows.shape[0] + 1} "
+            "(a reused KV cache prefix is not rescored)"
+        )
+    tail = result.context_prompt_last_logprobs
+    assert tail is not None, "Completed prompt must retain its last prediction row"
+    # The executor already normalized the last row on the logits' device,
+    # matching the other rows; normalizing it again on the host would not.
+    rows = torch.cat(
+        [
+            rows,
+            reduce_prompt_logprobs(
+                tail, first_generation_token, params.prompt_logprobs, normalized=True
+            ),
+        ]
+    )
+    return prompt_logprobs_from_reduced(
+        rows, targets, params.prompt_logprobs, params.prompt_logprobs_simple_format
+    )
+
+
+def _prompt_columns(prompt: list, entry: OutputsEntry) -> tuple:
+    """Prompt logprobs as engine.proto's TokenLogprobs columns.
 
     The columns are ids, logprobs, ranks, top-k ends, top-k ids and top-k logprobs. Each position
     predicts the next prompt token, the last ``entry.prompt_first_token``, the output token it was
     scored against; its dict has the top-k by rank, then that token when it is not among them.
+
+    Raises:
+        _Unsendable: the logprobs do not fit the columns.
     """
-    prompt_ids = entry._generation_request.prompt_token_ids
-    targets = (prompt_ids[1:] + entry.prompt_first_token)[: len(prompt)]
+    targets = (entry.prompt_token_ids[1:] + entry.prompt_first_token)[: len(prompt)]
     if len(targets) != len(prompt):
-        return None
-    k = entry._logprob_params.prompt_logprobs
+        raise _Unsendable("prompt logprobs for another prompt")
+    k = entry.logprob_params.prompt_logprobs
     ids, values, ranks, ends, topk_ids, topk_values = [], [], [], [], [], []
     for target, logprob in zip(targets, prompt):
         ids.append(target)
         if isinstance(logprob, float):
             if not _is_float32(logprob):
-                return None
+                raise _Unsendable("a prompt logprob that is not a float32")
             values.append(logprob)
             ranks.append(0)
             ends.append(len(topk_ids))
@@ -221,27 +263,31 @@ def _prompt_columns(prompt: list, entry: OutputsEntry) -> Optional[tuple]:
         items = list(logprob.items())
         for rank, (token, candidate) in enumerate(items[:k], 1):
             if candidate.rank != rank or not _is_float32(candidate.logprob):
-                return None
+                raise _Unsendable("prompt top-k logprobs whose ranks are not 1 to k")
             topk_ids.append(token)
             topk_values.append(candidate.logprob)
         tail = items[k:]
         if tail and (len(tail) != 1 or tail[0][0] != target):
-            return None
+            raise _Unsendable("a prompt logprob dict of an unknown shape")
         chosen = tail[0][1] if tail else logprob.get(target)
         if chosen is None or not _is_float32(chosen.logprob):
-            return None
+            raise _Unsendable("a prompt token without a float32 logprob")
         values.append(chosen.logprob)
-        ranks.append(chosen.rank)
+        # 0: a rank the sampler did not compute
+        ranks.append(chosen.rank or 0)
         ends.append(len(topk_ids))
     return ids, values, ranks, ends, topk_ids, topk_values
 
 
-def _prepare_handoffs(entry: OutputsEntry, result, starts: bool, out: dict) -> bool:
-    """Rank 0: what a disaggregated or multimodal request's row hands over (sealed natively).
+def _prepare_handoffs(entry: OutputsEntry, result, starts: bool, out: dict) -> None:
+    """What a disaggregated or multimodal request's row hands over (sealed natively).
 
     That is a prefill part's remote tail and first-token logprobs, and embedding and mRoPE
     handles; and the prefill part's usage when the engine learned it with the KV, on the first
-    and last row. False when the row must keep the pickled path.
+    and last row.
+
+    Raises:
+        _Unsendable: that usage changed on a middle row, which no row can say.
     """
     usage = result.ctx_usage
     if usage != entry.ctx_usage_sent:
@@ -251,7 +297,7 @@ def _prepare_handoffs(entry: OutputsEntry, result, starts: bool, out: dict) -> b
             or usage != decode_prefill_usage(*counts)
             or not (starts or result.is_final)
         ):
-            return False
+            raise _Unsendable("a prefill usage that changed on a middle row")
         out["prefill_usage"] = counts
         entry.ctx_usage_sent = usage
     kv = {}
@@ -269,35 +315,28 @@ def _prepare_handoffs(entry: OutputsEntry, result, starts: bool, out: dict) -> b
         encoder["mrope_position_deltas_handle"] = result.mrope_position_deltas_handle
     if encoder:
         out["encoder_export"] = encoder
-    return True
 
 
-def _prepare_row(
-    entry: OutputsEntry, response, starts: bool, tensor_budget: int
-) -> tuple[dict | bool | None, int]:
-    """Rank 0: what Python computes for one row of ``entry``'s request, and its tensors' bytes.
+def _prepare_row(entry: OutputsEntry, response: "LlmResponse", starts: bool) -> Optional[dict]:
+    """What Python computes for one row of ``entry``'s request, or None when there is none.
 
-    That is prompt logprobs on the row that starts a sequence, tensors, and handoffs; None when
-    there are none, and False when the columns cannot hold the row or its tensors exceed
-    ``tensor_budget`` bytes, which keeps it on the pickled path.
+    That is prompt logprobs on the row that starts a sequence, tensors, and handoffs.
 
     Raises:
         IncompleteContextLogitsError: the prompt logprobs cannot be computed.
+        _Unsendable: the wire cannot say the row.
     """
-    from .base_worker import _compute_pytorch_prompt_logprobs
-
     result = response.result
     out = {}
-    if entry._logprob_params is not None and starts:
-        cached = entry._cached_prompt_logprobs is not None
-        logprobs = _compute_pytorch_prompt_logprobs(entry, response)
-        if not cached:
+    if entry.logprob_params is not None and starts:
+        prompt = entry.cached_prompt_logprobs
+        if prompt is None:
+            prompt = _compute_prompt_logprobs(entry.logprob_params, entry.prompt_token_ids, result)
             entry.prompt_first_token = result.get_result().output_token_ids[0][:1]
-        if logprobs is not None and logprobs.prompt is not None:
-            columns = _prompt_columns(logprobs.prompt, entry)
-            if columns is None:
-                return False, 0
-            out["prompt_logprobs"] = columns
+            if entry.streaming:
+                entry.cached_prompt_logprobs = prompt
+        if prompt is not None:
+            out["prompt_logprobs"] = _prompt_columns(prompt, entry)
     tensors = {}
     if entry.context_logits and starts and (logits := result.context_logits) is not None:
         tensors["context_logits"] = tensor_ref(logits)
@@ -313,33 +352,59 @@ def _prepare_row(
                 tensors[f"{group}/{name}"] = tensor_ref(tensor)
         out["groups"] = groups
     if any(ref is None for ref in tensors.values()):
-        return False, 0
-    tensor_bytes = sum(len(ref[2]) for ref in tensors.values())
-    if tensor_bytes > tensor_budget:
-        return False, 0
-    if entry.handoffs and not _prepare_handoffs(entry, result, starts, out):
-        return False, 0
+        raise _Unsendable("a tensor of a dtype engine.proto has no name for")
+    if entry.handoffs:
+        _prepare_handoffs(entry, result, starts, out)
     if tensors:
         out["tensors"] = tensors
-    return out or None, tensor_bytes
+    return out or None
+
+
+def _refuse_request(
+    worker: "BaseWorker", response: "LlmResponse", error: Exception | str
+) -> "ErrorResponse":
+    """Answer ``response``'s request with ``error``, failing only this request.
+
+    The engine stops generating for the client, which has been answered;
+    ``drop_refused_response`` drops what it still emits.
+    """
+    from .utils import ErrorResponse
+
+    if not response.result.is_final:
+        worker._refused_client_ids.add(response.client_id)
+        worker.abort_request(response.client_id)
+    return ErrorResponse(response.client_id, str(error), response.request_id)
+
+
+def drop_refused_response(worker: "BaseWorker", response: "LlmResponse") -> bool:
+    """Whether ``response`` belongs to a request already answered with an error.
+
+    Such a request was aborted, so the engine may still emit steps that were in
+    flight and a final cancellation; the client must see none of them.
+    """
+    from .._torch.pyexecutor.llm_request import release_undelivered_response
+
+    if response.client_id not in worker._refused_client_ids:
+        return False
+    if response.has_error() or response.result.is_final:
+        worker._refused_client_ids.discard(response.client_id)
+    release_undelivered_response(response)
+    return True
 
 
 def _prepare(worker: "BaseWorker", responses: list, prepared_client_ids: set[int]) -> list:
-    """Rank 0: what Python computes for the rows of the requests in ``prepared_client_ids``, by response.
+    """What Python computes for the rows of ``prepared_client_ids``' requests, by response.
 
-    See ``_prepare_row``. A response whose prompt logprobs cannot be computed is replaced by its
-    error, as ``_maybe_wrap_response`` does.
+    See ``_prepare_row``. A response whose prompt logprobs cannot be computed, or that the wire
+    cannot say, is replaced by its error, and its request aborted.
 
     A streaming request computes its prompt logprobs once; the sequences of an n > 1 request
     that start later repeat them, scored against the first token of the sequence that computed
     them.
     """
-    from .base_worker import IncompleteContextLogitsError, _refuse_request
-
     children = native().KIND_CHILDREN
     prepared = [None] * len(responses)
     seen = set()
-    tensor_bytes = 0
     for i, response in enumerate(responses):
         client_id = getattr(response, "client_id", None)
         if client_id not in prepared_client_ids:
@@ -354,32 +419,27 @@ def _prepare(worker: "BaseWorker", responses: list, prepared_client_ids: set[int
         starts = (entry.first and client_id not in seen) or entry.kind == children
         seen.add(client_id)
         try:
-            prepared[i], row_bytes = _prepare_row(
-                entry, response, starts, _TENSOR_BYTES - tensor_bytes
-            )
+            prepared[i] = _prepare_row(entry, response, starts)
         except IncompleteContextLogitsError as error:
             responses[i] = _refuse_request(worker, response, error)
             continue
-        if prepared[i] is False:
+        except _Unsendable as error:
+            responses[i] = _refuse_request(worker, response, f"cannot send the response: {error}")
             continue
-        tensor_bytes += row_bytes
         if result.is_final:
-            entry.clear_logprob_params()
+            entry.logprob_params = None
     return prepared
 
 
 def _load_lora(worker: "BaseWorker", lora: tuple) -> Optional[tuple]:
-    """(lora_config, path, ckpt source) of a request's adapter, as ``_enqueue_request`` sets LoRA up.
+    """(lora_config, path, ckpt source) of a request's adapter, which rank 0 loads first.
 
     None without a LoRA manager; ``RequestError`` when the adapter cannot be loaded.
     """
     if worker._lora_manager is None:
         return None
-    from .request import LoRARequest
-
     adapter_id, path, source = lora
-    config = worker._load_lora_config(LoRARequest(str(adapter_id), adapter_id, path, source))
-    return config, path, source
+    return worker._load_lora_config(adapter_id, path, source), path, source
 
 
 def _apply_extra(extra: dict, request, inputs, lora: Optional[tuple]) -> None:
@@ -426,17 +486,17 @@ def _apply_extra(extra: dict, request, inputs, lora: Optional[tuple]) -> None:
         from ..llmapi.thinking_budget import ThinkingBudgetLogitsProcessor
 
         inputs.logits_post_processors = [ThinkingBudgetLogitsProcessor(*budget)]
+    if (processors := extra.get("logits_processors")) is not None:
+        inputs.logits_post_processors = processors
 
 
 def _multimodal_params(extra: dict, request):
-    """Rank 0: a multimodal request's MultimodalParams, or None without multimodal data.
+    """A multimodal request's MultimodalParams, or None without multimodal data.
 
-    Its input is set on ``request`` as ``_enqueue_request`` sets it.
+    Its input layout is set on ``request``, which the C++ runtime reads.
     """
     if (multimodal := extra.get("multimodal")) is None:
         return None
-    from ..bindings import executor as tllm
-
     params = decode_multimodal(multimodal)
     if params.has_content():
         if params.multimodal_input is not None:
@@ -448,11 +508,11 @@ def _multimodal_params(extra: dict, request):
 def _entry(kind: int, decoding_stats: bool, request, inputs, extra: Optional[dict]) -> RequestEntry:
     """Rank 0's record of a request.
 
-    An ``OutputsEntry`` for one whose rows are prepared in Python or that asked for perf metrics.
+    An ``OutputsEntry`` for one whose rows are prepared in Python.
     """
     frontend_context = None if extra is None else extra.get("frontend_context")
     if extra is None or not extra.keys() & _OUTPUTS_EXTRAS:
-        return RequestEntry(kind, decoding_stats, request.streaming, frontend_context)
+        return RequestEntry(kind, decoding_stats, frontend_context)
     logprob_params = None
     if inputs.prompt_logprobs is not None:
         logprob_params = LogprobParams(
@@ -463,11 +523,10 @@ def _entry(kind: int, decoding_stats: bool, request, inputs, extra: Optional[dic
     return OutputsEntry(
         kind,
         decoding_stats,
-        request.streaming,
         frontend_context,
+        streaming=request.streaming,
         logprob_params=logprob_params,
         prompt_token_ids=list(request.input_token_ids) if logprob_params is not None else None,
-        perf_metrics="perf_metrics" in extra,
         context_logits=inputs.context_logits_explicit,
         tensor_outputs="tensor_outputs" in extra,
         handoffs="disagg" in extra or "multimodal" in extra,
@@ -477,26 +536,42 @@ def _entry(kind: int, decoding_stats: bool, request, inputs, extra: Optional[dic
     )
 
 
-def submit(worker: "BaseWorker", frame: SubmitFrame) -> None:
-    """Rank 0: enqueue a ``SubmitFrame``'s requests as ``BaseWorker.submit`` does a pickled request's."""
+def submit(
+    worker: "BaseWorker", frame: SubmitFrame, *, raise_errors: bool = False, result_wait_queue=None
+) -> Optional[int]:
+    """Enqueue a ``SubmitFrame``'s requests; the engine's id of the last one enqueued.
+
+    A request rank 0 refuses gets its error as an ErrorResponse, or raised with ``raise_errors``,
+    which takes a frame of one request. With ``result_wait_queue``, the engine delivers the
+    requests' responses there, and rank 0 keeps no record of them.
+    """
     from .._torch.pyexecutor.request_inputs import ExecutorRequest, PythonRequestInputs
     from .utils import ErrorResponse, RequestError
 
+    assert not raise_errors or len(frame.client_ids) == 1, "raise_errors takes one request"
+
     def reject(client_id: int, error: RequestError) -> None:
+        if raise_errors:
+            raise error
         logger.error(f"submit request failed: {error}")
         worker._await_response_helper.temp_error_responses.put(
-            ErrorResponse(client_id, error, client_id)
+            ErrorResponse(client_id, str(error), client_id)
         )
 
+    request_id = None
+
     worker.start()
-    # from now on rank 0 publishes these requests' rows as StepOutputs
-    worker._engine_wire_active = True
+    if frame.refusal is not None:
+        for client_id in frame.client_ids:
+            reject(client_id, RequestError(frame.refusal))
+        return None
     cp_size = 1
     if hasattr(worker, "mapping") and worker.mapping.cp_size is not None:
         cp_size = worker.mapping.cp_size
     try:
         requests = native().ingress(
             frame.data,
+            frame.objects or [],
             getattr(worker, "max_seq_len", None),
             cp_size,
             worker.engine.is_generation_model,
@@ -504,7 +579,7 @@ def submit(worker: "BaseWorker", frame: SubmitFrame) -> None:
     except (RuntimeError, TypeError, ValueError) as e:  # a frame rank 0 cannot read
         for client_id in frame.client_ids:
             reject(client_id, RequestError(f"cannot read the request: {e}"))
-        return
+        return None
     for (
         client_id,
         request,
@@ -543,7 +618,7 @@ def submit(worker: "BaseWorker", frame: SubmitFrame) -> None:
         if request is None:
             reject(client_id, RequestError(extra["error"]))
             continue
-        # any failure from here on is this request's error, as _enqueue_request makes it
+        # any failure from here on is this request's error
         try:
             inputs = PythonRequestInputs(
                 num_logprobs=num_logprobs,
@@ -559,52 +634,91 @@ def submit(worker: "BaseWorker", frame: SubmitFrame) -> None:
                     # the handles the frontend shared the tensors through
                     multimodal.to_tensor("multimodal_data")
                     inputs.multimodal_data = multimodal.multimodal_data
+            if result_wait_queue is not None:
+                request_id = worker.engine.enqueue_request(
+                    ExecutorRequest(request, inputs), result_wait_queue=result_wait_queue
+                )
+                continue
             entry = _entry(kind, decoding_stats, request, inputs, extra)
             worker._results[client_id] = entry
-            if isinstance(entry, OutputsEntry) and entry.prepares_rows:
+            if isinstance(entry, OutputsEntry):
                 worker._prepared_client_ids.add(client_id)
-            worker._client_id_to_request_id[client_id] = worker.engine.enqueue_request(
-                ExecutorRequest(request, inputs)
-            )
+            request_id = worker.engine.enqueue_request(ExecutorRequest(request, inputs))
+            worker._client_id_to_request_id[client_id] = request_id
         except Exception as e:
             worker._results.pop(client_id, None)
             worker._prepared_client_ids.discard(client_id)
             reject(client_id, RequestError(str(e)))
+    return request_id
 
 
-def publish(worker: "BaseWorker", responses: list, postprocess: bool) -> list:
-    """Rank 0: send the rows of ``SubmitFrame`` requests as one ``StepFrame`` per frontend or worker.
+def _publish(worker: "BaseWorker", responses: list, lanes: int, postprocess: bool) -> tuple:
+    """The rows of ``responses`` as one StepOutput per lane, and its tensor buffers.
 
-    The lanes are the frontends, or the postprocess workers with ``postprocess``. Returns the
-    responses that keep the pickled path.
+    Returns (frames, buffers, rest): ``rest`` the responses no RequestEntry waits for. Rank 0
+    drops its record of each request whose last row goes out.
     """
     from .utils import FRONTEND_ID_SHIFT
 
-    lanes = worker.postproc_queues if postprocess else worker.frontend_result_queues
     prepared_client_ids = worker._prepared_client_ids
     if prepared_client_ids:
-        # requests whose last response took the pickled path
+        # requests that ended without a row of theirs going out
         prepared_client_ids.intersection_update(worker._results.keys())
     prepared = _prepare(worker, responses, prepared_client_ids) if prepared_client_ids else None
-    frames, rest, finals = native().publish(
-        responses,
-        worker._results,
-        RequestEntry,
-        len(lanes) if lanes is not None else 1,
-        postprocess,
-        FRONTEND_ID_SHIFT,
-        prepared,
+    frames, buffers, rest, finals, aborts = native().publish(
+        responses, worker._results, lanes, postprocess, FRONTEND_ID_SHIFT, prepared
     )
+    for client_id in aborts:
+        # a response the wire could not say ended the request with an error row
+        worker._refused_client_ids.add(client_id)
+        worker.abort_request(client_id)
+    for client_id in finals:
+        worker._results.pop(client_id, None)
+        worker._client_id_to_request_id.pop(client_id, None)
+    prepared_client_ids.difference_update(finals)
+    return frames, buffers, rest
+
+
+def _unclaimed(worker: "BaseWorker", rest: list) -> list:
+    """The ErrorResponses among the responses no RequestEntry waits for.
+
+    The others are steps of requests that already ended, or never started; their buffers are
+    released.
+    """
+    from .._torch.pyexecutor.llm_request import release_undelivered_response
+    from .utils import ErrorResponse
+
+    errors = []
     for response in rest:
-        entry = worker._results.get(getattr(response, "client_id", None))
-        if isinstance(entry, RequestEntry):
-            # a pickled response carries what the request's first row would
-            entry.first = False
+        if isinstance(response, ErrorResponse):
+            errors.append(response)
+        elif not drop_refused_response(worker, response):
+            release_undelivered_response(response)
+    return errors
+
+
+def publish(worker: "BaseWorker", responses: list, postprocess: bool) -> list:
+    """Send the rows of ``responses`` as one ``StepFrame`` per frontend or worker.
+
+    The lanes are the frontends, or the postprocess workers with ``postprocess``; each gets a
+    list holding its frame. Returns the ErrorResponses among the rest, for the caller to send.
+    """
+    lanes = worker.postproc_queues if postprocess else worker.frontend_result_queues
+    frames, buffers, rest = _publish(
+        worker, responses, len(lanes) if lanes is not None else 1, postprocess
+    )
     for lane, data in enumerate(frames):
         if data:
             queue = lanes[lane] if lanes is not None else worker.result_queue
-            queue.put(StepFrame(data))
-    for client_id in finals:
-        worker._pop_result(client_id)
-        prepared_client_ids.discard(client_id)
-    return rest
+            queue.put([StepFrame(data, buffers[lane] or None)])
+    return _unclaimed(worker, rest)
+
+
+def publish_here(worker: "BaseWorker", responses: list) -> list:
+    """The rows of ``responses`` as a ``StepFrame`` for the frontend in rank 0's process.
+
+    Returns that frame, when there are rows, then the ErrorResponses among the rest.
+    """
+    (data,), (buffers,), rest = _publish(worker, responses, 1, False)
+    frames = [StepFrame(data, buffers)] if data else []
+    return frames + _unclaimed(worker, rest)
