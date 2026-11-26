@@ -57,9 +57,8 @@ def test_response_metrics_are_deserialized_only_when_requested(
         SimpleNamespace(sampling_params=SimpleNamespace(
             return_perf_metrics=return_metrics))
     }
-    monkeypatch.setattr(
-        "tensorrt_llm.llmapi.engine_client.result._build_perf_metrics_dict",
-        lambda value: value)
+    monkeypatch.setattr("tensorrt_llm.executor.utils._build_perf_metrics_dict",
+                        lambda value: value)
 
     wrapped = base_worker._maybe_wrap_response(
         SimpleNamespace(_results=results), response)

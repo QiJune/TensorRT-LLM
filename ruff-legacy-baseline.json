@@ -341,7 +341,6 @@
   },
   "tensorrt_llm/llmapi/engine_client/result.py": {
     "D200": 3,
-    "D205": 1,
     "F402": 1
   },
   "tensorrt_llm/executor/rpc/rpc_client.py": {
@@ -372,6 +371,7 @@
     "D212": 1
   },
   "tensorrt_llm/executor/utils.py": {
+    "D205": 1,
     "D210": 6,
     "D300": 6,
     "F811": 1

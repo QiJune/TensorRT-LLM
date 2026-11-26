@@ -14,9 +14,9 @@
 # limitations under the License.
 """Compatibility shim for ``tensorrt_llm.executor.result``.
 
-The results moved to ``tensorrt_llm.llmapi.engine_client.result`` and the log-probability types to
-``tensorrt_llm.executor.logprobs``. Each name read here warns once with a ``FutureWarning``; the
-module is removed in 1.6.0.
+The results moved to ``tensorrt_llm.llmapi.engine_client.result``, the log-probability types to
+``tensorrt_llm.executor.logprobs`` and the response wrapper to ``tensorrt_llm.executor.utils``.
+Each name read here warns once with a ``FutureWarning``; the module is removed in 1.6.0.
 
 DO NOT ADD ANYTHING TO THIS FILE.
 """
@@ -31,8 +31,8 @@ _LAZY_NAMES = {
     "GenerationResultBase": "tensorrt_llm.llmapi.engine_client.result",
     "IterationResult": "tensorrt_llm.llmapi.engine_client.result",
     "PostprocWorker": "tensorrt_llm.llmapi.engine_client.result",
-    "ResponseWrapper": "tensorrt_llm.llmapi.engine_client.result",
-    "get_metrics_dict": "tensorrt_llm.llmapi.engine_client.result",
+    "ResponseWrapper": "tensorrt_llm.executor.utils",
+    "get_metrics_dict": "tensorrt_llm.executor.utils",
     "LogProbsResult": "tensorrt_llm.executor.logprobs",
     "Logprob": "tensorrt_llm.executor.logprobs",
     "SimpleTokenLogprobs": "tensorrt_llm.executor.logprobs",

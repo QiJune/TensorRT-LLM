@@ -52,7 +52,8 @@ from ...executor.rpc.rpc_common import RPCError, get_unique_ipc_addr
 # yapf: disable
 from ...executor.utils import (EngineDeadError, ErrorResponse,
                                PostprocWorkerConfig, RequestError,
-                               WorkerCommIpcAddrs, create_mpi_comm_session,
+                               WorkerCommIpcAddrs, _check_collective_rpc_guard,
+                               create_mpi_comm_session,
                                get_spawn_proxy_process_env, is_llm_response,
                                multi_frontend_request_addr,
                                multi_frontend_result_addr, namespace_client_id,
@@ -74,48 +75,6 @@ __all__ = [
     "GenerationExecutorProxy",
     "GenerationExecutorFrontendProxy",
 ]
-
-# Methods that are explicitly implemented for multi-rank MPI/IPC executor
-# deployments and may be called via collective_rpc even when world_size > 1.
-# sleep() and wakeup() coordinate across all ranks via a dedicated control
-# communicator started in PyExecutor.start_worker(); rank-0 is the entry
-# point, so routing through the rank-0 RPC shim is correct.
-# get_memory_report() is answered by rank-0, which in the memory monitor's
-# full mode gathers the other ranks' reports over its own communicator.
-_MULTI_RANK_ALLOWED_METHODS: frozenset[str] = frozenset(
-    {"get_memory_report", "get_memory_status", "sleep", "wakeup"})
-
-
-def _check_collective_rpc_guard(
-    model_world_size: int,
-    unique_reply_rank: Optional[int],
-    target_ranks: Optional[Union[int, List[int]]],
-    method: str = "",
-) -> None:
-    """Validate collective_rpc preconditions shared by IPC and RPC proxies.
-
-    Args:
-        model_world_size: Total number of GPU worker processes.
-        unique_reply_rank: Must be ``None`` for this shim.
-        target_ranks: Must be ``None`` for this shim.
-        method: Name of the method being invoked; used to allow selected
-            multi-rank-capable methods past the world_size guard.
-
-    Raises:
-        NotImplementedError: If ``model_world_size > 1`` and ``method`` is not
-            in :data:`_MULTI_RANK_ALLOWED_METHODS`, or if
-            ``unique_reply_rank`` or ``target_ranks`` are provided.
-    """
-    if model_world_size > 1 and method not in _MULTI_RANK_ALLOWED_METHODS:
-        raise NotImplementedError(
-            f"MPI collective_rpc does not support model_world_size > 1 for "
-            f"method '{method}'; use the Ray executor for general multi-rank "
-            "deployments, or use sleep()/wakeup() which handle multi-rank "
-            "coordination internally.")
-    if unique_reply_rank is not None or target_ranks is not None:
-        raise NotImplementedError(
-            "unique_reply_rank and target_ranks are not supported; "
-            "this shim only reaches rank-0.")
 
 
 class _RequestSender:

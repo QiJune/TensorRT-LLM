@@ -22,8 +22,8 @@ from .postprocessor_hook import load_post_processor_hook
 
 if TYPE_CHECKING:
     from ...disaggregated_params import DisaggregatedParams
-    from .result import (DetokenizedGenerationResultBase, GenerationResult,
-                         ResponseWrapper)
+    from ...executor.utils import ResponseWrapper
+    from .result import DetokenizedGenerationResultBase, GenerationResult
 
 __all__ = [
     "PostprocWorker",

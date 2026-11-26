@@ -118,7 +118,7 @@ class GenerationExecutorWorker(RpcWorkerMixin, BaseWorker):
         methods coordinate multi-rank execution internally; other methods require
         a single-rank deployment, as with the MPI proxy dispatchers.
         """
-        from ..llmapi.engine_client.proxy import _check_collective_rpc_guard
+        from .utils import _check_collective_rpc_guard
 
         _check_collective_rpc_guard(self.llm_args.parallel_config.world_size,
                                     unique_reply_rank,

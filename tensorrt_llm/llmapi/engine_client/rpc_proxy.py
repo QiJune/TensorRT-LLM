@@ -21,12 +21,13 @@ from ...executor.mpi_session import (MpiPoolSession, MpiSession,
                                      validate_session_world_size)
 from ...executor.rpc.rpc_common import RPCError
 from ...executor.rpc_worker import RpcWorker
-from ...executor.utils import (PostprocWorkerConfig, create_mpi_comm_session,
+from ...executor.utils import (PostprocWorkerConfig,
+                               _check_collective_rpc_guard,
+                               create_mpi_comm_session,
                                get_spawn_proxy_process_env)
 from ...logger import logger
 from ..utils import logger_debug, print_colored
 from .executor import GenerationExecutor
-from .proxy import _check_collective_rpc_guard
 from .result import IterationResult
 from .rpc_proxy_mixin import RpcExecutorMixin
 

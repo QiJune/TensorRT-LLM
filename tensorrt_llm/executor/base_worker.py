@@ -43,8 +43,7 @@ from ..bindings import executor as tllm
 from ..bindings.BuildInfo import check_cuda_architecture_supported
 from ..llmapi.engine_client.executor import GenerationExecutor
 from ..llmapi.engine_client.postproc_worker import PostprocWorker
-from ..llmapi.engine_client.result import (GenerationResult, ResponseWrapper,
-                                           get_metrics_dict)
+from ..llmapi.engine_client.result import GenerationResult
 from ..llmapi.llm_args import BaseLlmArgs, ExecutorMemoryType
 from ..llmapi.tracer import global_tracer
 from ..llmapi.utils import _SyncQueue, configure_cpu_affinity, logger_debug
@@ -58,9 +57,9 @@ from .logprobs import (LogProbsResult, compute_prompt_logprobs,
 from .request import GenerationRequest, LoRARequest, PostprocParams
 from .startup_checks import no_visible_gpu_error
 from .utils import (ErrorResponse, PostprocWorkerConfig, RequestError,
-                    bucket_responses_by_frontend,
+                    ResponseWrapper, bucket_responses_by_frontend,
                     context_length_exceeded_message, frontend_lane_index,
-                    is_llm_response)
+                    get_metrics_dict, is_llm_response)
 
 if TYPE_CHECKING:
     from .._torch.disaggregation.kv_cache_transceiver import KvCacheTransceiver

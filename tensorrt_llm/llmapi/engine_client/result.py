@@ -21,9 +21,9 @@ from tensorrt_llm.llmapi import tracing
 from ..._utils import nvtx_range_debug
 from ...bindings import executor as tllm
 from ...disaggregated_params import DisaggregatedParams
-from ...executor.logprobs import (Logprob, LogProbsResult, SimpleTokenLogprobs,
-                                  TokenLogprobs)
-from ...executor.utils import (EngineDeadError, ErrorResponse, has_event_loop,
+from ...executor.logprobs import Logprob, SimpleTokenLogprobs, TokenLogprobs
+from ...executor.utils import (EngineDeadError, ErrorResponse, ResponseWrapper,
+                               _build_perf_metrics_dict, has_event_loop,
                                is_llm_response)
 from ...logger import logger
 from ...metrics import MetricNames, RequestEventTiming
@@ -58,32 +58,6 @@ class _SpecDecCounters(NamedTuple):
     per_pos_drafted: Optional[List[int]] = None
     per_pos_accepted: Optional[List[int]] = None
     spec_dec_totals: Optional[tuple[int, int]] = None
-
-
-class ResponseWrapper:
-    """1. Wrapper of runtime response with optional outputs computed post runtime.
-    2. A workaround to pass around RequestPerfMetrics.
-    """
-
-    def __init__(self,
-                 response: Union["PostprocWorker.Output", tllm.Response],
-                 logprobs: Optional[LogProbsResult] = None,
-                 request_perf_metrics: Optional[dict[str, float]] = None):
-        self._response = response
-        self.logprobs = logprobs
-        self.request_perf_metrics = request_perf_metrics
-
-    def __getattr__(self, name):
-        response = object.__getattribute__(self, '_response')
-        return getattr(response, name)
-
-    def __getstate__(self):
-        return (self._response, self.logprobs, self.request_perf_metrics)
-
-    def __setstate__(self, state):
-        self._response = state[0]
-        self.logprobs = state[1]
-        self.request_perf_metrics = state[2]
 
 
 @dataclass(slots=True)
@@ -1393,39 +1367,3 @@ class IterationResult:
         except asyncio.TimeoutError:
             self._done = True
             raise StopAsyncIteration
-
-
-def _build_perf_metrics_dict(
-    req_perf_metrics: tllm.RequestPerfMetrics
-) -> dict[RequestEventTiming, float]:
-    if not (req_perf_metrics and req_perf_metrics.timing_metrics):
-        return {}
-    return {
-        RequestEventTiming.ARRIVAL_TIME:
-        req_perf_metrics.timing_metrics.arrival_time.total_seconds(),
-        RequestEventTiming.FIRST_TOKEN_TIME:
-        req_perf_metrics.timing_metrics.first_token_time.total_seconds(),
-        RequestEventTiming.FIRST_SCHEDULED_TIME:
-        req_perf_metrics.timing_metrics.first_scheduled_time.total_seconds(),
-        RequestEventTiming.LAST_TOKEN_TIME:
-        req_perf_metrics.timing_metrics.last_token_time.total_seconds(),
-        RequestEventTiming.KV_CACHE_TRANSFER_START:
-        req_perf_metrics.timing_metrics.kv_cache_transfer_start.total_seconds(),
-        RequestEventTiming.KV_CACHE_TRANSFER_END:
-        req_perf_metrics.timing_metrics.kv_cache_transfer_end.total_seconds(),
-        RequestEventTiming.KV_CACHE_SIZE:
-        req_perf_metrics.timing_metrics.kv_cache_size,
-    }
-
-
-def get_metrics_dict(
-        response: tllm.Response) -> dict[RequestEventTiming, float]:
-    req_perf_metrics = None
-    res = response.result
-    if res:
-        if hasattr(res, '_result'):
-            if result := res.get_result():
-                req_perf_metrics = result.request_perf_metrics
-        else:
-            req_perf_metrics = res.request_perf_metrics
-    return _build_perf_metrics_dict(req_perf_metrics)

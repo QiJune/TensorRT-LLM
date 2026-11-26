@@ -126,7 +126,7 @@ def test_result_stream_sequence_alignment(pytorch: bool, beam_search: bool,
     from tensorrt_llm._torch.pyexecutor.llm_request import (LlmResponse,
                                                             LlmResult, PyResult)
     from tensorrt_llm.executor.logprobs import Logprob, LogProbsResult
-    from tensorrt_llm.llmapi.engine_client.result import ResponseWrapper
+    from tensorrt_llm.executor.utils import ResponseWrapper
 
     result = GenerationResultBase(id=0,
                                   sampling_params=SamplingParams(

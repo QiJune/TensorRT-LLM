@@ -64,8 +64,6 @@ _ENGINE_USES_CLIENT = frozenset(
         ("tensorrt_llm.executor.base_worker", f"{_CLIENT}.executor", "GenerationExecutor"),
         ("tensorrt_llm.executor.base_worker", f"{_CLIENT}.postproc_worker", "PostprocWorker"),
         ("tensorrt_llm.executor.base_worker", f"{_CLIENT}.result", "GenerationResult"),
-        ("tensorrt_llm.executor.base_worker", f"{_CLIENT}.result", "ResponseWrapper"),
-        ("tensorrt_llm.executor.base_worker", f"{_CLIENT}.result", "get_metrics_dict"),
         ("tensorrt_llm.executor.ray.gpu_worker", f"{_CLIENT}.result", "GenerationResult"),
         ("tensorrt_llm.executor.rpc_worker_mixin", f"{_CLIENT}.postproc_worker", "PostprocWorker"),
         (
@@ -75,7 +73,6 @@ _ENGINE_USES_CLIENT = frozenset(
         ),
         ("tensorrt_llm.executor.worker", f"{_CLIENT}.postproc_worker", "PostprocWorker"),
         ("tensorrt_llm.executor.worker", f"{_CLIENT}.postproc_worker", "postproc_worker_main"),
-        ("tensorrt_llm.executor.worker", f"{_CLIENT}.proxy", "_check_collective_rpc_guard"),
         # tensorrt_llm._torch.LLM, kept for callers that import the LLM class from there.
         ("tensorrt_llm._torch.llm", "tensorrt_llm.llmapi.llm", "_TorchLLM"),
     }

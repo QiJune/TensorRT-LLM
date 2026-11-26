@@ -24,17 +24,24 @@ import traceback
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from queue import Empty, Queue
-from typing import Any, Callable, List, NamedTuple, Optional
+from typing import (TYPE_CHECKING, Any, Callable, List, NamedTuple, Optional,
+                    Union)
 
 from strenum import StrEnum
 
 from tensorrt_llm._utils import mpi_rank
 from tensorrt_llm.llmapi.utils import enable_llm_debug, logger_debug
 
+from ..bindings import executor as tllm
 from ..llmapi.utils import logger_debug
 from ..logger import logger
+from ..metrics import RequestEventTiming
+from .logprobs import LogProbsResult
 from .mpi_session import (MpiCommSession, MpiPoolSession, MpiSession,
                           RemoteMpiCommSessionClient)
+
+if TYPE_CHECKING:
+    from ..llmapi.engine_client.postproc_worker import PostprocWorker
 
 
 class LlmLauncherEnvs(StrEnum):
@@ -227,6 +234,111 @@ class ErrorResponse(NamedTuple):
     client_id: int
     error_msg: str
     request_id: int
+
+
+class ResponseWrapper:
+    """1. Wrapper of runtime response with optional outputs computed post runtime.
+    2. A workaround to pass around RequestPerfMetrics.
+    """
+
+    def __init__(self,
+                 response: Union["PostprocWorker.Output", tllm.Response],
+                 logprobs: Optional[LogProbsResult] = None,
+                 request_perf_metrics: Optional[dict[str, float]] = None):
+        self._response = response
+        self.logprobs = logprobs
+        self.request_perf_metrics = request_perf_metrics
+
+    def __getattr__(self, name):
+        response = object.__getattribute__(self, '_response')
+        return getattr(response, name)
+
+    def __getstate__(self):
+        return (self._response, self.logprobs, self.request_perf_metrics)
+
+    def __setstate__(self, state):
+        self._response = state[0]
+        self.logprobs = state[1]
+        self.request_perf_metrics = state[2]
+
+
+def _build_perf_metrics_dict(
+    req_perf_metrics: tllm.RequestPerfMetrics
+) -> dict[RequestEventTiming, float]:
+    if not (req_perf_metrics and req_perf_metrics.timing_metrics):
+        return {}
+    return {
+        RequestEventTiming.ARRIVAL_TIME:
+        req_perf_metrics.timing_metrics.arrival_time.total_seconds(),
+        RequestEventTiming.FIRST_TOKEN_TIME:
+        req_perf_metrics.timing_metrics.first_token_time.total_seconds(),
+        RequestEventTiming.FIRST_SCHEDULED_TIME:
+        req_perf_metrics.timing_metrics.first_scheduled_time.total_seconds(),
+        RequestEventTiming.LAST_TOKEN_TIME:
+        req_perf_metrics.timing_metrics.last_token_time.total_seconds(),
+        RequestEventTiming.KV_CACHE_TRANSFER_START:
+        req_perf_metrics.timing_metrics.kv_cache_transfer_start.total_seconds(),
+        RequestEventTiming.KV_CACHE_TRANSFER_END:
+        req_perf_metrics.timing_metrics.kv_cache_transfer_end.total_seconds(),
+        RequestEventTiming.KV_CACHE_SIZE:
+        req_perf_metrics.timing_metrics.kv_cache_size,
+    }
+
+
+def get_metrics_dict(
+        response: tllm.Response) -> dict[RequestEventTiming, float]:
+    req_perf_metrics = None
+    res = response.result
+    if res:
+        if hasattr(res, '_result'):
+            if result := res.get_result():
+                req_perf_metrics = result.request_perf_metrics
+        else:
+            req_perf_metrics = res.request_perf_metrics
+    return _build_perf_metrics_dict(req_perf_metrics)
+
+
+# Methods that are explicitly implemented for multi-rank MPI/IPC executor
+# deployments and may be called via collective_rpc even when world_size > 1.
+# sleep() and wakeup() coordinate across all ranks via a dedicated control
+# communicator started in PyExecutor.start_worker(); rank-0 is the entry
+# point, so routing through the rank-0 RPC shim is correct.
+# get_memory_report() is answered by rank-0, which in the memory monitor's
+# full mode gathers the other ranks' reports over its own communicator.
+_MULTI_RANK_ALLOWED_METHODS: frozenset[str] = frozenset(
+    {"get_memory_report", "get_memory_status", "sleep", "wakeup"})
+
+
+def _check_collective_rpc_guard(
+    model_world_size: int,
+    unique_reply_rank: Optional[int],
+    target_ranks: Optional[Union[int, List[int]]],
+    method: str = "",
+) -> None:
+    """Validate collective_rpc preconditions shared by IPC and RPC proxies.
+
+    Args:
+        model_world_size: Total number of GPU worker processes.
+        unique_reply_rank: Must be ``None`` for this shim.
+        target_ranks: Must be ``None`` for this shim.
+        method: Name of the method being invoked; used to allow selected
+            multi-rank-capable methods past the world_size guard.
+
+    Raises:
+        NotImplementedError: If ``model_world_size > 1`` and ``method`` is not
+            in :data:`_MULTI_RANK_ALLOWED_METHODS`, or if
+            ``unique_reply_rank`` or ``target_ranks`` are provided.
+    """
+    if model_world_size > 1 and method not in _MULTI_RANK_ALLOWED_METHODS:
+        raise NotImplementedError(
+            f"MPI collective_rpc does not support model_world_size > 1 for "
+            f"method '{method}'; use the Ray executor for general multi-rank "
+            "deployments, or use sleep()/wakeup() which handle multi-rank "
+            "coordination internally.")
+    if unique_reply_rank is not None or target_ranks is not None:
+        raise NotImplementedError(
+            "unique_reply_rank and target_ranks are not supported; "
+            "this shim only reaches rank-0.")
 
 
 class IntraProcessQueue:
