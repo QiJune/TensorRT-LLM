@@ -683,11 +683,11 @@ def test_seam_shim_is_isinstance_transparent():
 
 def test_patched_library_seam_survives_isinstance(reuse_cache):
     # End to end against the real seam: whatever currently sits on
-    # tensorrt_llm.executor.proxy.MpiPoolSession (the real class, or the
+    # tensorrt_llm.llmapi.engine_client.proxy.MpiPoolSession (the real class, or the
     # shim installed by the session-reuse plugin active in this test
     # session), the proxy.py isinstance pattern must not raise. On the
     # pre-fix code (function at the seam) this raises TypeError.
-    proxy = pytest.importorskip("tensorrt_llm.executor.proxy")
+    proxy = pytest.importorskip("tensorrt_llm.llmapi.engine_client.proxy")
     reuse_cache.install_pool_factory_if_loaded()
     assert isinstance(object(), proxy.MpiPoolSession) in (False, True)
     assert issubclass(type(object()), proxy.MpiPoolSession) in (False, True)

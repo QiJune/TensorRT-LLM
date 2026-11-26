@@ -31,8 +31,7 @@ import pytest
 
 import tensorrt_llm.llmapi.llm_args as llm_args_mod
 from tensorrt_llm.llmapi.llm_args import TorchLlmArgs
-from tensorrt_llm.llmapi.tokenizer import TokenizerBase
-from tensorrt_llm.tokenizer import TOKENIZER_ALIASES, load_custom_tokenizer
+from tensorrt_llm.tokenizer import TOKENIZER_ALIASES, TokenizerBase, load_custom_tokenizer
 
 pytestmark = pytest.mark.cpu_only
 

@@ -19,7 +19,7 @@ from tensorrt_llm._torch.pyexecutor.llm_request import LlmRequest
 from tensorrt_llm._utils import mpi_comm, mpi_rank, mpi_world_size
 from tensorrt_llm.bindings.executor import FinishReason
 from tensorrt_llm.bindings.internal.batch_manager import LlmRequestType
-from tensorrt_llm.llmapi.mpi_session import MpiPoolSession
+from tensorrt_llm.executor.mpi_session import MpiPoolSession
 
 # isort: off
 from utils.llm_data import llm_models_root
@@ -28,10 +28,11 @@ from utils.util import skip_single_gpu
 
 from tensorrt_llm.executor import base_worker
 from tensorrt_llm.executor.base_worker import BaseWorker
+from tensorrt_llm.executor.logprobs import LogProbsResult
 from tensorrt_llm.executor.request import GenerationRequest, LoRARequest
-from tensorrt_llm.executor.result import GenerationResult, LogProbsResult
-from tensorrt_llm.executor.rpc_proxy_mixin import RpcExecutorMixin
 from tensorrt_llm.executor.utils import RequestError
+from tensorrt_llm.llmapi.engine_client.result import GenerationResult
+from tensorrt_llm.llmapi.engine_client.rpc_proxy_mixin import RpcExecutorMixin
 from tensorrt_llm.llmapi.llm_args import TorchLlmArgs
 from tensorrt_llm.sampling_params import LogprobParams, SamplingParams
 
@@ -56,7 +57,7 @@ def test_response_metrics_are_deserialized_only_when_requested(
         SimpleNamespace(sampling_params=SimpleNamespace(
             return_perf_metrics=return_metrics))
     }
-    monkeypatch.setattr("tensorrt_llm.executor.result._build_perf_metrics_dict",
+    monkeypatch.setattr("tensorrt_llm.executor.utils._build_perf_metrics_dict",
                         lambda value: value)
 
     wrapped = base_worker._maybe_wrap_response(
@@ -934,9 +935,11 @@ def _load_ray_executor(monkeypatch: pytest.MonkeyPatch) -> type:
     gpu_worker.RayWorkerWrapper = MagicMock()
     for name, module in dependencies.items():
         monkeypatch.setitem(sys.modules, name, module)
-    source = Path(base_worker.__file__).parent / "ray" / "executor.py"
+    source = Path(
+        importlib.util.find_spec("tensorrt_llm.llmapi.engine_client").origin
+    ).parent / "ray_executor.py"
     spec = importlib.util.spec_from_file_location(
-        "tensorrt_llm.executor.ray._submit_test", source)
+        "tensorrt_llm.llmapi.engine_client._submit_test", source)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module.RayExecutor

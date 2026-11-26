@@ -30,9 +30,9 @@ from tensorrt_llm._torch.disaggregation.transceiver import (
 )
 from tensorrt_llm._torch.pyexecutor import hang_detector
 from tensorrt_llm.disaggregated_params import DisaggregatedParams, DisaggScheduleStyle
-from tensorrt_llm.executor import EngineDeadError
-from tensorrt_llm.executor.proxy import GenerationExecutorProxy
+from tensorrt_llm.executor.utils import EngineDeadError
 from tensorrt_llm.executor.worker_process_monitor import _read_process_state
+from tensorrt_llm.llmapi.engine_client.proxy import GenerationExecutorProxy
 from tensorrt_llm.mapping import Mapping
 
 pytestmark = pytest.mark.cpu_only

@@ -222,7 +222,7 @@ def test_gpu_architecture_missing_from_build_is_unsupported():
 
 
 def test_too_few_mpi_ranks_is_a_launch_input_error():
-    from tensorrt_llm.executor import GenerationExecutor
+    from tensorrt_llm.llmapi.engine_client.executor import GenerationExecutor
 
     with pytest.raises(ValueError, match="Cannot instantiate an executor requiring 4 ranks") as e:
         GenerationExecutor.create(model_world_size=4, world_size=2)

@@ -1910,7 +1910,7 @@ def test_kv_cache_manager_init_status_sync_uses_world_max() -> None:
 @pytest.mark.cpu_only
 @pytest.mark.skipif(not ENABLE_MULTI_DEVICE, reason="multi-device (MPI) build required")
 def test_world_ranks_converge_on_host_failure() -> None:
-    from tensorrt_llm.llmapi.mpi_session import MpiPoolSession
+    from tensorrt_llm.executor.mpi_session import MpiPoolSession
 
     session = MpiPoolSession(n_workers=2)
     try:

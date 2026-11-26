@@ -230,7 +230,7 @@ class TestSyncHostTierQuota:
         ``allreduce(MIN)`` in ``_sync_host_tier_quota`` makes the
         most-constrained rank set the fleet value.
         """
-        from tensorrt_llm.llmapi.mpi_session import MpiPoolSession
+        from tensorrt_llm.executor.mpi_session import MpiPoolSession
 
         world_size = 2
         # rank 0 sees ~440 GiB available (-> 220 GiB local quota), rank 1 sees

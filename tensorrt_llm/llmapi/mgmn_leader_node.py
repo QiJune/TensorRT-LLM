@@ -13,10 +13,10 @@ import zmq
 
 from tensorrt_llm._utils import global_mpi_rank, mpi_world_size
 from tensorrt_llm.executor.ipc import ZeroMqQueue
+from tensorrt_llm.executor.mpi_session import RemoteMpiCommSessionServer
 from tensorrt_llm.executor.utils import (
     get_spawn_proxy_process_ipc_addr_env,
     get_spawn_proxy_process_ipc_hmac_key_env)
-from tensorrt_llm.llmapi.mpi_session import RemoteMpiCommSessionServer
 from tensorrt_llm.llmapi.utils import logger_debug
 from tensorrt_llm.logger import logger
 

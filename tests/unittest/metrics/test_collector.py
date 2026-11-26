@@ -916,7 +916,7 @@ class TestCollectedRequestRecords:
         from types import SimpleNamespace
         from unittest.mock import Mock, patch
 
-        from tensorrt_llm.executor.result import GenerationResultBase
+        from tensorrt_llm.llmapi.engine_client.result import GenerationResultBase
         from tensorrt_llm.metrics.perf import PerfMetricsCollector, PerfMetricsRecord
         from tensorrt_llm.sampling_params import SamplingParams
 

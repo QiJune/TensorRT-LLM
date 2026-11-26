@@ -188,7 +188,7 @@ def test_an_encode_only_llm_reports_its_own_process(monkeypatch):
 def test_async_llm_gathers_every_workers_reports():
     import asyncio
 
-    from tensorrt_llm._torch.async_llm import AsyncLLM
+    from tensorrt_llm.llmapi.async_llm import AsyncLLM
 
     async def collective_rpc(method):
         assert method == "get_memory_report"
@@ -274,7 +274,7 @@ def test_worker_thread_allocation_is_named_after_the_running_step(monkeypatch):
 @pytest.mark.cpu_only
 def test_llm_returns_each_workers_report():
     from tensorrt_llm import LLM
-    from tensorrt_llm.executor.proxy import _check_collective_rpc_guard
+    from tensorrt_llm.executor.utils import _check_collective_rpc_guard
 
     llm = object.__new__(LLM)
     llm._encode_only = False

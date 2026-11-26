@@ -47,7 +47,7 @@ from tensorrt_llm._torch.pyexecutor.scheduler import FCFSWaitingQueue
 from tensorrt_llm.bindings import executor as trtllm
 from tensorrt_llm.bindings.internal.batch_manager import LlmRequest as CppLlmRequest
 from tensorrt_llm.conversation_params import ConversationParams
-from tensorrt_llm.executor.result import Logprob
+from tensorrt_llm.executor.logprobs import Logprob
 from tensorrt_llm.inputs.multimodal import (
     MULTIMODAL_ENCODER_ITEM_METADATA_KEY,
     MultimodalItemMetadata,

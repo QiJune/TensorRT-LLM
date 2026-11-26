@@ -36,7 +36,7 @@ from typing import TYPE_CHECKING, TypeAlias, cast
 import torch
 
 from tensorrt_llm._utils import nvtx_range, prefer_pinned
-from tensorrt_llm.executor.result import Logprob, SimpleTokenLogprobs, TokenLogprobs
+from tensorrt_llm.executor.logprobs import Logprob, SimpleTokenLogprobs, TokenLogprobs
 from tensorrt_llm.sampling_params import MAX_TOP_LOGPROBS, check_logprobs_limit
 
 from ..llm_request import LlmRequest

@@ -12,7 +12,7 @@ from _mpi_session_test_tasks import allreduce_ranks, occupy_rank, session_rank
 from mpi4py import MPI
 from mpi4py.futures import MPICommExecutor
 
-from tensorrt_llm.llmapi.mpi_session import MpiCommSession, RemoteMpiCommSessionServer
+from tensorrt_llm.executor.mpi_session import MpiCommSession, RemoteMpiCommSessionServer
 
 
 def main() -> None:

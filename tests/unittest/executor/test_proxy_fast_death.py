@@ -30,12 +30,12 @@ from tensorrt_llm._startup_errors import (
     log_startup_error,
     wrap_worker_startup_error,
 )
-from tensorrt_llm.executor import EngineDeadError
-from tensorrt_llm.executor import proxy as proxy_module
 from tensorrt_llm.executor import worker as worker_module
-from tensorrt_llm.executor.proxy import GenerationExecutorProxy
-from tensorrt_llm.executor.result import GenerationResult
+from tensorrt_llm.executor.utils import EngineDeadError
 from tensorrt_llm.executor.worker_process_monitor import WorkerProcessIdentity
+from tensorrt_llm.llmapi.engine_client import proxy as proxy_module
+from tensorrt_llm.llmapi.engine_client.proxy import GenerationExecutorProxy
+from tensorrt_llm.llmapi.engine_client.result import GenerationResult
 
 
 def test_engine_dead_error_is_importable_and_carries_root_cause():
@@ -490,7 +490,9 @@ def test_submit_rechecks_engine_death_after_registration(monkeypatch):
         proxy._engine_dead = True
         return fake_result
 
-    monkeypatch.setattr("tensorrt_llm.executor.proxy.GenerationResult", fake_generation_result)
+    monkeypatch.setattr(
+        "tensorrt_llm.llmapi.engine_client.proxy.GenerationResult", fake_generation_result
+    )
 
     with pytest.raises(EngineDeadError):
         proxy.submit(_FakeRequest())
@@ -506,7 +508,7 @@ def test_submit_rechecks_engine_death_after_registration(monkeypatch):
 
 
 def test_remote_worker_death_roundtrip():
-    from tensorrt_llm.llmapi.mpi_session import RemoteWorkerDeath
+    from tensorrt_llm.executor.mpi_session import RemoteWorkerDeath
 
     death = RemoteWorkerDeath.from_exception(ValueError("rank 3 exploded"))
     exc = death.to_exception()
@@ -529,7 +531,7 @@ class _FakeZmqQueue:
 
 
 def _bare_remote_client(messages):
-    from tensorrt_llm.llmapi.mpi_session import RemoteMpiCommSessionClient
+    from tensorrt_llm.executor.mpi_session import RemoteMpiCommSessionClient
 
     client = object.__new__(RemoteMpiCommSessionClient)  # bypass singleton
     client._is_shutdown = False
@@ -539,7 +541,7 @@ def _bare_remote_client(messages):
 
 
 def test_client_check_worker_error_returns_death_and_buffers_others():
-    from tensorrt_llm.llmapi.mpi_session import RemoteWorkerDeath
+    from tensorrt_llm.executor.mpi_session import RemoteWorkerDeath
 
     death = RemoteWorkerDeath.from_exception(RuntimeError("boom"))
     client = _bare_remote_client([[1, 2, 3], death])
@@ -710,7 +712,7 @@ def test_abandon_mpi_pool_threads_unblocks_interpreter_exit():
     import threading as _threading
     import types as _types
 
-    from tensorrt_llm.llmapi.mpi_session import _abandon_mpi_pool_threads
+    from tensorrt_llm.executor.mpi_session import _abandon_mpi_pool_threads
 
     release = _threading.Event()
     wedged = _threading.Thread(target=release.wait, name="fake_manager")
@@ -743,14 +745,14 @@ def test_abandon_mpi_pool_threads_unblocks_interpreter_exit():
 
 
 def test_abandon_mpi_pool_threads_tolerates_missing_pool():
-    from tensorrt_llm.llmapi.mpi_session import _abandon_mpi_pool_threads
+    from tensorrt_llm.executor.mpi_session import _abandon_mpi_pool_threads
 
     _abandon_mpi_pool_threads(None)
     _abandon_mpi_pool_threads(object())  # no _pool attribute
 
 
 def test_pool_session_reports_dead_manager_thread():
-    from tensorrt_llm.llmapi.mpi_session import MpiPoolSession
+    from tensorrt_llm.executor.mpi_session import MpiPoolSession
 
     session = object.__new__(MpiPoolSession)
     session.mpi_pool = _Mock(_shutdown=False)
@@ -801,7 +803,7 @@ def test_pool_session_shutdown_never_blocks_after_release():
     After release_exit_joins(), a blocking shutdown() from the session
     owner must not join the dead pool.
     """
-    from tensorrt_llm.llmapi.mpi_session import MpiPoolSession
+    from tensorrt_llm.executor.mpi_session import MpiPoolSession
 
     session = MpiPoolSession.__new__(MpiPoolSession)
     pool = _Mock()

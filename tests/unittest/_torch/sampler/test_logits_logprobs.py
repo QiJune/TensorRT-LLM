@@ -21,7 +21,7 @@ from tensorrt_llm._torch.pyexecutor.sampler.ops.custom import fused_compute_prob
 from tensorrt_llm._torch.pyexecutor.sampler.ops.triton import selected_raw_logprobs
 from tensorrt_llm._torch.pyexecutor.sampler.sampler import Logprob, ScheduledRequests, TorchSampler
 from tensorrt_llm.bindings import SamplingConfig
-from tensorrt_llm.executor.result import TokenLogprobs
+from tensorrt_llm.executor.logprobs import TokenLogprobs
 from tensorrt_llm.llmapi.llm_utils import KvCacheConfig
 from tensorrt_llm.sampling_params import LogprobMode
 

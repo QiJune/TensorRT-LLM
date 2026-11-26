@@ -79,7 +79,7 @@ def patch_mpi_pool_session_for_env(mocker, env_vars: dict):
         mocker: pytest-mock mocker fixture
         env_vars: Dictionary of environment variable name -> value to propagate
     """
-    from tensorrt_llm.llmapi.mpi_session import MpiPoolSession
+    from tensorrt_llm.executor.mpi_session import MpiPoolSession
 
     def patched_start_mpi_pool(self):
         assert not self.mpi_pool, 'MPI session already started'

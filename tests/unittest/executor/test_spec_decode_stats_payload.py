@@ -42,7 +42,7 @@ from pytest import param
 from tensorrt_llm import SamplingParams
 from tensorrt_llm._torch.pyexecutor.llm_request import MAX_SPEC_DECODE_POSITIONS
 from tensorrt_llm.bindings import executor as tllm
-from tensorrt_llm.executor.result import GenerationResultBase
+from tensorrt_llm.llmapi.engine_client.result import GenerationResultBase
 from tensorrt_llm.serve.openai_server import OpenAIServer, resolve_spec_decode_num_spec_tokens
 from tensorrt_llm.serve.postprocess_handlers import (
     ChatPostprocArgs,

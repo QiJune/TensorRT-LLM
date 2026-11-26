@@ -22,7 +22,7 @@ import pytest
 from tensorrt_llm import LLM, SamplingParams
 from tensorrt_llm.bench.benchmark.utils.asynchronous import LlmManager
 from tensorrt_llm.bench.dataclasses.general import InferenceRequest
-from tensorrt_llm.executor.postproc_worker import PostprocParams
+from tensorrt_llm.executor.request import PostprocParams
 
 pytestmark = pytest.mark.cpu_only
 

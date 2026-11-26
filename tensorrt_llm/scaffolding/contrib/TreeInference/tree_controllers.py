@@ -6,7 +6,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from tensorrt_llm.executor.result import CompletionOutput, GenerationResult
+from tensorrt_llm.llmapi.engine_client.result import (CompletionOutput,
+                                                      GenerationResult)
 from tensorrt_llm.scaffolding.controller import Controller, ParallelProcess
 from tensorrt_llm.scaffolding.task import GenerationTask, Task
 

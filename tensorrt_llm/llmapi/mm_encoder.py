@@ -11,9 +11,9 @@ from tensorrt_llm.inputs import create_input_processor, prompt_inputs
 from tensorrt_llm.inputs.data import PromptInputs
 from tensorrt_llm.sampling_params import SamplingParams
 
+from ..executor.mpi_session import external_mpi_comm_available
 from .llm import BaseLLM, RequestOutput, _TorchLLM
 from .llm_args import TorchLlmArgs
-from .mpi_session import external_mpi_comm_available
 
 
 class MultimodalEncoder(_TorchLLM):

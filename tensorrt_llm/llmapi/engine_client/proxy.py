@@ -39,78 +39,42 @@ from tensorrt_llm._startup_errors import (StartupErrorInfo,
                                           wrap_worker_startup_error)
 from tensorrt_llm.logger import logger
 
-from .._torch.pyexecutor.llm_request import release_undelivered_response
-from .._utils import customized_gc_thresholds, mpi_rank, nvtx_range_debug
-from ..llmapi.llm_args import TorchLlmArgs
-from ..llmapi.mpi_session import (MpiCommSession, MpiPoolSession, MpiSession,
-                                  RemoteMpiCommSessionClient,
-                                  validate_session_world_size)
-from ..llmapi.tracer import enable_llm_tracer, get_tracer, global_tracer
-from ..llmapi.utils import (AsyncQueue, ManagedThread, _SyncQueue,
-                            enable_llm_debug, logger_debug, print_colored)
+from ..._torch.pyexecutor.llm_request import release_undelivered_response
+from ..._utils import customized_gc_thresholds, mpi_rank, nvtx_range_debug
+from ...executor.ipc import FusedIpcQueue, IpcQueue
+from ...executor.mpi_session import (MpiCommSession, MpiPoolSession, MpiSession,
+                                     RemoteMpiCommSessionClient,
+                                     validate_session_world_size)
+from ...executor.request import (CancellingRequest, GenerationRequest,
+                                 StartProfileRequest, StopProfileRequest)
+from ...executor.rpc import RPCClient
+from ...executor.rpc.rpc_common import RPCError, get_unique_ipc_addr
+# yapf: disable
+from ...executor.utils import (EngineDeadError, ErrorResponse,
+                               PostprocWorkerConfig, RequestError,
+                               WorkerCommIpcAddrs, _check_collective_rpc_guard,
+                               create_mpi_comm_session,
+                               get_spawn_proxy_process_env, is_llm_response,
+                               multi_frontend_request_addr,
+                               multi_frontend_result_addr, namespace_client_id,
+                               print_alive_threads)
+# yapf: enable
+from ...executor.worker import GenerationExecutorWorker, worker_main
+from ...executor.worker_process_monitor import (WorkerProcessIdentity,
+                                                WorkerProcessMonitor)
+from ..llm_args import TorchLlmArgs
+from ..tracer import enable_llm_tracer, get_tracer, global_tracer
+from ..utils import (AsyncQueue, ManagedThread, _SyncQueue, enable_llm_debug,
+                     logger_debug, print_colored)
 from .executor import GenerationExecutor
-from .ipc import FusedIpcQueue, IpcQueue
-from .postproc_worker import PostprocWorker, PostprocWorkerConfig
+from .postproc_worker import PostprocWorker
 from .prompt_tail import PromptTailPolicy
-from .request import (CancellingRequest, GenerationRequest, StartProfileRequest,
-                      StopProfileRequest)
 from .result import GenerationResult, IterationResult
-from .rpc import RPCClient
-from .rpc.rpc_common import RPCError, get_unique_ipc_addr
-from .utils import (EngineDeadError, ErrorResponse, RequestError,
-                    WorkerCommIpcAddrs, create_mpi_comm_session,
-                    get_spawn_proxy_process_env, is_llm_response,
-                    multi_frontend_request_addr, multi_frontend_result_addr,
-                    namespace_client_id, print_alive_threads)
-from .worker import GenerationExecutorWorker, worker_main
-from .worker_process_monitor import WorkerProcessIdentity, WorkerProcessMonitor
 
 __all__ = [
     "GenerationExecutorProxy",
     "GenerationExecutorFrontendProxy",
 ]
-
-# Methods that are explicitly implemented for multi-rank MPI/IPC executor
-# deployments and may be called via collective_rpc even when world_size > 1.
-# sleep() and wakeup() coordinate across all ranks via a dedicated control
-# communicator started in PyExecutor.start_worker(); rank-0 is the entry
-# point, so routing through the rank-0 RPC shim is correct.
-# get_memory_report() is answered by rank-0, which in the memory monitor's
-# full mode gathers the other ranks' reports over its own communicator.
-_MULTI_RANK_ALLOWED_METHODS: frozenset[str] = frozenset(
-    {"get_memory_report", "get_memory_status", "sleep", "wakeup"})
-
-
-def _check_collective_rpc_guard(
-    model_world_size: int,
-    unique_reply_rank: Optional[int],
-    target_ranks: Optional[Union[int, List[int]]],
-    method: str = "",
-) -> None:
-    """Validate collective_rpc preconditions shared by IPC and RPC proxies.
-
-    Args:
-        model_world_size: Total number of GPU worker processes.
-        unique_reply_rank: Must be ``None`` for this shim.
-        target_ranks: Must be ``None`` for this shim.
-        method: Name of the method being invoked; used to allow selected
-            multi-rank-capable methods past the world_size guard.
-
-    Raises:
-        NotImplementedError: If ``model_world_size > 1`` and ``method`` is not
-            in :data:`_MULTI_RANK_ALLOWED_METHODS`, or if
-            ``unique_reply_rank`` or ``target_ranks`` are provided.
-    """
-    if model_world_size > 1 and method not in _MULTI_RANK_ALLOWED_METHODS:
-        raise NotImplementedError(
-            f"MPI collective_rpc does not support model_world_size > 1 for "
-            f"method '{method}'; use the Ray executor for general multi-rank "
-            "deployments, or use sleep()/wakeup() which handle multi-rank "
-            "coordination internally.")
-    if unique_reply_rank is not None or target_ranks is not None:
-        raise NotImplementedError(
-            "unique_reply_rank and target_ranks are not supported; "
-            "this shim only reaches rank-0.")
 
 
 class _RequestSender:

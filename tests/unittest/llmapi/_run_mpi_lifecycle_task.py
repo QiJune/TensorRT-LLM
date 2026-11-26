@@ -101,11 +101,11 @@ def main() -> int:
     # rather than a function belonging to the engine's __main__ module.
     from _run_mpi_lifecycle_task import worker_task as remote_task
 
+    from tensorrt_llm.executor.mpi_session import RemoteMpiCommSessionClient
     from tensorrt_llm.executor.utils import (
         get_spawn_proxy_process_ipc_addr_env,
         get_spawn_proxy_process_ipc_hmac_key_env,
     )
-    from tensorrt_llm.llmapi.mpi_session import RemoteMpiCommSessionClient
 
     address = get_spawn_proxy_process_ipc_addr_env()
     key = get_spawn_proxy_process_ipc_hmac_key_env()

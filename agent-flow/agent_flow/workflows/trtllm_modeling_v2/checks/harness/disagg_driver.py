@@ -79,8 +79,8 @@ class EndpointLLM:
         self._pool = ThreadPoolExecutor(max_workers=16)
 
     def _complete(self, prompt: str, sampling: Any) -> Any:
-        from tensorrt_llm.executor.result import GenerationResultBase
         from tensorrt_llm.llmapi import CompletionOutput, RequestOutput
+        from tensorrt_llm.llmapi.engine_client.result import GenerationResultBase
 
         class Result(GenerationResultBase):
             """A finished generation built from an endpoint's answer."""
@@ -128,8 +128,8 @@ def _late(signum, frame):  # noqa: ARG001
 def score(url: str, model: str, name: str, arguments: list[str]) -> None:
     """``trtllm-eval``'s command of benchmark ``name``, its ``LLM`` the endpoint at ``url``."""
     from tensorrt_llm.commands.eval import main as trtllm_eval
-    from tensorrt_llm.llmapi.tokenizer import load_hf_tokenizer
     from tensorrt_llm.logger import logger
+    from tensorrt_llm.tokenizer import load_hf_tokenizer
 
     logger.set_level("info")  # as `trtllm-eval` sets it: the scores are logged
     llm = EndpointLLM(url, model, load_hf_tokenizer(model))

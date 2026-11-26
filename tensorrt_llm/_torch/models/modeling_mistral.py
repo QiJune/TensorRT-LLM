@@ -55,8 +55,8 @@ from tensorrt_llm.inputs.media_io import convert_image_mode
 from tensorrt_llm.inputs.multimodal import (MultimodalItemMetadata,
                                             MultimodalParams)
 from tensorrt_llm.inputs.registry import MULTIMODAL_PLACEHOLDER_REGISTRY
-from tensorrt_llm.llmapi import SamplingParams
 from tensorrt_llm.logger import logger
+from tensorrt_llm.sampling_params import SamplingParams
 
 
 class MistralAttention(Attention):

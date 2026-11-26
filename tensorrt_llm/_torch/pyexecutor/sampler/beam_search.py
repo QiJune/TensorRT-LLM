@@ -38,7 +38,7 @@ import torch
 from tensorrt_llm._torch.flashinfer_utils import IS_FLASHINFER_AVAILABLE
 from tensorrt_llm._utils import nvtx_range, prefer_pinned
 from tensorrt_llm.bindings.executor import FinishReason
-from tensorrt_llm.executor.result import Logprob
+from tensorrt_llm.executor.logprobs import Logprob
 
 from ..llm_request import LlmRequest, LlmRequestState
 from .logprobs import LogProbsStore

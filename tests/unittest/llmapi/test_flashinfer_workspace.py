@@ -23,7 +23,7 @@ from types import SimpleNamespace
 import pytest
 
 from tensorrt_llm.bindings.BuildInfo import ENABLE_MULTI_DEVICE
-from tensorrt_llm.llmapi import mpi_session
+from tensorrt_llm.executor import mpi_session
 
 _FLASHINFER_WORKSPACE_ENV = "FLASHINFER_WORKSPACE_BASE"
 _FLASHINFER_CUBIN_ENV = "FLASHINFER_CUBIN_DIR"

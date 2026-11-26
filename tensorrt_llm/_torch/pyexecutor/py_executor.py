@@ -23,7 +23,7 @@ from typing import (TYPE_CHECKING, Callable, Dict, Iterable, Iterator, List,
 import torch
 from strenum import StrEnum
 
-from tensorrt_llm.llmapi import DisaggScheduleStyle
+from tensorrt_llm.disaggregated_params import DisaggScheduleStyle
 
 try:
     from cuda.bindings import runtime as cudart

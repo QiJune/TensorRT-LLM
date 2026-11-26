@@ -6,7 +6,7 @@ from typing import Any, Generator, List, Mapping, Optional, Sequence, Tuple
 import torch
 from torch.nn import functional as F
 
-from tensorrt_llm.executor.result import GenerationResult
+from tensorrt_llm.llmapi.engine_client.result import GenerationResult
 from tensorrt_llm.logger import logger
 from tensorrt_llm.scaffolding.math_utils import get_digit_majority_vote_result
 from tensorrt_llm.scaffolding.task import (AssistantMessage, ChatTask,

@@ -24,7 +24,7 @@ from tensorrt_llm.logger import logger
 
 from .. import _utils
 from .._utils import global_mpi_rank, mpi_rank
-from .utils import logger_debug, print_colored
+from ..llmapi.utils import logger_debug, print_colored
 
 if ENABLE_MULTI_DEVICE:
     import mpi4py
@@ -1354,7 +1354,7 @@ def find_free_ipc_addr() -> str:
 
 def get_mpi_world_size() -> int:
     # avoid cyclic import
-    from ..executor.utils import get_spawn_proxy_process_env
+    from .utils import get_spawn_proxy_process_env
 
     # If the proxy process is spawned, the MPI-related env will be cleaned in the proxy process, thus we made another env for the mpi_world_size
     if get_spawn_proxy_process_env():

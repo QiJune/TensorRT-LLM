@@ -148,8 +148,8 @@ def encode_payload(device_index: int, rows: int, heads: int, plan_kwargs: dict) 
 
 def run_precompile_workers(payloads: Sequence[dict[str, Any]], workers: int) -> None:
     """Run the encoded plans with up to ``workers`` compiler processes and join them."""
+    from tensorrt_llm.executor.mpi_session import split_mpi_env
     from tensorrt_llm.llmapi._llmapi_process_guard import _cleanup_group
-    from tensorrt_llm.llmapi.mpi_session import split_mpi_env
 
     env, _ = split_mpi_env()
     # Spawn re-imports __main__. Give the pool its own import-clean entry point

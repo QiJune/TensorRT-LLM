@@ -14,7 +14,7 @@ methods:
   record_stats:
     parameters:
       output:
-        annotation: tensorrt_llm.executor.result.CompletionOutput
+        annotation: tensorrt_llm.llmapi.engine_client.result.CompletionOutput
         default: inspect._empty
       stats:
         annotation: Optional[dict[str, float]]
@@ -26,7 +26,7 @@ methods:
   do_tracing:
     parameters:
       output:
-        annotation: tensorrt_llm.executor.result.CompletionOutput
+        annotation: tensorrt_llm.llmapi.engine_client.result.CompletionOutput
         default: inspect._empty
       req_perf_metrics_dict:
         annotation: Optional[dict[str, float]]

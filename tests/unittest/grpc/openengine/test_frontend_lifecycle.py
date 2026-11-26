@@ -147,7 +147,7 @@ import sys
 import time
 from types import SimpleNamespace
 from unittest.mock import Mock
-from tensorrt_llm.executor.proxy import GenerationExecutorProxy
+from tensorrt_llm.llmapi.engine_client.proxy import GenerationExecutorProxy
 from tensorrt_llm.grpc.openengine import server
 
 root = Path(sys.argv[1])

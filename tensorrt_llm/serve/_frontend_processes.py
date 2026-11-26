@@ -17,7 +17,7 @@ import time
 from collections.abc import Callable, Iterator
 from typing import NamedTuple
 
-from tensorrt_llm.llmapi.mpi_session import split_mpi_env
+from tensorrt_llm.executor.mpi_session import split_mpi_env
 from tensorrt_llm.logger import logger
 
 
@@ -103,7 +103,7 @@ def _spawn_attached_frontends(
     bound for it (_frontend_affinity_sockets). Each child inherits its own
     socket; the launcher closes its copy and removes it from the dict.
     """
-    from tensorrt_llm.executor.proxy import GenerationExecutorProxy
+    from tensorrt_llm.llmapi.engine_client.proxy import GenerationExecutorProxy
 
     executor = getattr(llm, "_executor", None)
     if (

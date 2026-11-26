@@ -11,14 +11,14 @@ from tensorrt_llm._utils import mpi_comm
 from tensorrt_llm.llmapi.utils import enable_llm_debug, logger_debug
 
 from .._utils import mpi_rank
-from ..llmapi._load_balance_env import uses_collective_shutdown
 from ..llmapi.llm_args import BaseLlmArgs
-from ..llmapi.tokenizer import TokenizerBase
 from ..logger import set_level
+from ..tokenizer import TokenizerBase
+from ._load_balance_env import uses_collective_shutdown
 from .base_worker import BaseWorker
-from .postproc_worker import PostprocWorkerConfig
 from .rpc import RPCServer
 from .rpc_worker_mixin import RpcWorkerMixin
+from .utils import PostprocWorkerConfig
 
 _RPC_SHUTDOWN_RETRY = "retry"
 _RPC_SHUTDOWN_COMMIT = "commit"

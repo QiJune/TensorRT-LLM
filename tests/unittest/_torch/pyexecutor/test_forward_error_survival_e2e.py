@@ -36,9 +36,9 @@ from utils.llm_data import llm_models_root
 
 from tensorrt_llm import LLM, SamplingParams
 from tensorrt_llm._utils import mpi_disabled
+from tensorrt_llm.executor.mpi_session import MpiPoolSession
 from tensorrt_llm.executor.utils import RequestError
 from tensorrt_llm.llmapi.llm_utils import KvCacheConfig
-from tensorrt_llm.llmapi.mpi_session import MpiPoolSession
 
 PROMPTS = [
     "Born in north-east France, Soyer trained as a",

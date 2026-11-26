@@ -27,7 +27,7 @@ from types import SimpleNamespace
 import pytest
 
 from tensorrt_llm.bindings import executor as tllm
-from tensorrt_llm.executor.result import GenerationResultBase
+from tensorrt_llm.llmapi.engine_client.result import GenerationResultBase
 
 # CI's CPU stages select tests with ``-m "cpu_only and not disabled"``; without
 # this marker the file would be collected but never run there.

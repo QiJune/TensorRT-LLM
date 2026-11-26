@@ -425,7 +425,7 @@ def test_disaggregated_params_dp_rank_none_preserved() -> None:
 
 def test_prefill_ready_carries_first_gen_log_probs() -> None:
     """Verbose logprobs (dict[int, Logprob] per position) survive the handoff."""
-    from tensorrt_llm.executor.result import Logprob
+    from tensorrt_llm.executor.logprobs import Logprob
 
     params = oe_disagg.DisaggregatedParams(
         request_type="context_only",

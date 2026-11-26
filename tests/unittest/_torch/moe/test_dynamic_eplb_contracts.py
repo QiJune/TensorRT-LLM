@@ -1048,7 +1048,7 @@ class _StageTensor:
 
 
 def test_launch_queue_is_enabled_only_for_per_layer_dynamic_mode(monkeypatch):
-    path = _ROOT / "tensorrt_llm/llmapi/_load_balance_env.py"
+    path = _ROOT / "tensorrt_llm/executor/_load_balance_env.py"
     spec = importlib.util.spec_from_file_location("load_balance_env_under_test", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)

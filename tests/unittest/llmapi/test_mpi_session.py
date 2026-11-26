@@ -27,12 +27,12 @@ from integration.defs.trt_test_alternative import check_output
 
 from tensorrt_llm.bindings.BuildInfo import ENABLE_MULTI_DEVICE
 from tensorrt_llm.executor.ipc import ZeroMqQueue
-from tensorrt_llm.llmapi.mpi_session import (_DEFAULT_IDENTITY_TIMEOUT,
-                                             MPINodeState, MpiPoolSession,
-                                             RemoteMpiCommSessionClient,
-                                             RemoteMpiCommSessionServer,
-                                             _identity_barrier_timeout,
-                                             split_mpi_env)
+from tensorrt_llm.executor.mpi_session import (_DEFAULT_IDENTITY_TIMEOUT,
+                                               MPINodeState, MpiPoolSession,
+                                               RemoteMpiCommSessionClient,
+                                               RemoteMpiCommSessionServer,
+                                               _identity_barrier_timeout,
+                                               split_mpi_env)
 
 _STOP_HELPER = (Path(__file__).parents[3] / "tensorrt_llm" / "llmapi" /
                 "_llmapi_mpi_stop.py")
@@ -250,7 +250,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from tensorrt_llm.llmapi.mpi_session import MpiPoolSession
+from tensorrt_llm.executor.mpi_session import MpiPoolSession
 
 
 def spawn_and_read():
@@ -637,7 +637,7 @@ def test_remote_mpi_submit_resolves_client_sys_path(
 @pytest.mark.cpu_only
 def test_remote_task_wrapper_preserves_paths_and_kwargs(
         monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    from tensorrt_llm.llmapi import mpi_session
+    from tensorrt_llm.executor import mpi_session
 
     existing = str(tmp_path / "existing")
     additional = str(tmp_path / "additional")
@@ -928,7 +928,7 @@ def _wait_workers_exit(identities, timeout: float) -> None:
 
 
 def test_process_start_time_live_and_gone():
-    from tensorrt_llm.llmapi.mpi_session import _process_start_time
+    from tensorrt_llm.executor.mpi_session import _process_start_time
 
     assert _process_start_time(os.getpid()) is not None
     child = Popen(["true"])  # nosec B603, B607
@@ -937,7 +937,7 @@ def test_process_start_time_live_and_gone():
 
 
 def test_wait_workers_exit_returns_once_workers_are_gone():
-    from tensorrt_llm.llmapi.mpi_session import _process_start_time
+    from tensorrt_llm.executor.mpi_session import _process_start_time
 
     child = Popen(["true"])  # nosec B603, B607
     identity = (child.pid, _process_start_time(child.pid))
@@ -950,7 +950,7 @@ def test_wait_workers_exit_returns_once_workers_are_gone():
 def test_wait_workers_exit_bounded_by_timeout_on_live_worker():
     import time as _time
 
-    from tensorrt_llm.llmapi.mpi_session import _process_start_time
+    from tensorrt_llm.executor.mpi_session import _process_start_time
 
     me = (os.getpid(), _process_start_time(os.getpid()))
     t0 = _time.monotonic()
@@ -975,7 +975,7 @@ def _collect_identities(monkeypatch,
         futs.append(f)
     never = [Future() for _ in range(pending)]  # never resolve
 
-    from tensorrt_llm.llmapi import mpi_session as m
+    from tensorrt_llm.executor import mpi_session as m
 
     def _fake_wait(fs, timeout):
         if observed_timeouts is not None:
@@ -1000,7 +1000,7 @@ def _collect_identities(monkeypatch,
 
 
 def test_identity_collection_complete_returns_identities(monkeypatch):
-    from tensorrt_llm.llmapi.mpi_session import _process_start_time
+    from tensorrt_llm.executor.mpi_session import _process_start_time
 
     me = (os.getpid(), _process_start_time(os.getpid()))
     other = (1, b"1")  # pid 1: exists but start_time won't match -> unique pid
@@ -1014,7 +1014,7 @@ def test_identity_collection_fails_closed_on_timeout(monkeypatch):
     # contract silently downgraded (review requirement).
     import pytest as _pytest
 
-    from tensorrt_llm.llmapi.mpi_session import _process_start_time
+    from tensorrt_llm.executor.mpi_session import _process_start_time
 
     me = (os.getpid(), _process_start_time(os.getpid()))
     with _pytest.raises(RuntimeError, match="incomplete"):
@@ -1024,7 +1024,7 @@ def test_identity_collection_fails_closed_on_timeout(monkeypatch):
 def test_identity_collection_fails_closed_on_duplicate_pids(monkeypatch):
     import pytest as _pytest
 
-    from tensorrt_llm.llmapi.mpi_session import _process_start_time
+    from tensorrt_llm.executor.mpi_session import _process_start_time
 
     me = (os.getpid(), _process_start_time(os.getpid()))
     with _pytest.raises(RuntimeError, match="incomplete"):
@@ -1032,7 +1032,7 @@ def test_identity_collection_fails_closed_on_duplicate_pids(monkeypatch):
 
 
 def test_identity_collection_uses_configured_timeout(monkeypatch):
-    from tensorrt_llm.llmapi.mpi_session import _process_start_time
+    from tensorrt_llm.executor.mpi_session import _process_start_time
 
     monkeypatch.setenv("TRTLLM_MPI_IDENTITY_TIMEOUT", "123.5")
     observed_timeouts = []
@@ -1123,7 +1123,7 @@ def test_server_close_releases_the_global_comm_executor(_global_executor_state):
     ranks stay blocked in the executor's task loop after the client is gone
     -- the teardown hang behind a serve that could only die by hard kill.
     """
-    from tensorrt_llm.llmapi.mpi_session import RemoteMpiCommSessionServer
+    from tensorrt_llm.executor.mpi_session import RemoteMpiCommSessionServer
 
     fake = _FakeCommExecutor()
     MPINodeState._global_comm_executor = fake
@@ -1144,7 +1144,7 @@ def test_server_close_releases_the_global_comm_executor(_global_executor_state):
 def test_server_close_escalates_to_abort_when_the_join_wedges(
         _global_executor_state):
     """A worker stranded in a collective must not block teardown forever."""
-    from tensorrt_llm.llmapi.mpi_session import RemoteMpiCommSessionServer
+    from tensorrt_llm.executor.mpi_session import RemoteMpiCommSessionServer
 
     fake = _FakeCommExecutor(block=True)
     MPINodeState._global_comm_executor = fake
@@ -1170,7 +1170,7 @@ def test_server_close_escalates_to_abort_when_exit_raises(
     can stay blocked; the global refs are already cleared, so nothing else will
     close them -- escalate the same way a timeout does.
     """
-    from tensorrt_llm.llmapi.mpi_session import RemoteMpiCommSessionServer
+    from tensorrt_llm.executor.mpi_session import RemoteMpiCommSessionServer
 
     fake = _FakeCommExecutor(fail=True)
     MPINodeState._global_comm_executor = fake
@@ -1188,7 +1188,7 @@ def test_server_close_escalates_to_abort_when_exit_raises(
 @pytest.mark.cpu_only
 def test_server_close_is_a_noop_without_a_global_executor(
         _global_executor_state):
-    from tensorrt_llm.llmapi.mpi_session import RemoteMpiCommSessionServer
+    from tensorrt_llm.executor.mpi_session import RemoteMpiCommSessionServer
 
     MPINodeState._global_comm_executor = None
     # Must not touch MPI at all (no abort callable is even constructed).
@@ -1246,8 +1246,8 @@ def test_stop_request_reaches_server_still_waiting_for_workers(
     """
     from concurrent.futures import Future
 
-    from tensorrt_llm.llmapi import mpi_session
-    from tensorrt_llm.llmapi.mpi_session import RemoteTask
+    from tensorrt_llm.executor import mpi_session
+    from tensorrt_llm.executor.mpi_session import RemoteTask
 
     addr, hmac_key = _spawn_proxy_ipc
     server = _bare_server_on(addr, hmac_key)
@@ -1301,7 +1301,7 @@ def test_stop_request_reaches_server_still_waiting_for_workers(
 def test_stop_request_reads_past_other_messages_to_the_ack(
         _spawn_proxy_ipc, stop_client: Literal["module", "standalone"]) -> None:
     """A worker message sent to the stop client must not hide the ack."""
-    from tensorrt_llm.llmapi.mpi_session import RemoteWorkerDeath
+    from tensorrt_llm.executor.mpi_session import RemoteWorkerDeath
 
     addr, hmac_key = _spawn_proxy_ipc
     server = _bare_server_on(addr, hmac_key)

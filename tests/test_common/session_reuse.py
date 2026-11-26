@@ -62,13 +62,13 @@ from test_common.grouped_test_utils import reset_worker_torch_compile_state, sub
 # The only places in the library that construct MpiPoolSession for a bare
 # LLM(...); tests passing their own _mpi_session never reach these lines.
 _PATCH_TARGETS = (
-    "tensorrt_llm.executor.proxy",
+    "tensorrt_llm.llmapi.engine_client.proxy",
     "tensorrt_llm.llmapi.llm",
 )
 # RPC executors that construct their own pool use a drain-then-build factory.
 # LLM creates its pool earlier and needs the per-test opt-out described above
 # to avoid carrying IPC thread-local state into RPC engine setup.
-_RPC_PATCH_TARGET = "tensorrt_llm.executor.rpc_proxy"
+_RPC_PATCH_TARGET = "tensorrt_llm.llmapi.engine_client.rpc_proxy"
 _ALL_PATCH_TARGETS = _PATCH_TARGETS + (_RPC_PATCH_TARGET,)
 
 
@@ -109,7 +109,7 @@ def _reap_retires(timeout: float = 60.0) -> None:
 
 def _worker_start_time(pid: int) -> bytes | None:
     """Read a worker's kernel start time without loading TRT-LLM eagerly."""
-    from tensorrt_llm.llmapi.mpi_session import _process_start_time
+    from tensorrt_llm.executor.mpi_session import _process_start_time
 
     return _process_start_time(pid)
 
@@ -308,7 +308,7 @@ class SessionReuseCache:
         pending = [n for n in _ALL_PATCH_TARGETS if n in sys.modules and n not in self._patched]
         if not pending:
             return
-        from tensorrt_llm.llmapi.mpi_session import MpiPoolSession as real_cls
+        from tensorrt_llm.executor.mpi_session import MpiPoolSession as real_cls
 
         cache = self
 

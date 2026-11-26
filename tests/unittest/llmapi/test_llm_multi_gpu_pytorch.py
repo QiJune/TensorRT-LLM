@@ -10,8 +10,9 @@ import torch
 from utils.util import skip_ray
 
 from tensorrt_llm import LLM
-from tensorrt_llm.executor.rpc_proxy import GenerationExecutorRpcProxy
 from tensorrt_llm.llmapi import KvCacheConfig
+from tensorrt_llm.llmapi.engine_client.rpc_proxy import \
+    GenerationExecutorRpcProxy
 from tensorrt_llm.sampling_params import SamplingParams
 
 from .test_llm import (_test_llm_capture_request_error, get_model_path,

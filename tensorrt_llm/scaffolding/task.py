@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Mapping, Optional, Union
 import openai
 import torch
 
-from tensorrt_llm.executor.result import TokenLogprobs
+from tensorrt_llm.executor.logprobs import TokenLogprobs
 
 from .result import ScaffoldingOutput
 

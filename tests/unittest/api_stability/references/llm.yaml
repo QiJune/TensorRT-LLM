@@ -548,7 +548,7 @@ methods:
       timeout:
         annotation: Optional[float]
         default: 2
-    return_annotation: tensorrt_llm.executor.result.IterationResult
+    return_annotation: tensorrt_llm.llmapi.engine_client.result.IterationResult
     status: beta
   get_stats:
     parameters:
@@ -562,7 +562,7 @@ methods:
       timeout:
         annotation: Optional[float]
         default: 2
-    return_annotation: tensorrt_llm.executor.result.IterationResult
+    return_annotation: tensorrt_llm.llmapi.engine_client.result.IterationResult
     status: beta
   get_data_transceiver_state:
     parameters: {}

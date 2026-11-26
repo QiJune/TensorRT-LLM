@@ -8,69 +8,26 @@ from typing import (TYPE_CHECKING, Any, Callable, Dict, List, NamedTuple,
 
 import zmq
 
-from .._utils import nvtx_range_debug
-from ..bindings import executor as tllm
-from ..llmapi.tokenizer import TransformersTokenizer, load_hf_tokenizer
-from ..llmapi.utils import print_traceback_on_error
-from ..logger import logger
-from ..sampling_params import SamplingParams
-from .ipc import ZeroMqQueue
+from ..._utils import nvtx_range_debug
+from ...bindings import executor as tllm
+from ...executor.ipc import ZeroMqQueue
+from ...executor.request import PostprocParams
+from ...executor.utils import (ErrorResponse, bucket_responses_by_frontend,
+                               is_llm_response)
+from ...logger import logger
+from ...sampling_params import SamplingParams
+from ...tokenizer import TransformersTokenizer, load_hf_tokenizer
+from ..utils import print_traceback_on_error
 from .postprocessor_hook import load_post_processor_hook
-from .utils import ErrorResponse, bucket_responses_by_frontend, is_llm_response
 
 if TYPE_CHECKING:
-    from ..disaggregated_params import DisaggregatedParams
-    from .result import (DetokenizedGenerationResultBase, GenerationResult,
-                         GenerationResultBase, ResponseWrapper)
+    from ...disaggregated_params import DisaggregatedParams
+    from ...executor.utils import ResponseWrapper
+    from .result import DetokenizedGenerationResultBase, GenerationResult
 
 __all__ = [
     "PostprocWorker",
-    "PostprocWorkerConfig",
 ]
-
-
-@dataclass(kw_only=True)
-class PostprocArgs:
-    first_iteration: bool = True
-    num_prompt_tokens: Optional[int] = None
-    # Subtracted from num_prompt_tokens when reporting usage. Lets servers
-    # exclude generation-prompt stub tokens the vendor accounting treats as
-    # pending output (e.g. Kimi K3's 3-token channel opener) without changing
-    # what the model sees. num_prompt_tokens itself is overwritten by the
-    # executor on the postproc-worker path, so the offset must be separate.
-    num_prompt_tokens_offset: int = 0
-    tokenizer: Optional[TransformersTokenizer] = None
-    ctx_usage: Optional[Any] = None
-    # Per-request speculative-decoding acceptance stats. Set on the base so
-    # every endpoint's args subclass inherits one opt-in path. Mirrors the
-    # server's per_request_spec_decode_stats setting; there is no per-request
-    # opt-in, so clients need send nothing.
-    return_spec_decode_stats: bool = False
-    # Fixed per-step draft bound, or None when draft_len_schedule makes it vary
-    # by batch size. Sizes the emitted acceptance histogram so its length is a
-    # function of configuration rather than of what a request happened to hit.
-    spec_decode_num_spec_tokens: Optional[int] = None
-
-
-@dataclass(kw_only=True)
-class PostprocParams:
-    post_processor: Callable[["GenerationResultBase", PostprocArgs], Any] = None
-    postproc_args: PostprocArgs = None
-
-
-@dataclass
-class PostprocWorkerConfig:
-    ''' The config for the postprocess worker. '''
-    num_postprocess_workers: int = 0
-    postprocess_tokenizer_dir: Optional[str] = None
-    # Dotted import path of the user post-processing hook, or
-    # None. NOTE: distinct from ``PostprocParams.post_processor``, which is the
-    # per-endpoint response *formatter* (a Callable), not this hook.
-    post_processor_hook: Optional[str] = None
-
-    @property
-    def enabled(self) -> bool:
-        return self.num_postprocess_workers > 0
 
 
 class PostprocWorker:

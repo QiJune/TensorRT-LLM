@@ -31,8 +31,6 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from pydantic import ValidationError
 
-from tensorrt_llm.executor import CppExecutorError
-from tensorrt_llm.executor.executor import CppExecutorError
 from tensorrt_llm.executor.utils import (CONTEXT_LENGTH_EXCEEDED_CODE,
                                          is_context_length_exceeded_message)
 from tensorrt_llm.inputs.chat_template_guard import \
@@ -40,6 +38,7 @@ from tensorrt_llm.inputs.chat_template_guard import \
 from tensorrt_llm.llmapi import tracing
 from tensorrt_llm.llmapi.disagg_utils import (DisaggServerConfig,
                                               MetadataServerConfig, ServerRole)
+from tensorrt_llm.llmapi.engine_client.executor import CppExecutorError
 from tensorrt_llm.logger import logger
 from tensorrt_llm.serve._telemetry import create_uvicorn_server
 from tensorrt_llm.serve.anthropic_adapter import (AnthropicRequestError,

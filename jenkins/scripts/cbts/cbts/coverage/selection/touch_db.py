@@ -40,7 +40,7 @@ _SPLIT_SUFFIX_RE = re.compile(r"-\d+(_of_\d+)?(-cbts)?$")
 _WORKER_SENTINEL = "tensorrt_llm/_torch/pyexecutor/py_executor.py"
 _LAUNCH_MARKERS: tuple[tuple[str, str], ...] = (
     ("tensorrt_llm/llmapi/llm.py", "generate"),
-    ("tensorrt_llm/executor/executor.py", "GenerationExecutor.generate"),
+    ("tensorrt_llm/llmapi/engine_client/executor.py", "GenerationExecutor.generate"),
 )
 # Stage-name markers whose GPU worker is uninstrumented, so capture is partial.
 _UNTRUSTED_STAGE_MARKERS: tuple[str, ...] = ("-Ray-",)

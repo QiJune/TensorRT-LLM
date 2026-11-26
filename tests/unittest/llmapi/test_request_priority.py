@@ -86,7 +86,7 @@ class TestGenerationExecutorPriorityPropagation:
 
     def _make_executor(self):
         """Return a concrete subclass of GenerationExecutor with a spy submit."""
-        from tensorrt_llm.executor.executor import GenerationExecutor
+        from tensorrt_llm.llmapi.engine_client.executor import GenerationExecutor
 
         class _FakeExecutor(GenerationExecutor):
             def __init__(self):

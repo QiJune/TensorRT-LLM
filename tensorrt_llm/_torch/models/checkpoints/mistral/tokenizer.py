@@ -18,8 +18,8 @@ from transformers.tokenization_mistral_common import (
     MistralCommonTokenizer as TransformersMistralTokenizer,
 )
 
-from tensorrt_llm.llmapi.tokenizer import TransformersTokenizer
 from tensorrt_llm.logger import logger
+from tensorrt_llm.tokenizer import TransformersTokenizer
 
 if TYPE_CHECKING:
     import llguidance

@@ -17,7 +17,7 @@ from typing import Optional
 
 from ordered_set import OrderedSet
 
-from tensorrt_llm.llmapi import NGramDecodingConfig
+from tensorrt_llm.llmapi.llm_args import NGramDecodingConfig
 from tensorrt_llm.logger import logger
 
 from ..pyexecutor.llm_request import LlmRequest, LlmRequestState

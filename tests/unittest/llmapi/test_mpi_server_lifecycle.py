@@ -14,7 +14,7 @@ from unittest.mock import Mock, call
 import pytest
 import zmq
 
-from tensorrt_llm.llmapi import mpi_session as mpi
+from tensorrt_llm.executor import mpi_session as mpi
 
 pytestmark = pytest.mark.cpu_only
 

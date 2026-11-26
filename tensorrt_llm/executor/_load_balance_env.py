@@ -13,7 +13,7 @@ import sys
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from .llm_args import MoeConfig
+    from ..llmapi.llm_args import MoeConfig
 
 LAUNCH_QUEUES_ENV = "CUDA_SCALE_LAUNCH_QUEUES"
 _FROM_ENVIRON = object()

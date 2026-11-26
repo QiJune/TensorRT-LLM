@@ -30,7 +30,7 @@ from tensorrt_llm import LLM, SamplingParams
 from tensorrt_llm._utils import EnergyMonitor
 from tensorrt_llm.bench.dataclasses.general import InferenceRequest
 from tensorrt_llm.bench.dataclasses.reporting import PerfItemTuple, StatsKeeper
-from tensorrt_llm.executor.postproc_worker import PostprocParams
+from tensorrt_llm.executor.request import PostprocParams
 from tensorrt_llm.llmapi.llm import RequestOutput
 from tensorrt_llm.logger import logger
 

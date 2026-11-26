@@ -23,18 +23,19 @@ from tensorrt_llm.serve.responses_utils import \
     create_response_non_store as responses_api_create_response_non_store
 
 from .._utils import nvtx_range_debug
-from ..executor import (DetokenizedGenerationResultBase, GenerationResult,
-                        GenerationResultBase)
-from ..executor.postproc_worker import PostprocArgs
-from ..executor.result import Logprob, TokenLogprobs
+from ..executor.logprobs import Logprob, TokenLogprobs
+from ..executor.request import PostprocArgs
 from ..llmapi import SamplingParams
 from ..llmapi.disagg_utils import (get_usage_tokens_from_ctx,
                                    rewrite_usage_info_from_ctx,
                                    rewrite_usage_response_from_ctx)
+from ..llmapi.engine_client.result import (DetokenizedGenerationResultBase,
+                                           GenerationResult,
+                                           GenerationResultBase)
 from ..llmapi.reasoning_parser import (BaseReasoningParser,
                                        ReasoningParserFactory,
                                        ReasoningParserResult)
-from ..llmapi.tokenizer import TransformersTokenizer
+from ..tokenizer import TransformersTokenizer
 # yapf: disable
 from .chat_utils import make_tool_call_id
 from .harmony_adapter import (handle_non_streaming_response,

@@ -28,8 +28,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from tensorrt_llm.executor.result import CompletionOutput
 from tensorrt_llm.inputs.tokenization import tokenize_prompt
+from tensorrt_llm.llmapi.engine_client.result import CompletionOutput
 from tensorrt_llm.serve.openai_disagg_service import _ctx_usage_info
 from tensorrt_llm.serve.openai_protocol import (
     PromptTokensDetails,
@@ -742,7 +742,7 @@ def test_a_postprocessing_worker_counts_the_prompt_as_chat_completions_does(
 
 def test_kimi_k3_leaves_out_its_channel_opener_on_both_routes(tmp_path, text_only):
     """With the checkpoint's own tokenizer and template (skipped when the checkpoint is absent)."""
-    from tensorrt_llm.llmapi.tokenizer import TransformersTokenizer
+    from tensorrt_llm.tokenizer import TransformersTokenizer
 
     from .render_helpers import KIMI_K3, make_tokenizer
 

@@ -13,9 +13,9 @@ import types
 
 import pytest
 
-from tensorrt_llm.executor.executor import GenerationExecutor
 from tensorrt_llm.executor.request import GenerationRequest
-from tensorrt_llm.executor.rpc_proxy_mixin import RpcExecutorMixin
+from tensorrt_llm.llmapi.engine_client.executor import GenerationExecutor
+from tensorrt_llm.llmapi.engine_client.rpc_proxy_mixin import RpcExecutorMixin
 from tensorrt_llm.sampling_params import SamplingParams
 
 pytestmark = pytest.mark.cpu_only
@@ -75,7 +75,7 @@ _MixinProxy.__abstractmethods__ = frozenset()
 def _proxy_classes():
     classes = [_MixinProxy]
     if importlib.util.find_spec("ray") is not None:
-        from tensorrt_llm.executor.ray.executor import RayExecutor
+        from tensorrt_llm.llmapi.engine_client.ray_executor import RayExecutor
 
         classes.append(RayExecutor)
     return classes

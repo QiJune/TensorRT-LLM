@@ -476,7 +476,7 @@ class TestMoeConfigPerLayerDynamicEplb:
 
     def test_per_layer_dynamic_yaml_configures_queue_before_cuda_init(
             self, tmp_path: Path, monkeypatch) -> None:
-        from tensorrt_llm.llmapi._load_balance_env import \
+        from tensorrt_llm.executor._load_balance_env import \
             configure_moe_launch_queues
 
         config_path = tmp_path / "eplb.yaml"
@@ -501,7 +501,7 @@ class TestMoeConfigPerLayerDynamicEplb:
 
     def test_standard_yaml_does_not_configure_launch_queues(
             self, tmp_path: Path, monkeypatch) -> None:
-        from tensorrt_llm.llmapi._load_balance_env import \
+        from tensorrt_llm.executor._load_balance_env import \
             configure_moe_launch_queues
 
         config_path = tmp_path / "eplb.yaml"

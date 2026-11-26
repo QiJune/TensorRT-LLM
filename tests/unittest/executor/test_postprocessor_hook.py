@@ -4,7 +4,7 @@
 
 import pytest
 
-from tensorrt_llm.executor.postprocessor_hook import (
+from tensorrt_llm.llmapi.engine_client.postprocessor_hook import (
     PostProcessorHookChunk,
     apply_post_processor_hook,
     emit,
@@ -12,7 +12,7 @@ from tensorrt_llm.executor.postprocessor_hook import (
     suppress,
     terminate,
 )
-from tensorrt_llm.executor.result import CompletionOutput
+from tensorrt_llm.llmapi.engine_client.result import CompletionOutput
 
 pytestmark = pytest.mark.cpu_only
 
@@ -229,7 +229,7 @@ def test_per_request_state_is_keyed_by_request_id():
 
 def test_unknown_verdict_action_rejected_at_construction():
     """An unknown action cannot be smuggled: the verdict rejects it on build."""
-    from tensorrt_llm.executor.postprocessor_hook import PostProcessorHookVerdict
+    from tensorrt_llm.llmapi.engine_client.postprocessor_hook import PostProcessorHookVerdict
 
     with pytest.raises(ValueError):
         PostProcessorHookVerdict(action="bogus")
@@ -237,7 +237,7 @@ def test_unknown_verdict_action_rejected_at_construction():
 
 def test_unknown_action_fails_closed_through_apply():
     """A hook constructing a bad verdict fails the request closed (re-raised)."""
-    from tensorrt_llm.executor.postprocessor_hook import PostProcessorHookVerdict
+    from tensorrt_llm.llmapi.engine_client.postprocessor_hook import PostProcessorHookVerdict
 
     out = _make_output("x", 0)
     result = _FakeResult([out])
@@ -282,7 +282,7 @@ def test_loader_builds_independent_instances():
 
 def test_apply_method_reads_hook_from_instance_attribute():
     """The detok read site applies the hook owned by the result instance."""
-    from tensorrt_llm.executor.result import DetokenizedGenerationResultBase
+    from tensorrt_llm.llmapi.engine_client.result import DetokenizedGenerationResultBase
 
     out = _make_output("hello world", last_text_len=len("hello"))
     result = _FakeResult([out], post_processor_hook=lambda c: emit(c.text_diff.upper()))
@@ -295,7 +295,7 @@ def test_apply_method_reads_hook_from_instance_attribute():
 
 def test_apply_method_is_noop_when_instance_has_no_hook():
     """With no hook on the instance, the chunk passes through untouched."""
-    from tensorrt_llm.executor.result import DetokenizedGenerationResultBase
+    from tensorrt_llm.llmapi.engine_client.result import DetokenizedGenerationResultBase
 
     out = _make_output("hello world", last_text_len=len("hello"))
     result = _FakeResult([out], post_processor_hook=None)

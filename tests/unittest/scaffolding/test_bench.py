@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from tensorrt_llm.executor.request import GenerationRequest
-from tensorrt_llm.executor.result import GenerationResult
+from tensorrt_llm.llmapi.engine_client.result import GenerationResult
 from tensorrt_llm.sampling_params import SamplingParams
 from tensorrt_llm.scaffolding import (GenerationTask,
                                       NativeGenerationController,

@@ -14,7 +14,7 @@ from openai_harmony import (Author, Conversation, DeveloperContent,
                             SystemContent, TextContent, ToolDescription,
                             load_harmony_encoding)
 
-from tensorrt_llm.executor import GenerationResult
+from tensorrt_llm.llmapi.engine_client.result import GenerationResult
 from tensorrt_llm.logger import logger
 
 # yapf: disable

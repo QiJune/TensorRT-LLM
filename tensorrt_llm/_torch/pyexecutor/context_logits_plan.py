@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Sequence
 
 import torch
 
-from tensorrt_llm.executor.result import reduce_prompt_logprobs
+from tensorrt_llm.executor.logprobs import reduce_prompt_logprobs
 from tensorrt_llm.logger import logger
 
 if TYPE_CHECKING:

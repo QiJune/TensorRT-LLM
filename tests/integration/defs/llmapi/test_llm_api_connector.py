@@ -40,13 +40,13 @@ from tensorrt_llm._torch.pyexecutor.kv_cache.kv_cache_manager_v2 import \
     KVCacheManagerV2
 from tensorrt_llm._torch.pyexecutor.resource_manager import KVCacheManager
 from tensorrt_llm.bindings.executor import KvCacheTransferMode
+from tensorrt_llm.executor.mpi_session import split_mpi_env
 from tensorrt_llm.llmapi import RequestError
 from tensorrt_llm.llmapi.llm_args import (CacheTransceiverConfig,
                                           CapacitySchedulerPolicy,
                                           KvCacheConfig, KvCacheConnectorConfig,
                                           NGramDecodingConfig, SchedulerConfig)
 from tensorrt_llm.llmapi.llm_utils import KvCacheRetentionConfig
-from tensorrt_llm.llmapi.mpi_session import split_mpi_env
 from tensorrt_llm.runtime.kv_cache_manager_v2 import BAD_PAGE_INDEX
 
 from ..conftest import get_sm_version, llm_models_root
