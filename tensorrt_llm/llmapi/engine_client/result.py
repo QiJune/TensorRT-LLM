@@ -534,6 +534,92 @@ class GenerationResultBase:
             return [0.0] * len(prefix)
         return [{token_id: Logprob(logprob=0.0, rank=1)} for token_id in prefix]
 
+    def _take_ctx_usage(self, ctx_usage: dict) -> None:
+        """Keep a generation-first decode part's prefill usage.
+
+        It goes into the disaggregated params, where the postprocessor
+        (_ctx_usage_from_outputs) adopts the context side's accounting.
+        """
+        self._disaggregated_params = dataclasses.replace(
+            self._disaggregated_params or DisaggregatedParams(),
+            ctx_usage=ctx_usage,
+        )
+
+    def _take_context_phase(self, *, ctx_request_id: int,
+                            first_gen_tokens: List[int],
+                            draft_tokens: Optional[List[int]],
+                            ctx_dp_rank: Optional[int],
+                            ctx_info_endpoint: Optional[str],
+                            opaque_state: Optional[bytes],
+                            remote_tail_start: Optional[int]) -> None:
+        """Make the disaggregated params what a prefill part hands its decode part.
+
+        ``replace`` keeps things like the mRoPE handles; the embedding handles
+        and the input layout are no longer needed. With a remote tail start,
+        the first and draft tokens stay empty.
+        """
+        tail = remote_tail_start is not None
+        self._disaggregated_params = dataclasses.replace(
+            self._disaggregated_params or DisaggregatedParams(),
+            request_type="context_only",
+            first_gen_tokens=[] if tail else first_gen_tokens,
+            ctx_request_id=ctx_request_id,
+            opaque_state=opaque_state,
+            draft_tokens=[] if tail else draft_tokens,
+            ctx_dp_rank=ctx_dp_rank,
+            ctx_info_endpoint=ctx_info_endpoint,
+            remote_tail_start=remote_tail_start,
+            multimodal_embedding_handles=None,
+            multimodal_input_layout=None,
+        )
+
+    def _take_first_gen(self, first_gen_log_probs: Optional[list]) -> None:
+        """Hand a prefill part's first output token's logprobs and logits on.
+
+        The decode part prepends them; none go with a remote tail start.
+        ``first_gen_log_probs`` are the ones the response hands over (beam
+        search), else each sequence's first logprobs go.
+        """
+        params = self._disaggregated_params
+        if params is None or params.remote_tail_start is not None:
+            return
+        if first_gen_log_probs is None:
+            first_gen_log_probs = [
+                out.logprobs[0] for out in self._outputs if out.logprobs
+            ]
+        if first_gen_log_probs:
+            params.first_gen_log_probs = first_gen_log_probs
+        first_gen_logits = [
+            out.generation_logits for out in self._outputs
+            if out.generation_logits is not None
+        ]
+        if first_gen_logits:
+            params.first_gen_logits = first_gen_logits
+
+    def _take_encoder_handles(
+            self, mm_embedding_handles: Optional[list],
+            mrope_position_ids_handle: Optional[dict],
+            mrope_position_deltas_handle: Optional[dict]) -> None:
+        """Keep the embedding and mRoPE handles an encoder part hands over.
+
+        The mRoPE handles go with the embedding handles, or alone for a
+        prefill-only EPD request, whose embeddings the encode phase computed.
+        """
+        if mm_embedding_handles is not None:
+            if self._disaggregated_params is not None:
+                self._disaggregated_params.multimodal_embedding_handles = mm_embedding_handles
+                self._disaggregated_params.multimodal_hashes = self._multimodal_hashes
+            else:
+                self._disaggregated_params = DisaggregatedParams(
+                    multimodal_embedding_handles=mm_embedding_handles,
+                    multimodal_hashes=self._multimodal_hashes)
+        if (mrope_position_ids_handle is not None
+                and self._disaggregated_params is not None):
+            self._disaggregated_params.mrope_position_ids_handle = (
+                mrope_position_ids_handle)
+            self._disaggregated_params.mrope_position_deltas_handle = (
+                mrope_position_deltas_handle)
+
     @print_traceback_on_error
     @nvtx_range_debug("handle_response",
                       color="red",
@@ -641,39 +727,22 @@ class GenerationResultBase:
             self.spec_dec_totals = getattr(response_result, 'spec_dec_totals',
                                            None)
             self.avg_decoded_tokens_per_iter = response_result.avg_decoded_tokens_per_iter
-            # Expose gen-first ctx usage so the postprocessor
-            # (_ctx_usage_from_outputs) can adopt the context-side accounting.
             # ctx_usage only exists on the Python LlmResult wrapper; the raw C++
             # bindings.executor.Result (non-disagg / benchmark path) does not
             # have it, so fall back to None as with cached_tokens above.
             ctx_usage = getattr(response_result, 'ctx_usage', None)
             if ctx_usage is not None:
-                self._disaggregated_params = dataclasses.replace(
-                    self._disaggregated_params or DisaggregatedParams(),
-                    ctx_usage=ctx_usage,
-                )
+                self._take_ctx_usage(ctx_usage)
             if context_phase_params is not None:
-                existing_disagg_params = self.disaggregated_params
-                remote_tail_start = getattr(response_result,
-                                            "remote_tail_start", None)
-                # Use `replace` to preserve things like `mrope_position_ids_handle` and
-                # `mrope_position_deltas_handle`. However, explicitly set
-                # `multimodal_embedding_handles=None` since they should no longer be needed.
-                self._disaggregated_params = dataclasses.replace(
-                    existing_disagg_params or DisaggregatedParams(),
-                    request_type="context_only",
-                    first_gen_tokens=[] if remote_tail_start is not None else
-                    context_phase_params.first_gen_tokens,
+                self._take_context_phase(
                     ctx_request_id=context_phase_params.req_id,
-                    opaque_state=context_phase_params.opaque_state,
-                    draft_tokens=[] if remote_tail_start is not None else
-                    context_phase_params.draft_tokens,
+                    first_gen_tokens=context_phase_params.first_gen_tokens,
+                    draft_tokens=context_phase_params.draft_tokens,
                     ctx_dp_rank=context_phase_params.ctx_dp_rank,
                     ctx_info_endpoint=context_phase_params.disagg_info_endpoint,
-                    remote_tail_start=remote_tail_start,
-                    multimodal_embedding_handles=None,
-                    multimodal_input_layout=None,
-                )
+                    opaque_state=context_phase_params.opaque_state,
+                    remote_tail_start=getattr(response_result,
+                                              "remote_tail_start", None))
 
             finish_reasons = response_result.finish_reasons
             # output_token_ids = (beams, tokens). Read the attribute once: on
@@ -701,56 +770,26 @@ class GenerationResultBase:
                                       output_token_ids=output_token_ids,
                                       request_perf_metrics=request_perf_metrics)
 
-            # For context_only responses, carry the first gen token's
-            # logprobs and generation logits so the generation_only side
-            # can prepend them.
-            if (context_phase_params is not None
-                    and self._disaggregated_params is not None
-                    and self._disaggregated_params.remote_tail_start is None):
-                first_gen_lp = getattr(response_result, "first_gen_log_probs",
-                                       None)
-                if first_gen_lp is None:
-                    first_gen_lp = [
-                        out.logprobs[0] for out in self._outputs if out.logprobs
-                    ]
-                if first_gen_lp:
-                    self._disaggregated_params.first_gen_log_probs = \
-                        first_gen_lp
-
-                first_gen_logits = [
-                    out.generation_logits for out in self._outputs
-                    if out.generation_logits is not None
-                ]
-                if first_gen_logits:
-                    self._disaggregated_params.first_gen_logits = \
-                        first_gen_logits
+            if context_phase_params is not None:
+                self._take_first_gen(
+                    getattr(response_result, "first_gen_log_probs", None))
 
             if not isinstance(response_result, tllm.Result) and (
                     context_logits :=
                     response_result.context_logits) is not None:
                 self._context_logits = context_logits
 
-            if (mm_embedding_handles :=
-                    getattr(response_result, "mm_embedding_handles",
-                            None)) is not None:
-                if self._disaggregated_params is not None:
-                    self._disaggregated_params.multimodal_embedding_handles = mm_embedding_handles
-                    self._disaggregated_params.multimodal_hashes = self._multimodal_hashes
-                else:
-                    self._disaggregated_params = DisaggregatedParams(
-                        multimodal_embedding_handles=mm_embedding_handles,
-                        multimodal_hashes=self._multimodal_hashes)
-
-            # Handle mrope handles for both:
-            # 1. Regular mm_embedding case (disaggregated_params was just created/updated above)
-            # 2. Prefill-only EPD requests (mm_embedding_handle is None because embeddings
-            #    were already computed in encode phase, but mrope still needs forwarding)
-            if (getattr(response_result, "mrope_position_ids_handle", None)
-                    is not None and self.disaggregated_params is not None):
-                self._disaggregated_params.mrope_position_ids_handle = (
-                    response_result.mrope_position_ids_handle)
-                self._disaggregated_params.mrope_position_deltas_handle = (
-                    response_result.mrope_position_deltas_handle)
+            mm_embedding_handles = getattr(response_result,
+                                           "mm_embedding_handles", None)
+            mrope_position_ids_handle = getattr(response_result,
+                                                "mrope_position_ids_handle",
+                                                None)
+            if (mm_embedding_handles is not None
+                    or mrope_position_ids_handle is not None):
+                self._take_encoder_handles(
+                    mm_embedding_handles, mrope_position_ids_handle,
+                    getattr(response_result, "mrope_position_deltas_handle",
+                            None))
 
             # Processing background errors here ASAF during generation.
             if self._background_error_handler and (
@@ -1115,6 +1154,29 @@ class DetokenizedGenerationResultBase(GenerationResultBase):
 PostprocWorker = DetokenizedGenerationResultBase.PostprocWorker
 
 
+def with_multimodal_spans(
+        disaggregated_params: Optional[DisaggregatedParams],
+        generation_request: "GenerationRequest"
+) -> Optional[DisaggregatedParams]:
+    """A context-only request's ``disaggregated_params`` with its multimodal spans.
+
+    Its result and the postprocess workers both read them from there. Other
+    params come back unchanged.
+    """
+    mm_input = getattr(getattr(generation_request, "multimodal_params", None),
+                       "multimodal_input", None)
+    mm_positions = getattr(mm_input, "multimodal_positions", None)
+    if (disaggregated_params is None
+            or disaggregated_params.request_type != "context_only"
+            or mm_positions is None):
+        return disaggregated_params
+    return dataclasses.replace(
+        disaggregated_params,
+        multimodal_positions=list(mm_positions),
+        multimodal_lengths=list(mm_input.multimodal_lengths),
+    )
+
+
 class GenerationResult(GenerationResultBase):
     """The result of a generation request. It can be used to wait for the completion of the request.
 
@@ -1153,17 +1215,8 @@ class GenerationResult(GenerationResultBase):
             getattr(generation_request, "multimodal_params", None),
             "multimodal_input", None)
         self._multimodal_hashes = getattr(mm_input, "multimodal_hashes", None)
-        mm_positions = getattr(mm_input, "multimodal_positions", None)
-        mm_lengths = getattr(mm_input, "multimodal_lengths", None)
-        if (self._disaggregated_params is not None
-                and self._disaggregated_params.request_type == "context_only"
-                and mm_positions is not None):
-            # Seed before postprocessing workers receive the request metadata.
-            self._disaggregated_params = dataclasses.replace(
-                self._disaggregated_params,
-                multimodal_positions=list(mm_positions),
-                multimodal_lengths=list(mm_lengths),
-            )
+        self._disaggregated_params = with_multimodal_spans(
+            self._disaggregated_params, generation_request)
 
     @property
     def request_id(self) -> int:
