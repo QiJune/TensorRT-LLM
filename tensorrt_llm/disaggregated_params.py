@@ -13,6 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+import threading
+import time
 from dataclasses import dataclass
 from enum import IntEnum
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
@@ -173,3 +176,96 @@ class DisaggregatedParams:
                     np.iinfo(np.int32).min, np.iinfo(np.int32).max, size=8, dtype=np.int32
                 ).tolist()
                 self.multimodal_hashes = [vals] * len(self.multimodal_embedding_handles)
+
+
+# Snowflake global disagg request id, 64-bit / positive int64 (MSB reserved 0):
+#   [ 0 (1) | timestamp_ms (39) | node_id (8) | process_id (6) | counter (10) ]
+# The (node_id, process_id) pair identifies a fleet worker process, so co-located
+# workers never emit the same id in the same millisecond. See docs/source/
+# advanced/disaggregated-service.md for the full disagg-request-id design.
+DISAGG_TIMESTAMP_BITS = 39
+
+
+DISAGG_NODE_ID_BITS = 8
+
+
+DISAGG_PROCESS_ID_BITS = 6
+
+
+DISAGG_COUNTER_BITS = 10
+
+
+# Local ids [0, MIN_GLOBAL_ID) and global disagg ids [MIN_GLOBAL_ID, 2^63) are
+# disjoint by construction so they never collide. Power of two (masked in
+# get_local_request_id).
+MIN_GLOBAL_ID = 1 << 40
+
+
+# Consider GIL being removed in the future, use a lock to protect the counter
+_global_disagg_request_id_lock = threading.Lock()
+
+
+_global_disagg_request_id_counter = 0
+
+
+def get_global_disagg_request_id(node_id: int, process_id: int = 0) -> int:
+    """A snowflake global disagg request id (does not guarantee monotonicity).
+
+    Layout: 0(1) | timestamp_ms(39) | node_id(8) | process_id(6) | counter(10).
+    node_id identifies the node, process_id the fleet worker process on it -- the
+    pair makes the id unique across co-located workers without any coordination.
+    """
+    global _global_disagg_request_id_lock
+    global _global_disagg_request_id_counter
+
+    NODE_ID_SPACE = 1 << DISAGG_NODE_ID_BITS
+    PROCESS_ID_SPACE = 1 << DISAGG_PROCESS_ID_BITS
+    COUNTER_MASK = (1 << DISAGG_COUNTER_BITS) - 1
+    TIMESTAMP_MASK = (1 << DISAGG_TIMESTAMP_BITS) - 1
+    MAX_INT64 = (1 << 63) - 1
+
+    if node_id not in range(0, NODE_ID_SPACE):
+        raise ValueError(f"node_id must be in range [0, {NODE_ID_SPACE})")
+    if process_id not in range(0, PROCESS_ID_SPACE):
+        raise ValueError(f"process_id must be in range [0, {PROCESS_ID_SPACE})")
+
+    timestamp_ms = int(time.monotonic() * 1000) & TIMESTAMP_MASK
+    with _global_disagg_request_id_lock:
+        counter = _global_disagg_request_id_counter & COUNTER_MASK
+        _global_disagg_request_id_counter += 1
+
+    global_id = (
+        (timestamp_ms << (DISAGG_NODE_ID_BITS + DISAGG_PROCESS_ID_BITS + DISAGG_COUNTER_BITS))
+        | (node_id << (DISAGG_PROCESS_ID_BITS + DISAGG_COUNTER_BITS))
+        | (process_id << DISAGG_COUNTER_BITS)
+        | counter
+    )
+    # Rotate into [MIN_GLOBAL_ID, MAX_INT64); [0, MIN_GLOBAL_ID) is local-id space.
+    global_id_int64 = global_id % (MAX_INT64 - MIN_GLOBAL_ID) + MIN_GLOBAL_ID
+    return global_id_int64
+
+
+def get_local_request_id(last_id: int) -> int:
+    """Increment the last_id by 1 and mod by MIN_GLOBAL_ID."""
+    return (last_id + 1) & (MIN_GLOBAL_ID - 1)
+
+
+def disagg_process_id_space() -> int:
+    """Number of distinct process_id slots in the snowflake id (2^bits)."""
+    return 1 << DISAGG_PROCESS_ID_BITS
+
+
+def worker_local_process_id() -> int:
+    """Return this fleet worker's process index.
+
+    The fleet launcher sets ``TRTLLM_DISAGG_WORKER_PROCESS_ID`` to a distinct
+    value per process. A standalone disaggregated server defaults to 0.
+    """
+    process_id = int(os.environ.get("TRTLLM_DISAGG_WORKER_PROCESS_ID", "0"))
+    process_id_space = disagg_process_id_space()
+    if not 0 <= process_id < process_id_space:
+        raise ValueError(
+            "TRTLLM_DISAGG_WORKER_PROCESS_ID must be between 0 and "
+            f"{process_id_space - 1}, got {process_id}"
+        )
+    return process_id

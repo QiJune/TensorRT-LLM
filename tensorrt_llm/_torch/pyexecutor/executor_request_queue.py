@@ -12,7 +12,7 @@ from typing import Callable, Iterable, List, Optional
 import numpy as np
 
 from tensorrt_llm.bindings.executor import Request
-from tensorrt_llm.llmapi.disagg_utils import get_local_request_id
+from tensorrt_llm.disaggregated_params import get_local_request_id
 
 from ..distributed import Distributed
 from .llm_request import ExecutorRequest
